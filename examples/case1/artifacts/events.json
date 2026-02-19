@@ -1,0 +1,23 @@
+[
+  {
+    "artifact_id": "evt-1001",
+    "timestamp": "2026-02-17T13:12:00Z",
+    "event_type": "process_start",
+    "description": "unknown executable launched from temp directory",
+    "source": "sysmon",
+    "host": "WS-01",
+    "user": "alice",
+    "process": "invoice_viewer.exe",
+    "path": "C:\\Users\\alice\\AppData\\Local\\Temp\\invoice_viewer.exe"
+  },
+  {
+    "artifact_id": "evt-1002",
+    "timestamp": "2026-02-17T13:12:09Z",
+    "event_type": "network_connection",
+    "description": "outbound connection to suspicious IP",
+    "source": "firewall",
+    "host": "WS-01",
+    "dst_ip": "185.101.93.19",
+    "dst_port": 443
+  }
+]

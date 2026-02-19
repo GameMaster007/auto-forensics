@@ -1,0 +1,17 @@
+{
+  "created_at": "2026-02-18T20:52:50.134178Z",
+  "seed": 42,
+  "scenario_count": 300,
+  "total_records": 900,
+  "train_records": 810,
+  "valid_records": 90,
+  "task_breakdown": {
+    "second_pass": 300,
+    "summary": 300,
+    "first_pass": 300
+  },
+  "files": {
+    "train": "training\\data\\train.jsonl",
+    "valid": "training\\data\\valid.jsonl"
+  }
+}

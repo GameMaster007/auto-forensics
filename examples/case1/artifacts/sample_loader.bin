@@ -1,0 +1,4 @@
+MZ....This is a pseudo binary payload....
+cmd.exe /c powershell -nop -w hidden -enc AAAABBBBCCCC
+VirtualAlloc WriteProcessMemory CreateRemoteThread
+https://malicious-c2.example

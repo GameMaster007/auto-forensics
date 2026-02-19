@@ -1,0 +1,3 @@
+timestamp,event_type,description,source,host,user,path
+2026-02-17T13:13:01Z,registry_modification,Run key set for persistence,sysmon,WS-01,alice,HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Updater
+2026-02-17T13:14:10Z,scheduled_task_create,Suspicious task created,task_scheduler,WS-01,alice,\Microsoft\Windows\Update\AdobeUpdater
