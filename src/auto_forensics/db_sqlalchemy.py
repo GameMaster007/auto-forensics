@@ -274,6 +274,16 @@ class SQLAlchemyDatabase:
         with self.engine.begin() as con:
             con.execute(stmt)
 
+    def delete_case(self, case_id: str) -> bool:
+        """Delete a case and all associated data (relies on ON DELETE CASCADE).
+
+        Returns True if a row was deleted, False if the case didn't exist.
+        """
+        stmt = self.cases.delete().where(self.cases.c.case_id == case_id)
+        with self.engine.begin() as con:
+            result = con.execute(stmt)
+        return int(result.rowcount or 0) > 0
+
     def replace_artifacts(self, case_id: str, artifacts: list[dict[str, Any]]) -> None:
         now = utc_now_iso()
         with self.engine.begin() as con:

@@ -122,10 +122,10 @@ def _to_html(report: CaseReport) -> str:
     payload = json.dumps(report.to_dict())
     escaped_case = html.escape(report.case_id)
     return f"""<!DOCTYPE html>
-<html lang=\"en\">
+<html lang="en">
 <head>
-  <meta charset=\"utf-8\" />
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Auto Forensics Report - {escaped_case}</title>
   <style>
     :root {{
@@ -146,36 +146,67 @@ def _to_html(report: CaseReport) -> str:
     th, td {{ text-align: left; border-bottom: 1px solid var(--line); padding: 0.5rem; vertical-align: top; }}
     th {{ color: var(--muted); font-weight: 600; }}
     .chip {{ display: inline-block; font-size: 0.8rem; border-radius: 999px; padding: 0.14rem 0.55rem; border: 1px solid var(--line); background: #f3faf6; }}
-    .sev-critical {{ background: #ffe6df; border-color: #f2b9a7; }}
-    .sev-high {{ background: #fff0da; border-color: #edc28a; }}
-    .sev-medium {{ background: #f7f3d5; border-color: #d8cb88; }}
-    .sev-low {{ background: #e7f3e7; border-color: #bad8b8; }}
-    .toolbar {{ display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }}
-    input, select {{ border: 1px solid var(--line); border-radius: 8px; padding: 0.4rem 0.6rem; }}
+    .sev-critical {{ background: #ffe6df; border-color: #f2b9a7; color: #8b1a00; }}
+    .sev-high {{ background: #fff0da; border-color: #edc28a; color: #7a4a00; }}
+    .sev-medium {{ background: #f7f3d5; border-color: #d8cb88; color: #5a4d00; }}
+    .sev-low {{ background: #e7f3e7; border-color: #bad8b8; color: #1a5a1a; }}
+    .verdict-malicious {{ color: #c0392b; font-weight: 600; }}
+    .verdict-suspicious {{ color: #d35400; font-weight: 600; }}
+    .verdict-clean {{ color: #27ae60; }}
+    .risk-high {{ color: #c0392b; font-weight: 600; }}
+    .risk-med {{ color: #d35400; }}
+    .risk-low {{ color: #27ae60; }}
+    .toolbar {{ display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.5rem; }}
+    input, select {{ border: 1px solid var(--line); border-radius: 8px; padding: 0.4rem 0.6rem; font-size: 0.9rem; }}
     @media (max-width: 900px) {{ table, thead, tbody, th, td, tr {{ display: block; }} th {{ display: none; }} td {{ border: none; border-bottom: 1px solid var(--line); }} }}
   </style>
 </head>
 <body>
   <main>
-    <section class=\"card\">
+    <section class="card">
       <h1>Case Report: {escaped_case}</h1>
-      <p class=\"meta\">Generated at <strong>{html.escape(report.generated_at)}</strong></p>
-      <div class=\"meta\" id=\"kpis\"></div>
+      <p class="meta" id="generated">Generated at <strong>{html.escape(report.generated_at)}</strong></p>
+      <div class="meta" id="kpis"></div>
     </section>
-    <section class=\"card\">
+    <section class="card">
       <h2>Findings</h2>
-      <table id=\"findings\"></table>
-    </section>
-    <section class=\"card\">
-      <h2>Timeline</h2>
-      <div class=\"toolbar\">
-        <label>Filter event type <input id=\"typeFilter\" placeholder=\"e.g. dns_query\" /></label>
+      <div class="toolbar">
+        <label>Severity&nbsp;<select id="sevFilter">
+          <option value="">All</option>
+          <option value="critical">Critical</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select></label>
+        <label>Search&nbsp;<input id="findingSearch" placeholder="keyword…" /></label>
       </div>
-      <table id=\"timeline\"></table>
+      <table id="findings"></table>
     </section>
-    <section class=\"card\">
+    <section class="card">
+      <h2>Timeline</h2>
+      <div class="toolbar">
+        <label>Filter event type&nbsp;<input id="typeFilter" placeholder="e.g. dns_query" /></label>
+        <label>Min risk&nbsp;<input id="riskFilter" type="number" min="0" max="100" placeholder="0" style="width:5rem" /></label>
+      </div>
+      <table id="timeline"></table>
+    </section>
+    <section class="card">
       <h2>IOCs</h2>
-      <table id=\"iocs\"></table>
+      <div class="toolbar">
+        <label>Type&nbsp;<select id="iocTypeFilter">
+          <option value="">All</option>
+          <option value="ip">IP</option>
+          <option value="domain">Domain</option>
+          <option value="url">URL</option>
+          <option value="sha256">SHA-256</option>
+          <option value="md5">MD5</option>
+        </select></label>
+      </div>
+      <table id="iocs"></table>
+    </section>
+    <section class="card" id="enrichCard" style="display:none">
+      <h2>IOC Enrichment</h2>
+      <table id="enrichments"></table>
     </section>
   </main>
   <script>
@@ -187,60 +218,108 @@ def _to_html(report: CaseReport) -> str:
         .replace(/>/g, "&gt;");
     }}
     document.getElementById("kpis").innerHTML = [
-      `<span class=\"kpi\">Findings: <strong>${{report.summary.total_findings || 0}}</strong></span>`,
-      `<span class=\"kpi\">Timeline: <strong>${{report.summary.timeline_events || 0}}</strong></span>`,
-      `<span class=\"kpi\">IOCs: <strong>${{report.summary.ioc_count || 0}}</strong></span>`,
-      `<span class=\"kpi\">ATT&CK techniques: <strong>${{report.summary.attack_technique_coverage || 0}}</strong></span>`
+      `<span class="kpi">Findings: <strong>${{report.summary.total_findings || 0}}</strong></span>`,
+      `<span class="kpi">Timeline: <strong>${{report.summary.timeline_events || 0}}</strong></span>`,
+      `<span class="kpi">IOCs: <strong>${{report.summary.ioc_count || 0}}</strong></span>`,
+      `<span class="kpi">ATT&CK techniques: <strong>${{report.summary.attack_technique_coverage || 0}}</strong></span>`
     ].join("");
 
     function renderFindings() {{
-      const rows = report.findings.map(item =>
-        `<tr>` +
-        `<td><span class=\"chip sev-${{esc(item.severity)}}\">${{esc(item.severity)}}</span></td>` +
-        `<td>${{esc(item.title)}}</td>` +
-        `<td>${{esc(item.tactic)}}</td>` +
-        `<td>${{esc(item.technique_id || "")}}</td>` +
-        `<td>${{esc(item.confidence)}}</td>` +
-        `</tr>`
-      ).join("");
-      document.getElementById("findings").innerHTML =
-        `<thead><tr><th>Severity</th><th>Title</th><th>Tactic</th><th>Technique</th><th>Confidence</th></tr></thead>` +
-        `<tbody>${{rows || "<tr><td colspan='5'>No findings.</td></tr>"}}</tbody>`;
-    }}
-
-    function renderTimeline(filterValue) {{
-      const rows = report.timeline
-        .filter(item => !filterValue || String(item.event_type || "").toLowerCase().includes(filterValue.toLowerCase()))
+      const sevF = document.getElementById("sevFilter").value.toLowerCase();
+      const kw = document.getElementById("findingSearch").value.toLowerCase();
+      const rows = (report.findings || [])
+        .filter(item => !sevF || (item.severity || "").toLowerCase() === sevF)
+        .filter(item => !kw ||
+          (item.title || "").toLowerCase().includes(kw) ||
+          (item.tactic || "").toLowerCase().includes(kw) ||
+          (item.technique_id || "").toLowerCase().includes(kw))
         .map(item =>
           `<tr>` +
-          `<td>${{esc(item.timestamp || "")}}</td>` +
-          `<td>${{esc(item.event_type)}}</td>` +
-          `<td>${{esc(item.source)}}</td>` +
-          `<td>${{esc(item.description)}}</td>` +
+          `<td><span class="chip sev-${{esc(item.severity)}}">${{esc(item.severity)}}</span></td>` +
+          `<td>${{esc(item.title)}}</td>` +
+          `<td>${{esc(item.tactic)}}</td>` +
+          `<td>${{esc(item.technique_id || "")}}</td>` +
+          `<td>${{esc(item.confidence)}}</td>` +
           `</tr>`
         ).join("");
+      document.getElementById("findings").innerHTML =
+        `<thead><tr><th>Severity</th><th>Title</th><th>Tactic</th><th>Technique</th><th>Confidence</th></tr></thead>` +
+        `<tbody>${{rows || "<tr><td colspan='5'>No findings match the current filter.</td></tr>"}}</tbody>`;
+    }}
+
+    function riskClass(score) {{
+      if (score >= 70) return "risk-high";
+      if (score >= 40) return "risk-med";
+      return "risk-low";
+    }}
+
+    function renderTimeline(filterType, minRisk) {{
+      const rows = (report.timeline || [])
+        .filter(item => !filterType || String(item.event_type || "").toLowerCase().includes(filterType.toLowerCase()))
+        .filter(item => !minRisk || (item.risk_score || 0) >= minRisk)
+        .map(item => {{
+          const risk = item.risk_score != null ? item.risk_score : "";
+          const rClass = risk !== "" ? riskClass(risk) : "";
+          return `<tr>` +
+            `<td>${{esc(item.timestamp || "")}}</td>` +
+            `<td>${{esc(item.event_type)}}</td>` +
+            `<td>${{esc(item.source)}}</td>` +
+            `<td>${{esc(item.description)}}</td>` +
+            `<td class="${{rClass}}">${{risk}}</td>` +
+            `</tr>`;
+        }}).join("");
       document.getElementById("timeline").innerHTML =
-        `<thead><tr><th>Timestamp</th><th>Type</th><th>Source</th><th>Description</th></tr></thead>` +
-        `<tbody>${{rows || "<tr><td colspan='4'>No timeline events.</td></tr>"}}</tbody>`;
+        `<thead><tr><th>Timestamp</th><th>Type</th><th>Source</th><th>Description</th><th>Risk</th></tr></thead>` +
+        `<tbody>${{rows || "<tr><td colspan='5'>No timeline events match the current filter.</td></tr>"}}</tbody>`;
     }}
 
     function renderIocs() {{
-      const rows = (report.iocs || []).map(item =>
-        `<tr>` +
-        `<td>${{esc(item.ioc_type)}}</td>` +
-        `<td>${{esc(item.value)}}</td>` +
-        `<td>${{esc((item.sources || []).join(", "))}}</td>` +
-        `</tr>`
-      ).join("");
+      const typeF = document.getElementById("iocTypeFilter").value.toLowerCase();
+      const rows = (report.iocs || [])
+        .filter(item => !typeF || (item.ioc_type || "").toLowerCase() === typeF)
+        .map(item =>
+          `<tr>` +
+          `<td>${{esc(item.ioc_type)}}</td>` +
+          `<td>${{esc(item.value)}}</td>` +
+          `<td>${{esc((item.sources || []).join(", "))}}</td>` +
+          `</tr>`
+        ).join("");
       document.getElementById("iocs").innerHTML =
         `<thead><tr><th>Type</th><th>Value</th><th>Sources</th></tr></thead>` +
-        `<tbody>${{rows || "<tr><td colspan='3'>No IOCs.</td></tr>"}}</tbody>`;
+        `<tbody>${{rows || "<tr><td colspan='3'>No IOCs match the current filter.</td></tr>"}}</tbody>`;
+    }}
+
+    function renderEnrichments() {{
+      const enrichments = report.ioc_enrichments || [];
+      if (!enrichments.length) return;
+      document.getElementById("enrichCard").style.display = "";
+      const rows = enrichments.map(e => {{
+        const vClass = (e.verdict || "").toLowerCase().includes("malicious") ? "verdict-malicious"
+                     : (e.verdict || "").toLowerCase().includes("suspicious") ? "verdict-suspicious"
+                     : "verdict-clean";
+        return `<tr>` +
+          `<td>${{esc(e.ioc_type || "")}}</td>` +
+          `<td>${{esc(e.value || "")}}</td>` +
+          `<td>${{esc(e.provider)}}</td>` +
+          `<td class="${{vClass}}">${{esc(e.verdict)}}</td>` +
+          `<td>${{esc(e.confidence != null ? (e.confidence * 100).toFixed(0) + "%" : "")}}</td>` +
+          `</tr>`;
+      }}).join("");
+      document.getElementById("enrichments").innerHTML =
+        `<thead><tr><th>Type</th><th>Value</th><th>Provider</th><th>Verdict</th><th>Confidence</th></tr></thead>` +
+        `<tbody>${{rows}}</tbody>`;
     }}
 
     renderFindings();
-    renderTimeline("");
+    renderTimeline("", 0);
     renderIocs();
-    document.getElementById("typeFilter").addEventListener("input", (event) => renderTimeline(event.target.value));
+    renderEnrichments();
+
+    document.getElementById("sevFilter").addEventListener("change", renderFindings);
+    document.getElementById("findingSearch").addEventListener("input", renderFindings);
+    document.getElementById("typeFilter").addEventListener("input", e => renderTimeline(e.target.value, parseInt(document.getElementById("riskFilter").value) || 0));
+    document.getElementById("riskFilter").addEventListener("input", e => renderTimeline(document.getElementById("typeFilter").value, parseInt(e.target.value) || 0));
+    document.getElementById("iocTypeFilter").addEventListener("change", renderIocs);
   </script>
 </body>
 </html>
@@ -248,8 +327,10 @@ def _to_html(report: CaseReport) -> str:
 
 
 def run_case(config: PipelineConfig) -> CaseReport:
+    _external_registry = config.plugin_registry is not None
     registry = config.plugin_registry or PluginRegistry()
-    registry.register_defaults()
+    if not _external_registry:
+        registry.register_defaults()
     artifacts, binaries = discover_artifacts(
         config.input_dir,
         max_text_bytes=config.max_text_bytes,

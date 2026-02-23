@@ -1,3 +1,4 @@
+rich>=13.0.0
 
 [db]
 sqlalchemy>=2.0.36

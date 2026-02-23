@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import AppConfig
-from .security import SecurityError, confine_path, validate_case_id
+from .security import SecurityError, validate_case_id
 from .service import AutoForensicsService
 
 FASTAPI_AVAILABLE = True
@@ -20,7 +20,7 @@ try:
     from fastapi.exceptions import RequestValidationError
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.middleware.trustedhost import TrustedHostMiddleware
-    from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
+    from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
     from pydantic import BaseModel, Field
 except Exception:  # pragma: no cover - optional dependency path
     FASTAPI_AVAILABLE = False
@@ -35,7 +35,6 @@ except Exception:  # pragma: no cover - optional dependency path
     Field = lambda *args, **kwargs: None  # type: ignore
     CORSMiddleware = object  # type: ignore
     TrustedHostMiddleware = object  # type: ignore
-    HTMLResponse = object  # type: ignore
     JSONResponse = object  # type: ignore
     PlainTextResponse = object  # type: ignore
     StreamingResponse = object  # type: ignore
@@ -84,11 +83,6 @@ class CaseImportRequest(BaseModel):
 
 class JobCleanupRequest(BaseModel):
     retention_days: int | None = Field(default=None, ge=0, le=3650)
-
-
-def _dashboard_html() -> str:
-    html_path = Path(__file__).resolve().parent / "web" / "dashboard.html"
-    return html_path.read_text(encoding="utf-8")
 
 
 def _api_key_guard(config: AppConfig):
@@ -196,25 +190,6 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         )
         return response
 
-    @app.get("/", response_class=HTMLResponse)
-    async def dashboard() -> str:
-        return _dashboard_html()
-
-    @app.get("/assets/{filename}")
-    async def assets(filename: str):
-        web_root = Path(__file__).resolve().parent / "web"
-        safe_name = Path(filename).name
-        asset = confine_path(web_root, web_root / safe_name)
-        if not asset.exists() or not asset.is_file():
-            raise HTTPException(status_code=404, detail="Asset not found.")
-        if asset.suffix == ".js":
-            media = "application/javascript"
-        elif asset.suffix == ".css":
-            media = "text/css"
-        else:
-            media = "application/octet-stream"
-        return Response(content=asset.read_text(encoding="utf-8"), media_type=media)
-
     @app.get("/api/health", response_class=JSONResponse)
     async def health() -> dict[str, str]:
         return {"status": "ok"}
@@ -247,13 +222,29 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/cases", response_class=JSONResponse, dependencies=[Depends(api_guard)])
-    async def list_cases() -> list[dict[str, Any]]:
-        return service.list_cases()
+    async def list_cases(
+        q: str | None = Query(default=None, min_length=1, max_length=128),
+        status: str | None = Query(default=None, pattern="^(created|ready|ingesting|analyzing|complete|failed)$"),
+        limit: int = Query(default=200, ge=1, le=1000),
+    ) -> list[dict[str, Any]]:
+        return service.list_cases(query=q, status=status, limit=limit)
+
+    @app.get("/api/stats", response_class=JSONResponse, dependencies=[Depends(api_guard)])
+    async def case_stats() -> dict[str, Any]:
+        return service.case_stats()
 
     @app.get("/api/cases/{case_id}", response_class=JSONResponse, dependencies=[Depends(api_guard)])
     async def get_case(case_id: str) -> dict[str, Any]:
         try:
             return service.case_overview(validate_case_id(case_id))
+        except SecurityError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/api/cases/{case_id}", response_class=JSONResponse, dependencies=[Depends(api_guard)])
+    async def delete_case(case_id: str) -> dict[str, Any]:
+        """Permanently delete a case, all associated DB records, and on-disk data."""
+        try:
+            return service.delete_case(validate_case_id(case_id))
         except SecurityError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

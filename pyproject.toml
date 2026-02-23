@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Auto Forensics Team" }]
-dependencies = []
+dependencies = ["rich>=13.0.0"]
 
 [project.optional-dependencies]
 pe = ["pefile>=2023.2.7"]
@@ -36,4 +36,4 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-auto_forensics = ["web/*.html", "web/*.css", "web/*.js"]
+auto_forensics = []

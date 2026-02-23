@@ -6,6 +6,7 @@ Author: Auto Forensics Team
 License: MIT
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
+Requires-Dist: rich>=13.0.0
 Provides-Extra: pe
 Requires-Dist: pefile>=2023.2.7; extra == "pe"
 Provides-Extra: evtx
@@ -110,6 +111,13 @@ auto-forensics overview --case-id case-2026-001
 auto-forensics report --case-id case-2026-001 --format md
 auto-forensics export --case-id case-2026-001 --dest ./case-2026-001.zip
 auto-forensics import --archive ./case-2026-001.zip
+auto-forensics migrate --status
+auto-forensics migrate
+auto-forensics enrich --case-id case-2026-001
+auto-forensics enrich --case-id case-2026-001 --status
+auto-forensics jobs --case-id case-2026-001
+auto-forensics jobs --case-id case-2026-001 --type enrichment --limit 50
+auto-forensics cleanup-jobs --retention-days 14
 ```
 
 List cases:
@@ -130,11 +138,22 @@ Start server:
 
 ```bash
 auto-forensics serve --host 127.0.0.1 --port 8765
+auto-forensics start --host 127.0.0.1 --port 8765
 ```
 
 Open:
 - `http://127.0.0.1:8765/` (dashboard)
 - `http://127.0.0.1:8765/docs` (dev mode only)
+
+Windows one-click launch:
+- double-click `start-auto-forensics.cmd` in the project root
+- it creates `.venv` if missing, installs server dependencies if needed, then starts the app
+
+Dashboard highlights:
+- case list filtering (`q`, `status`, `limit`) and global case stats
+- live analysis + IOC enrichment status bars
+- timeline filtering, case search, analyst notes, and report viewer
+- archive export/import controls for signed case bundles
 
 Live analysis status:
 - `POST /api/cases/{case_id}/analyze/async` starts background analysis
@@ -143,6 +162,11 @@ Live analysis status:
 - `GET /api/cases/{case_id}/notes` / `POST /api/cases/{case_id}/notes` for analyst collaboration notes
 - `POST /api/cases/{case_id}/export` exports a signed case archive
 - `POST /api/cases/import` imports a signed case archive
+- `GET /api/admin/migrations` and `POST /api/admin/migrations` inspect/apply DB migrations
+- `POST /api/cases/{case_id}/enrich/async` starts IOC enrichment in the background
+- `GET /api/cases/{case_id}/enrich/status` returns enrichment job status (or stream with `?stream=true`)
+- `GET /api/cases/{case_id}/jobs` lists job history (optionally filter with `job_type=analysis|enrichment`)
+- `POST /api/admin/jobs/cleanup` removes job history older than configured or supplied retention days
 
 Operational logs:
 - evidence hash entries are appended during ingestion for chain-of-custody support
@@ -215,6 +239,17 @@ Database URL override:
 - `AUTO_FORENSICS_DATABASE_URL=sqlite:///C:/cases/auto_forensics.db`
 - PostgreSQL example: `AUTO_FORENSICS_DATABASE_URL=postgresql+psycopg://user:password@host:5432/auto_forensics`
 
+Database migrations:
+- migrations are applied automatically at service startup
+- inspect with `auto-forensics migrate --status`
+- apply explicitly with `auto-forensics migrate`
+
+Job retention:
+- background analysis and IOC enrichment jobs are persisted in `analysis_jobs`
+- list case job history with `auto-forensics jobs --case-id <id>`
+- remove stale history with `auto-forensics cleanup-jobs --retention-days <days>`
+- configure default cleanup window using `AUTO_FORENSICS_JOB_RETENTION_DAYS` (default `30`)
+
 ## Development
 
 Run tests:
@@ -222,6 +257,19 @@ Run tests:
 ```bash
 pytest -q
 ```
+
+## Local Fine-Tuning
+
+For local adapter training tuned to this application's strict JSON prompts, see:
+
+- `training/README.md`
+
+Included scripts:
+
+- `training/generate_synthetic_dataset.py`
+- `training/train_lora.py`
+- `training/evaluate_lora.py`
+- `training/merge_lora.py`
 
 Cross-platform CI matrix is included at `.github/workflows/ci.yml` for Windows and Linux.
 
