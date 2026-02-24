@@ -18,6 +18,7 @@ from .llama_workflow import LlamaWorkflow, heuristic_fallback
 from .models import CaseReport, Finding, TimelineEvent, utc_now_iso
 from .pdf_report import write_pdf_report
 from .plugins import PluginRegistry
+from .security import SecurityPolicy, walk_case_directory
 from .sigma_rules import evaluate_sigma_rules
 from .stix_export import build_stix_bundle
 from .timeline import normalize_timeline
@@ -338,11 +339,15 @@ def run_case(config: PipelineConfig) -> CaseReport:
     )
     with ThreadPoolExecutor(max_workers=4, thread_name_prefix="af-binary") as pool:
         binary_features = list(pool.map(registry.analyze_binary, binaries))
+
     # Cap directory traversal depth at 20 to avoid runaway scans on deep trees.
-    # Use a generator to avoid materialising the full list in memory for large trees.
-    scan_candidates = (
-        p for p in sorted(config.input_dir.rglob("*"))
-        if p.is_file() and len(p.relative_to(config.input_dir).parts) <= 20
+    def yara_filter(p: Path) -> bool:
+        return len(p.relative_to(config.input_dir).parts) <= 20
+
+    scan_candidates = walk_case_directory(
+        config.input_dir,
+        SecurityPolicy(max_text_bytes=config.max_text_bytes),
+        filter_func=yara_filter
     )
 
     findings: list[Finding] = []

@@ -834,9 +834,13 @@ class AutoForensicsService:
             raise SecurityError(f"Case root not found for export: {case_root}")
 
         files: list[dict[str, Any]] = []
-        for path in sorted(case_root.rglob("*")):
-            if not path.is_file():
-                continue
+        # Export everything in the case root, not just supported artifacts.
+        # So we use a permissive filter.
+        def any_file(p: Path) -> bool:
+            return True
+
+        policy = self.config.security_policy
+        for path in walk_case_directory(case_root, policy, filter_func=any_file):
             rel = str(path.relative_to(case_root))
             files.append({"rel_path": rel, "sha256": sha256_file(path), "size_bytes": path.stat().st_size})
 
@@ -1039,9 +1043,22 @@ class AutoForensicsService:
             raise SecurityError(f"Not a directory: {resolved}")
 
         files: list[Path] = []
-        walker = resolved.rglob("*") if recursive else resolved.glob("*")
-        for p in walker:
-            if p.is_file():
+        policy = self.config.security_policy
+        # scan_directory might be called on non-case dirs, but we still respect policy limits.
+        
+        # recursive=False isn't directly supported by walk_case_directory yet.
+        # But for scan_directory, we can just use glob if not recursive.
+        if not recursive:
+            for p in sorted(resolved.glob("*")):
+                if p.is_file():
+                    files.append(p)
+                    if len(files) >= max_files:
+                        break
+        else:
+            # For recursive, use walk_case_directory with permissive filter.
+            def any_file(p: Path) -> bool:
+                return True
+            for p in walk_case_directory(resolved, policy, filter_func=any_file):
                 files.append(p)
                 if len(files) >= max_files:
                     break

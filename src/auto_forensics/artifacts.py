@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from .models import ArtifactEvent
-from .security import SecurityError, read_limited_text
+from .security import SecurityError, read_limited_text, walk_case_directory, SecurityPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -1055,9 +1055,16 @@ def discover_artifacts(
         parser_registry = ArtifactParserRegistry()
     parser_registry.register_defaults()
 
-    for path in sorted(input_dir.rglob("*")):
-        if not path.is_file():
-            continue
+    policy = SecurityPolicy(max_text_bytes=max_text_bytes)
+
+    def is_parsable(p: Path) -> bool:
+        suffix = p.suffix.lower()
+        if suffix in binary_suffixes:
+            return True
+        return parser_registry.parser_for_suffix(suffix) is not None or \
+               parser_registry.parser_for_name(p.name) is not None
+
+    for path in walk_case_directory(input_dir, policy, filter_func=is_parsable):
         suffix = path.suffix.lower()
         if suffix in binary_suffixes:
             binaries.append(path)
