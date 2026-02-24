@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Auto Forensics Dashboard</title>
+    <style>
+        body { font-family: sans-serif; background: #f4f4f9; color: #333; margin: 0; padding: 20px; }
+        header { border-bottom: 2px solid #ddd; margin-bottom: 20px; }
+        .case-card { background: white; padding: 15px; margin-bottom: 10px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .status { font-weight: bold; }
+        .status-complete { color: green; }
+        .status-failed { color: red; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Auto Forensics Dashboard</h1>
+    </header>
+    <main id="app">
+        <p>Loading cases...</p>
+    </main>
+    <script>
+        async function loadCases() {
+            try {
+                const resp = await fetch('/api/cases');
+                const cases = await resp.json();
+                const app = document.getElementById('app');
+                if (cases.length === 0) {
+                    app.innerHTML = '<p>No cases found. Use the CLI to initialize a case.</p>';
+                    return;
+                }
+                app.innerHTML = cases.map(c => `
+                    <div class="case-card">
+                        <h3>${c.case_id}</h3>
+                        <p>Status: <span class="status status-${c.status}">${c.status}</span></p>
+                        <p>Created: ${c.created_at}</p>
+                    </div>
+                `).join('');
+            } catch (err) {
+                document.getElementById('app').innerHTML = '<p style="color:red">Failed to load cases.</p>';
+            }
+        }
+        loadCases();
+    </script>
+</body>
+</html>

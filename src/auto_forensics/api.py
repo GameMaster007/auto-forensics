@@ -163,7 +163,13 @@ def create_app(config: AppConfig | None = None, service: AutoForensicsService | 
         )
 
     @app.exception_handler(404)
-    async def custom_404_handler(request: Request, exc: Any) -> JSONResponse:
+    async def custom_404_handler(request: Request, exc: Any) -> Any:
+        accept = request.headers.get("accept", "")
+        if "text/html" in accept and not request.url.path.startswith("/api/"):
+            # Redirect to root for browser users on non-API routes.
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url="/")
+            
         return JSONResponse(
             status_code=404,
             content={
@@ -172,6 +178,17 @@ def create_app(config: AppConfig | None = None, service: AutoForensicsService | 
                 "status_code": 404,
             },
         )
+
+    # Serve dashboard if web directory exists.
+    web_dir = Path(__file__).parent / "web"
+    if web_dir.exists():
+        @app.get("/", include_in_schema=False)
+        async def serve_dashboard():
+            dashboard_file = web_dir / "dashboard.html"
+            if dashboard_file.exists():
+                from fastapi.responses import HTMLResponse
+                return HTMLResponse(content=dashboard_file.read_text(encoding="utf-8"))
+            return HTMLResponse(content="<h1>Dashboard file missing</h1>", status_code=404)
 
     # Restrict host header acceptance to expected hostnames.
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=config.trusted_hosts or ["127.0.0.1"])
