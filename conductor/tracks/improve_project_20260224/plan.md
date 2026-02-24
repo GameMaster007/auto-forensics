@@ -10,9 +10,9 @@
 - [x] Task: Conductor - User Manual Verification 'Comprehensive Code Audit and Refactoring' (Protocol in workflow.md) [0c35152]
 
 ## Phase 2: Expanded Test Coverage
-- [ ] Task: Implement unit tests for YARA and Sigma plugins.
-    - [ ] Write Tests for edge cases in plugin execution.
-    - [ ] Implement Feature (ensure tests pass).
+- [x] Task: Implement unit tests for YARA and Sigma plugins. [aa98c9a]
+    - [x] Write Tests for edge cases in plugin execution.
+    - [x] Implement Feature (ensure tests pass).
 - [ ] Task: Add integration tests for end-to-end case ingestion.
     - [ ] Write Tests for a full case ingestion cycle.
     - [ ] Implement Feature (update workflow to ensure tests pass).
