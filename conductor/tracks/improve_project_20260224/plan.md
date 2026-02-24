@@ -17,3 +17,6 @@
     - [x] Write Tests for a full case ingestion cycle.
     - [x] Implement Feature (update workflow to ensure tests pass).
 - [x] Task: Conductor - User Manual Verification 'Expanded Test Coverage' (Protocol in workflow.md) [f082669]
+
+## Phase: Review Fixes
+- [x] Task: Apply review suggestions [78526dd]
