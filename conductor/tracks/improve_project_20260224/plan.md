@@ -9,11 +9,11 @@
     - [x] Write Tests for API error endpoints.
 - [x] Task: Conductor - User Manual Verification 'Comprehensive Code Audit and Refactoring' (Protocol in workflow.md) [0c35152]
 
-## Phase 2: Expanded Test Coverage
+## Phase 2: Expanded Test Coverage [checkpoint: f082669]
 - [x] Task: Implement unit tests for YARA and Sigma plugins. [aa98c9a]
     - [x] Write Tests for edge cases in plugin execution.
     - [x] Implement Feature (ensure tests pass).
 - [x] Task: Add integration tests for end-to-end case ingestion. [7fd4fba]
     - [x] Write Tests for a full case ingestion cycle.
     - [x] Implement Feature (update workflow to ensure tests pass).
-- [ ] Task: Conductor - User Manual Verification 'Expanded Test Coverage' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Expanded Test Coverage' (Protocol in workflow.md) [f082669]
