@@ -145,6 +145,34 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             },
         )
 
+    @app.exception_handler(Exception)
+    async def catch_all_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        import logging
+        logger = logging.getLogger("auto_forensics.api")
+        if isinstance(exc, HTTPException):
+            return await structured_http_exception_handler(request, exc)
+        
+        logger.error("Unhandled exception: %s", exc, exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "internal_error",
+                "detail": "An unexpected error occurred on the server.",
+                "status_code": 500,
+            },
+        )
+
+    @app.exception_handler(404)
+    async def custom_404_handler(request: Request, exc: Any) -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": "not_found",
+                "detail": "The requested resource was not found.",
+                "status_code": 404,
+            },
+        )
+
     # Restrict host header acceptance to expected hostnames.
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=config.trusted_hosts or ["127.0.0.1"])
 
