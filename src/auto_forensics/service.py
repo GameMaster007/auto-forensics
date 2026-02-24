@@ -23,7 +23,7 @@ from .ioc_enrichment import EnrichmentConfig, enabled_providers, enrich_ioc
 from .models import IOC, IOCEnrichment, utc_now_iso
 from .pipeline import PipelineConfig, run_case
 from .plugins import PluginRegistry
-from .security import SecurityError, sha256_file, validate_case_id
+from .security import SecurityError, sha256_file, validate_case_id, walk_case_directory
 
 
 class AutoForensicsService:

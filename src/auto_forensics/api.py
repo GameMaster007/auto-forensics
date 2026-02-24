@@ -98,12 +98,12 @@ def _api_key_guard(config: AppConfig):
     return guard
 
 
-def create_app(config: AppConfig | None = None) -> FastAPI:
+def create_app(config: AppConfig | None = None, service: AutoForensicsService | None = None) -> FastAPI:
     if not FASTAPI_AVAILABLE:  # pragma: no cover
         raise RuntimeError("FastAPI is not installed. Install with: pip install -e .[server]")
 
     config = config or AppConfig.from_env()
-    service = AutoForensicsService(config)
+    service = service or AutoForensicsService(config)
     api_guard = _api_key_guard(config)
     app = FastAPI(
         title="Auto Forensics Framework",

@@ -30,7 +30,7 @@ def _config(tmp_path: Path) -> AppConfig:
         production=False,
         api_key_hash=None,
         allowed_origins=[],
-        trusted_hosts=["127.0.0.1", "localhost"],
+        trusted_hosts=["127.0.0.1", "localhost", "testserver"],
         allowed_ingest_roots=[tmp_path.resolve()],
         rate_limit_per_minute=240,
         llama_endpoint="http://localhost:11434",

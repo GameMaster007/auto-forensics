@@ -171,6 +171,7 @@ class Database:
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
         con = sqlite3.connect(self.path)
+        con.execute("PRAGMA foreign_keys=ON")
         con.row_factory = sqlite3.Row
         try:
             yield con
