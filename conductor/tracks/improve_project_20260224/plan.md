@@ -4,9 +4,9 @@
 - [x] Task: Identify and refactor legacy code in evidence ingestion. [4bfb92e]
     - [x] Run static analysis tools to find inefficient code.
     - [x] Refactor identified modules for better performance and readability.
-- [ ] Task: Enhance API error handling.
-    - [ ] Update FastAPI exception handlers for standardized error responses.
-    - [ ] Write Tests for API error endpoints.
+- [x] Task: Enhance API error handling. [8ee7eb9]
+    - [x] Update FastAPI exception handlers for standardized error responses.
+    - [x] Write Tests for API error endpoints.
 - [ ] Task: Conductor - User Manual Verification 'Comprehensive Code Audit and Refactoring' (Protocol in workflow.md)
 
 ## Phase 2: Expanded Test Coverage
