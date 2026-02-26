@@ -24,30 +24,30 @@ This plan focuses on finalizing the "Autonomous Forensics" feature set, cleaning
 ### Phase 1: Git Cleanup & Staging
 - **Goal**: Bring the repository into a clean, committed state.
 - **Steps**:
-  1. [ ] Add untracked files: `agent.py`, `disk_image.py`, `watcher.py`, and related tests.
-  2. [ ] Stage modified core files: `service.py`, `api.py`, `cli.py`, `pyproject.toml`, `config.py`, etc.
-  3. [ ] Verify staging with `git status`.
+  1. [x] Add untracked files: `agent.py`, `disk_image.py`, `watcher.py`, and related tests.
+  2. [x] Stage modified core files: `service.py`, `api.py`, `cli.py`, `pyproject.toml`, `config.py`, etc.
+  3. [x] Verify staging with `git status`.
 - **Verification**: `git status` should show only staged changes.
 
 ### Phase 2: Final Integration & Verification
 - **Goal**: Ensure the autonomous features work in the current environment.
 - **Steps**:
-  1. [ ] Run all tests again: `pytest -v`.
-  2. [ ] Verify `auto-forensics solve` using the `Case/` directory.
-  3. [ ] Verify `auto-forensics watch` with a dummy drop folder.
+  1. [x] Run all tests again: `pytest -v`.
+  2. [x] Verify `auto-forensics solve` using the `Case/` directory.
+  3. [x] Verify `auto-forensics watch` with a dummy drop folder.
 - **Verification**: `pytest` passes 100%; `solve` generates a correct report.
 
 ### Phase 3: Refactoring & Slop Removal
 - **Goal**: Purge technical debt and optimize the new code.
 - **Steps**:
-  1. [ ] Remove any `print()` statements or unused imports in `agent.py` and `watcher.py`.
-  2. [ ] Standardize logging across new modules.
-  3. [ ] Review `service.py` for "AI slop" or redundant logic in `process_drop_item`.
+  1. [x] Remove any `print()` statements or unused imports in `agent.py` and `watcher.py`.
+  2. [x] Standardize logging across new modules.
+  3. [x] Review `service.py` for "AI slop" or redundant logic in `process_drop_item`.
 - **Verification**: Code passes linting (if available) and review.
 
 ### Phase 4: Final Documentation & Commit
 - **Goal**: Finalize documentation and commit the work.
 - **Steps**:
-  1. [ ] Review `ARCHITECTURE.md` and `README.md` for accuracy.
-  2. [ ] Draft and execute the commit message.
+  1. [x] Review `ARCHITECTURE.md` and `README.md` for accuracy.
+  2. [x] Draft and execute the commit message.
 - **Verification**: `git log` shows the final commit; all docs are up-to-date.
