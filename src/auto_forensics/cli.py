@@ -22,6 +22,7 @@ from rich.table import Table
 from rich.text import Text
 from rich.tree import Tree
 
+from .agent import ForensicAgent
 from .api import main as api_main
 from .config import AppConfig
 from .pipeline import PipelineConfig, run_case
@@ -1105,6 +1106,146 @@ def _cmd_hash(args: argparse.Namespace) -> None:
     console.print(Panel("\n".join(lines), title="[bold]File Hash[/]", border_style="cyan", expand=False))
 
 
+def _cmd_extract(args: argparse.Namespace, svc: AutoForensicsService) -> None:
+    """Mount a disk image, copy artifacts to a staging directory, optionally ingest."""
+    image_path = args.image.expanduser().resolve()
+    if not image_path.is_file():
+        err_console.print(f"[bold red]Not a file:[/] {image_path}")
+        raise SystemExit(1)
+
+    output_dir = args.output.expanduser().resolve() if args.output else image_path.parent / (image_path.stem + "_staging")
+    case_id = args.case_id or None
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        transient=True,
+        console=console,
+    ) as prog:
+        prog.add_task(f"Extracting [cyan]{image_path.name}[/]…")
+        result = svc.extract_image_artifacts(image_path, output_dir, case_id=case_id)
+
+    mounted_str = "[green]yes[/]" if result.get("mounted") else "[red]no[/]"
+    err_str = str(result.get("error") or "")
+    lines = [
+        f"Image:     [bold]{image_path.name}[/]",
+        f"Mounted:   {mounted_str}",
+        f"Artifacts: [bold]{result.get('artifacts_copied', 0)}[/] file(s) copied",
+        f"Staging:   [dim]{result.get('staging_dir', str(output_dir))}[/]",
+    ]
+    if err_str:
+        lines.append(f"[bold red]Error:[/] {err_str}")
+    border = "green" if result.get("mounted") else "red"
+    console.print(Panel("\n".join(lines), title="[bold]Image Extraction[/]", border_style=border, expand=False))
+
+    if args.no_ingest or not result.get("mounted"):
+        return
+
+    # Ingest into a case
+    ingest_case_id = case_id or svc._service.watcher.derive_case_id(image_path.stem) if False else (
+        case_id or __import__("auto_forensics.watcher", fromlist=["derive_case_id"]).derive_case_id(image_path.stem)
+    )
+    staging_path = output_dir
+    svc._ensure_ingest_root(staging_path)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        transient=True,
+        console=console,
+    ) as prog2:
+        prog2.add_task(f"Ingesting into case [cyan]{ingest_case_id}[/]…")
+        svc.create_case(ingest_case_id)
+        ingest_result = svc.ingest_case(ingest_case_id, staging_path)
+
+    console.print(Panel(
+        f"Case [bold cyan]{ingest_case_id}[/] ingested — [bold]{ingest_result.get('ingested_files', 0)}[/] file(s).",
+        title="[bold green]Ingested[/]",
+        border_style="green",
+        expand=False,
+    ))
+
+
+def _cmd_watch(args: argparse.Namespace, config: AppConfig, svc: AutoForensicsService) -> None:
+    """Watch a drop directory and auto-process new disk images and folders."""
+    import threading
+    from rich.live import Live
+
+    from .watcher import DropWatcher
+
+    # Resolve the drop directory
+    if args.dir:
+        drop_dir = Path(args.dir).expanduser().resolve()
+    elif config.watch_dir:
+        drop_dir = config.watch_dir
+    else:
+        drop_dir = (config.data_dir / "drop").resolve()
+
+    drop_dir.mkdir(parents=True, exist_ok=True)
+    svc._ensure_ingest_root(drop_dir)
+
+    interval = args.interval if args.interval is not None else config.watch_interval
+    enable_llm = not args.disable_llm
+    auto_extract = config.auto_extract
+
+    console.print(Panel(
+        "\n".join([
+            f"[bold cyan]Drop directory:[/]  {drop_dir}",
+            f"[bold cyan]Poll interval:[/]   {interval}s",
+            f"[bold cyan]LLM analysis:[/]    {'[green]enabled[/]' if enable_llm else '[dim]disabled[/]'}",
+            f"[bold cyan]Auto extract:[/]    {'[green]yes[/]' if auto_extract else '[dim]no[/]'}",
+            "",
+            "[dim]Drop disk images or evidence folders here.  Press Ctrl+C to stop.[/]",
+        ]),
+        title="[bold]Auto Forensics Watcher[/]",
+        border_style="cyan",
+        expand=False,
+    ))
+
+    status_info: dict = {"processed": 0, "last_item": None, "drop_dir": str(drop_dir), "interval": interval}
+
+    def make_status_table() -> Table:
+        t = Table(box=None, show_header=False, padding=(0, 1), expand=False)
+        t.add_column("Key", style="dim", min_width=16)
+        t.add_column("Value", style="bold")
+        t.add_row("Drop dir", str(status_info.get("drop_dir", drop_dir)))
+        t.add_row("Processed", str(status_info.get("processed", 0)))
+        t.add_row("Last item", str(status_info.get("last_item") or "—"))
+        t.add_row("Interval", f"{status_info.get('interval', interval)}s")
+        return t
+
+    watcher = DropWatcher(
+        svc,
+        drop_dir,
+        interval=interval,
+        enable_llm=enable_llm,
+        auto_extract=auto_extract,
+    )
+
+    def on_cycle(new_status: dict) -> None:
+        status_info.update(new_status)
+
+    watch_thread = threading.Thread(
+        target=watcher.run,
+        kwargs={"live_display_callback": on_cycle},
+        daemon=True,
+    )
+    watch_thread.start()
+
+    try:
+        with Live(make_status_table(), console=console, refresh_per_second=0.5) as live:
+            while watch_thread.is_alive():
+                live.update(make_status_table())
+                time.sleep(0.5)
+    except KeyboardInterrupt:
+        watcher.stop()
+
+    watch_thread.join(timeout=5)
+    console.print(f"\n[dim]Watcher stopped. {status_info['processed']} case(s) processed.[/]")
+
+
 def _cmd_config(config: AppConfig) -> None:
     lines = [
         f"[bold cyan]Auto Forensics Configuration[/]",
@@ -1170,6 +1311,19 @@ def _cmd_version() -> None:
     if missing:
         lines.append(f"  Missing :  [dim]{', '.join(missing)}[/]")
     console.print(Panel("\n".join(lines), title="[bold]Version[/]", border_style="cyan", expand=False))
+
+
+def _cmd_solve(args: argparse.Namespace, config: AppConfig) -> None:
+    """Launch the autonomous forensic agent to solve a case without user input."""
+    agent = ForensicAgent(config, enable_llm=not getattr(args, "disable_llama", False))
+
+    case_dir = Path(args.case_dir).expanduser().resolve() if getattr(args, "case_dir", None) else None
+    case_id = getattr(args, "case_id", None) or None
+
+    # base_dir: directory that contains the Case folder (tool root)
+    base_dir = Path(__file__).resolve().parent.parent.parent
+
+    agent.run(case_dir=case_dir, case_id=case_id, base_dir=base_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -1334,10 +1488,48 @@ def build_parser() -> argparse.ArgumentParser:
     # version
     sub.add_parser("version", help="Display version information.")
 
+    # solve  (autonomous AI agent)
+    p = sub.add_parser(
+        "solve",
+        help=(
+            "Run the autonomous AI agent: auto-detects the Case folder and "
+            "solves the case end-to-end without any user input."
+        ),
+    )
+    p.add_argument(
+        "--case-dir",
+        default=None,
+        type=Path,
+        help="Path to the case folder (default: auto-detect a 'Case' folder in the tool directory).",
+    )
+    p.add_argument(
+        "--case-id",
+        default=None,
+        help="Case identifier slug (default: derived from folder name).",
+    )
+    p.add_argument(
+        "--disable-llama",
+        action="store_true",
+        help="Disable LLM analysis (use heuristics only).",
+    )
+
     # start (alias for serve)
     p = sub.add_parser("start", help="Start the API server (alias for serve).")
     p.add_argument("--host", default=None, help="Bind host.")
     p.add_argument("--port", default=None, type=int, help="Bind port.")
+
+    # watch
+    p = sub.add_parser("watch", help="Watch a drop directory and auto-process new images/folders.")
+    p.add_argument("--dir", default=None, type=Path, help="Drop directory to watch (default: from config or {data_dir}/drop/).")
+    p.add_argument("--interval", default=None, type=int, help="Poll interval in seconds (default: 30).")
+    p.add_argument("--disable-llm", action="store_true", help="Disable LLM analysis.")
+
+    # extract
+    p = sub.add_parser("extract", help="Mount a disk image and extract artifacts to a staging directory.")
+    p.add_argument("--image", required=True, type=Path, help="Disk image file (.e01, .dd, .img, .vhd, .vmdk, …).")
+    p.add_argument("--output", default=None, type=Path, help="Staging output directory (default: <image_name>_staging/).")
+    p.add_argument("--case-id", default=None, help="Case ID for the ingest step (default: derived from image name).")
+    p.add_argument("--no-ingest", action="store_true", help="Extract only, skip case creation and ingest.")
 
     return parser
 
@@ -1488,6 +1680,18 @@ def main() -> None:
 
         if args.command == "start":
             _cmd_serve(args, config)
+            return
+
+        if args.command == "watch":
+            _cmd_watch(args, config, ensure_service())
+            return
+
+        if args.command == "extract":
+            _cmd_extract(args, ensure_service())
+            return
+
+        if args.command == "solve":
+            _cmd_solve(args, config)
             return
 
     except SecurityError as exc:

@@ -182,13 +182,32 @@ def create_app(config: AppConfig | None = None, service: AutoForensicsService | 
     # Serve dashboard if web directory exists.
     web_dir = Path(__file__).parent / "web"
     if web_dir.exists():
+        _ASSET_MEDIA: dict[str, str] = {
+            ".js":  "application/javascript",
+            ".css": "text/css",
+        }
+
         @app.get("/", include_in_schema=False)
         async def serve_dashboard():
+            from fastapi.responses import HTMLResponse
             dashboard_file = web_dir / "dashboard.html"
             if dashboard_file.exists():
-                from fastapi.responses import HTMLResponse
                 return HTMLResponse(content=dashboard_file.read_text(encoding="utf-8"))
             return HTMLResponse(content="<h1>Dashboard file missing</h1>", status_code=404)
+
+        @app.get("/assets/{filename}", include_in_schema=False)
+        async def serve_asset(filename: str):
+            # Only serve known static assets from the web directory.
+            suffix = Path(filename).suffix
+            if suffix not in _ASSET_MEDIA or "/" in filename or "\\" in filename:
+                raise HTTPException(status_code=404, detail="Not found.")
+            asset_path = web_dir / filename
+            if not asset_path.exists() or not asset_path.is_file():
+                raise HTTPException(status_code=404, detail="Not found.")
+            return PlainTextResponse(
+                content=asset_path.read_text(encoding="utf-8"),
+                media_type=_ASSET_MEDIA[suffix],
+            )
 
     # Restrict host header acceptance to expected hostnames.
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=config.trusted_hosts or ["127.0.0.1"])

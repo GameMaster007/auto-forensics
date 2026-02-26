@@ -1308,3 +1308,100 @@ class AutoForensicsService:
             },
             "events": filtered,
         }
+
+    # ------------------------------------------------------------------
+    # Watcher / drop-folder support
+    # ------------------------------------------------------------------
+
+    def _ensure_ingest_root(self, path: Path) -> None:
+        """Append *path* to allowed_ingest_roots if not already present.
+
+        Safe because ``AppConfig.allowed_ingest_roots`` is a plain list.
+        """
+        resolved = path.resolve()
+        if resolved not in self.config.allowed_ingest_roots:
+            self.config.allowed_ingest_roots.append(resolved)
+
+    def extract_image_artifacts(
+        self,
+        image_path: Path,
+        staging_dir: Path,
+        case_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Mount *image_path*, extract artifacts to *staging_dir*, then unmount.
+
+        Does NOT create a case or ingest artifacts — call ``ingest_case``
+        separately after confirming the result.
+
+        Returns the result dict from ``extract_image_to_staging``.
+        """
+        from .disk_image import extract_image_to_staging
+
+        image_path = image_path.expanduser().resolve()
+        staging_dir = staging_dir.expanduser().resolve()
+
+        result = extract_image_to_staging(
+            image_path,
+            staging_dir,
+            max_file_size_bytes=self.config.security_policy.max_file_size_bytes,
+        )
+
+        if case_id is not None:
+            try:
+                validate_case_id(case_id)
+                self.db.append_audit_log(
+                    action="image_extracted",
+                    actor="system",
+                    details={
+                        "image": str(image_path),
+                        "staging_dir": str(staging_dir),
+                        "mounted": result.get("mounted"),
+                        "artifacts_copied": result.get("artifacts_copied", 0),
+                    },
+                    case_id=case_id,
+                )
+            except Exception as exc:
+                logger.debug("Could not append audit log for image extraction: %s", exc)
+
+        return result
+
+    def process_drop_item(
+        self,
+        item_path: Path,
+        case_id: str,
+        enable_llm: bool = True,
+        auto_extract: bool = True,
+    ) -> dict[str, Any]:
+        """Trusted entry point for the drop-folder watcher.
+
+        Creates a case, extracts artifacts from a disk image (if applicable),
+        ingests the evidence directory, and runs analysis synchronously.
+
+        Returns a summary dict with ``case_id``, ``artifacts``, and
+        ``findings`` keys.
+        """
+        from .disk_image import is_disk_image
+
+        item_path = item_path.expanduser().resolve()
+        case_id = validate_case_id(case_id)
+
+        self.create_case(case_id)
+
+        if item_path.is_file() and is_disk_image(item_path) and auto_extract:
+            staging = self.config.cases_dir / case_id / "extracted"
+            self._ensure_ingest_root(staging)
+            self.extract_image_artifacts(item_path, staging, case_id=case_id)
+            source_dir = staging
+        else:
+            self._ensure_ingest_root(item_path)
+            source_dir = item_path
+
+        self.ingest_case(case_id, source_dir)
+        self.analyze_case(case_id, enable_llama=enable_llm)
+        overview = self.case_overview(case_id)
+
+        return {
+            "case_id": case_id,
+            "artifacts": len(overview.get("artifacts", [])),
+            "findings": len(overview.get("findings", [])),
+        }

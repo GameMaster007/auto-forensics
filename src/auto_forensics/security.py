@@ -63,6 +63,8 @@ def is_supported_artifact(path: Path) -> bool:
         ".dll",
         ".sys",
         ".bin",
+        ".sqlite",
+        ".db",
     }
 
 

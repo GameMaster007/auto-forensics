@@ -38,6 +38,36 @@ auto-forensics analyze --case-id case-001 --disable-llama
 auto-forensics report --case-id case-001 --format md
 ```
 
+## Style guide
+
+Follow the Google Python Style Guide (`conductor/code_styleguides/python.md`):
+- Max 80-character lines, 4-space indentation, no tabs.
+- `snake_case` for functions/variables/modules, `PascalCase` for classes, `ALL_CAPS` for module-level constants.
+- No bare `except:` clauses — always catch specific exception types.
+- Type annotations required on all public APIs.
+- Avoid mutable default arguments.
+- Match the existing style of the file being edited.
+
+## Optional extras
+
+The `.[server,dev]` install covers CLI + tests. Individual extras:
+
+| Extra | Enables |
+|---|---|
+| `pe` | PE binary analysis (`pefile`) |
+| `evtx` | Windows Event Log parsing (`python-evtx`) |
+| `pcap` | PCAP parsing (`dpkt`) |
+| `registry` | Registry hive parsing (`python-registry`) |
+| `yara` | YARA rule scanning (`yara-python`) |
+| `sigma` | Sigma rule evaluation (`pyyaml`) |
+| `memory` | Memory dump analysis (`volatility3`) |
+| `pdf` | PDF report export (`reportlab`) |
+| `db` | PostgreSQL + SQLAlchemy backend |
+| `server` | FastAPI + uvicorn API server |
+| `dev` | pytest |
+
+Tests for optional-dep features are skipped with `pytest.importorskip(...)`. The CI matrix installs only `.[dev,db]` — do not add mandatory deps.
+
 ## Architecture
 
 ### Layered structure
@@ -49,6 +79,11 @@ plugins.py            ← registries for parsers, analyzers, detectors, enricher
 db.py / db_sqlalchemy.py ← persistence (selected via AUTO_FORENSICS_DATABASE_URL)
 security.py / config.py  ← input validation and environment-driven configuration
 ```
+
+### Entry points
+Two console scripts are installed:
+- `auto-forensics` → `auto_forensics.cli:main` (30+ subcommands for the full case lifecycle)
+- `auto-forensics-api` → `auto_forensics.api:main` (FastAPI server; same as `auto-forensics serve`)
 
 ### Plugin registry pattern (`plugins.py`)
 `PluginRegistry` holds four sub-registries: `ArtifactParserRegistry`, `DetectorRegistry`, `EnricherRegistry`, and `ReporterRegistry`, plus a `binary_analyzers` list. Every subsystem calls into the registry rather than importing concrete implementations directly. External plugins drop `.py` files into `AUTO_FORENSICS_PLUGIN_DIRS` and expose a `register(registry: PluginRegistry)` function.
@@ -66,7 +101,11 @@ All domain objects are frozen `@dataclass(slots=True)`: `ArtifactEvent`, `Binary
 `confine_path(root, candidate)` enforces directory confinement — call it before any file access using a user-supplied path. `validate_case_id()` enforces the `^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$` pattern. `SecurityPolicy` dataclass holds size/count limits read from env vars. All SQL uses parameterized queries only.
 
 ### Configuration (`config.py`)
-`AppConfig.from_env()` reads all settings from environment variables prefixed `AUTO_FORENSICS_`. Key vars: `AUTO_FORENSICS_HOME`, `AUTO_FORENSICS_ENV` (`dev`/`prod`), `AUTO_FORENSICS_API_KEY`, `AUTO_FORENSICS_DATABASE_URL`, `AUTO_FORENSICS_ALLOWED_INGEST_ROOTS`, `AUTO_FORENSICS_VIRUSTOTAL_API_KEY`, `AUTO_FORENSICS_OPENAI_ENDPOINT`.
+`AppConfig.from_env()` reads all settings from environment variables prefixed `AUTO_FORENSICS_`. Key vars: `AUTO_FORENSICS_HOME`, `AUTO_FORENSICS_ENV` (`dev`/`prod`), `AUTO_FORENSICS_API_KEY`, `AUTO_FORENSICS_DATABASE_URL`, `AUTO_FORENSICS_ALLOWED_INGEST_ROOTS`, `AUTO_FORENSICS_VIRUSTOTAL_API_KEY`, `AUTO_FORENSICS_OPENAI_ENDPOINT`, `AUTO_FORENSICS_OPENAI_API_KEY`.
+
+**OpenAI-compatible endpoint convention:** `AUTO_FORENSICS_OPENAI_ENDPOINT` must be the base URL **including** any version path up to (but not including) `/chat/completions`. Examples:
+- OpenAI: `https://api.openai.com/v1`
+- Gemini: `https://generativelanguage.googleapis.com/v1beta/openai`
 
 ### Optional dependencies
 All heavy deps are optional extras. Guards follow the pattern:
@@ -76,7 +115,6 @@ try:
 except ImportError:
     yara = None  # type: ignore
 ```
-Tests for optional-dep features are skipped with `pytest.importorskip(...)`. The CI matrix installs only `.[dev,db]` — do not add mandatory deps.
 
 ### Database backends
 `db.py` is the plain SQLite backend (no extra deps). `db_sqlalchemy.py` supports SQLite and PostgreSQL via SQLAlchemy + psycopg. Both implement the `DatabaseBackend` protocol in `db_backend.py`. `service.py` selects the backend at startup.
@@ -98,3 +136,14 @@ Tests for optional-dep features are skipped with `pytest.importorskip(...)`. The
 | `pdf_report.py` | PDF report generation via `reportlab` |
 | `migrations.py` | Versioned schema migration steps |
 | `timeline.py` | Timeline assembly and risk scoring |
+
+### Case directory layout
+Cases live under `$AUTO_FORENSICS_HOME/cases/{case_id}/`:
+- `evidence/` — raw artifact files copied in during ingest
+- `output/` — generated reports (`case_report.json`, `case_report.md`, `case_report.pdf`)
+
+### Extended CLI commands
+Beyond the basic workflow, the CLI provides: `scan` / `scan-dir` (standalone file/directory analysis without a case), `conclusions` (MITRE tactic correlation and risk verdicts), `audit` (chain-of-custody audit trail), `hash` (artifact hashing), `stats` (global case count summary), `search` (full-text search across cases), `notes` / `add-note` (analyst notes), `jobs` / `cleanup-jobs` (job queue management), `export` / `import` (case archiving), `delete` (case removal), `migrate` (schema migration).
+
+### Training directory
+`training/` contains a separate fine-tuning pipeline (Qwen 2.5 LoRA) for the LLM triage component. It has its own `.venv` and is not part of the main package.

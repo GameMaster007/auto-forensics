@@ -1,0 +1,55 @@
+[
+  {
+    "timestamp": "2008-07-18T08:55:00Z",
+    "event_type": "email_sent",
+    "description": "Jean sent email to alison@m57.biz — subject: 'Q3 planning' — NO spreadsheet attachment. This is the most recent email to Alison before the incident.",
+    "source": "outlook_pst_analysis",
+    "from": "jean@m57.biz",
+    "to": "alison@m57.biz",
+    "subject": "Q3 planning",
+    "has_attachment": false,
+    "attachment_names": [],
+    "attack_tactic": "collection",
+    "attack_technique_id": "T1114.001",
+    "evidentiary_value": "EXCULPATORY — no spreadsheet sent to Alison, contradicting Jean's claim that Alison requested it"
+  },
+  {
+    "timestamp": "2008-07-16T14:30:00Z",
+    "event_type": "email_received",
+    "description": "Jean received email from alison@m57.biz — subject: 'Investor meeting prep' — no mention of salary spreadsheet request",
+    "source": "outlook_pst_analysis",
+    "from": "alison@m57.biz",
+    "to": "jean@m57.biz",
+    "subject": "Investor meeting prep",
+    "has_attachment": false,
+    "attack_tactic": "collection",
+    "attack_technique_id": "T1114.001",
+    "evidentiary_value": "EXCULPATORY — Alison's email makes no mention of requesting an employee spreadsheet with SSNs"
+  },
+  {
+    "timestamp": "2008-07-20T07:22:00Z",
+    "event_type": "email_search",
+    "description": "Jean searched Outlook for 'm57plan' — no results found. No record of Alison ever emailing about this file.",
+    "source": "outlook_pst_analysis",
+    "search_query": "m57plan",
+    "results_count": 0,
+    "attack_tactic": "collection",
+    "attack_technique_id": "T1114.001",
+    "evidentiary_value": "CRITICAL — no email chain shows Alison requesting or receiving m57plan.xlsx; Jean's alibi unsupported"
+  },
+  {
+    "timestamp": "2008-07-20T13:30:00Z",
+    "event_type": "email_draft",
+    "description": "Draft email found: jean@m57.biz to unknown external address — deleted before send. Subject 'RE:' — body references company financial data.",
+    "source": "outlook_pst_analysis",
+    "from": "jean@m57.biz",
+    "to": "unknown_external",
+    "subject": "RE:",
+    "has_attachment": true,
+    "attachment_names": ["m57plan.xlsx"],
+    "deleted": true,
+    "attack_tactic": "exfiltration",
+    "attack_technique_id": "T1048",
+    "evidentiary_value": "HIGH — deleted draft with m57plan.xlsx attached found in Outlook Deleted Items folder"
+  }
+]

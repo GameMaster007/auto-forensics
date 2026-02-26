@@ -35,6 +35,13 @@
 - `auto_forensics/cli.py`:
   - operations entrypoint for Windows/Linux terminal workflows
   - 30+ subcommands: case lifecycle, scanning, analysis, notes, audit, hashing, and more
+  - `solve` command: launches the autonomous agent with optional overrides
+- `auto_forensics/agent.py`:
+  - **Autonomous AI agent** — zero user-input forensic investigation
+  - Auto-discovers the `Case` folder in the tool's own directory
+  - Runs the full pipeline (init → ingest → analyse → conclusions → report) automatically
+  - Writes `agent_report.md` and `agent_report.html` into the case folder
+  - Launched automatically by `start-auto-forensics.cmd` when a Case folder is present
 
 ## Data Flow
 

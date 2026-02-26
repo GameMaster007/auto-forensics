@@ -13,6 +13,10 @@ python-evtx>=0.8.1
 [memory]
 volatility3>=2.8.0
 
+[mount]
+pyewf>=20230709
+pytsk3>=20231210
+
 [pcap]
 dpkt>=1.9.8
 

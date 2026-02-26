@@ -227,6 +227,12 @@ def test_api_export_import_and_dashboard_assets(tmp_path: Path):
     assert imported_case.status_code == 200
     assert imported_case.json()["case"]["case_id"] == "case-api-archive-import-001"
 
-    # Dashboard UI has been removed; the root path should return 404.
-    assert client.get("/").status_code == 404
-    assert client.get("/assets/dashboard.js").status_code == 404
+    # Dashboard is served from the web directory bundled with the package.
+    root = client.get("/")
+    assert root.status_code == 200
+    assert "text/html" in root.headers["content-type"]
+    assert client.get("/assets/dashboard.js").status_code == 200
+    assert client.get("/assets/dashboard.css").status_code == 200
+    # Path traversal and unknown extensions are rejected.
+    assert client.get("/assets/../api.py").status_code == 404
+    assert client.get("/assets/secret.exe").status_code == 404

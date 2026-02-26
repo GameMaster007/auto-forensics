@@ -101,6 +101,7 @@ class ArtifactParserRegistry:
         if self.parsers:
             return
         from .artifacts import (
+            BrowserHistoryArtifactParser,
             CsvArtifactParser,
             EvtxArtifactParser,
             JsonArtifactParser,
@@ -121,6 +122,7 @@ class ArtifactParserRegistry:
         self.register(RegistryArtifactParser())
         self.register(MftArtifactParser())
         self.register(MemoryDumpArtifactParser())
+        self.register(BrowserHistoryArtifactParser())
 
     def parser_for_suffix(self, suffix: str) -> ArtifactParserPlugin | None:
         return self._suffix_index.get(self._normalize_suffix(suffix))
