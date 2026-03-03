@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import AppConfig
-from .security import SecurityError, confine_path, validate_case_id
+from .security import SecurityError, validate_case_id
 from .service import AutoForensicsService
 
 FASTAPI_AVAILABLE = True
@@ -20,7 +20,7 @@ try:
     from fastapi.exceptions import RequestValidationError
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.middleware.trustedhost import TrustedHostMiddleware
-    from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
+    from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
     from pydantic import BaseModel, Field
 except Exception:  # pragma: no cover - optional dependency path
     FASTAPI_AVAILABLE = False
@@ -35,7 +35,6 @@ except Exception:  # pragma: no cover - optional dependency path
     Field = lambda *args, **kwargs: None  # type: ignore
     CORSMiddleware = object  # type: ignore
     TrustedHostMiddleware = object  # type: ignore
-    HTMLResponse = object  # type: ignore
     JSONResponse = object  # type: ignore
     PlainTextResponse = object  # type: ignore
     StreamingResponse = object  # type: ignore
@@ -86,11 +85,6 @@ class JobCleanupRequest(BaseModel):
     retention_days: int | None = Field(default=None, ge=0, le=3650)
 
 
-def _dashboard_html() -> str:
-    html_path = Path(__file__).resolve().parent / "web" / "dashboard.html"
-    return html_path.read_text(encoding="utf-8")
-
-
 def _api_key_guard(config: AppConfig):
     async def guard(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> None:
         if not config.api_key_hash:
@@ -104,12 +98,12 @@ def _api_key_guard(config: AppConfig):
     return guard
 
 
-def create_app(config: AppConfig | None = None) -> FastAPI:
+def create_app(config: AppConfig | None = None, service: AutoForensicsService | None = None) -> FastAPI:
     if not FASTAPI_AVAILABLE:  # pragma: no cover
         raise RuntimeError("FastAPI is not installed. Install with: pip install -e .[server]")
 
     config = config or AppConfig.from_env()
-    service = AutoForensicsService(config)
+    service = service or AutoForensicsService(config)
     api_guard = _api_key_guard(config)
     app = FastAPI(
         title="Auto Forensics Framework",
@@ -150,6 +144,70 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 ],
             },
         )
+
+    @app.exception_handler(Exception)
+    async def catch_all_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+        import logging
+        logger = logging.getLogger("auto_forensics.api")
+        if isinstance(exc, HTTPException):
+            return await structured_http_exception_handler(request, exc)
+        
+        logger.error("Unhandled exception: %s", exc, exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "internal_error",
+                "detail": "An unexpected error occurred on the server.",
+                "status_code": 500,
+            },
+        )
+
+    @app.exception_handler(404)
+    async def custom_404_handler(request: Request, exc: Any) -> Any:
+        accept = request.headers.get("accept", "")
+        if "text/html" in accept and not request.url.path.startswith("/api/"):
+            # Redirect to root for browser users on non-API routes.
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url="/")
+            
+        return JSONResponse(
+            status_code=404,
+            content={
+                "error": "not_found",
+                "detail": "The requested resource was not found.",
+                "status_code": 404,
+            },
+        )
+
+    # Serve dashboard if web directory exists.
+    web_dir = Path(__file__).parent / "web"
+    if web_dir.exists():
+        _ASSET_MEDIA: dict[str, str] = {
+            ".js":  "application/javascript",
+            ".css": "text/css",
+        }
+
+        @app.get("/", include_in_schema=False)
+        async def serve_dashboard():
+            from fastapi.responses import HTMLResponse
+            dashboard_file = web_dir / "dashboard.html"
+            if dashboard_file.exists():
+                return HTMLResponse(content=dashboard_file.read_text(encoding="utf-8"))
+            return HTMLResponse(content="<h1>Dashboard file missing</h1>", status_code=404)
+
+        @app.get("/assets/{filename}", include_in_schema=False)
+        async def serve_asset(filename: str):
+            # Only serve known static assets from the web directory.
+            suffix = Path(filename).suffix
+            if suffix not in _ASSET_MEDIA or "/" in filename or "\\" in filename:
+                raise HTTPException(status_code=404, detail="Not found.")
+            asset_path = web_dir / filename
+            if not asset_path.exists() or not asset_path.is_file():
+                raise HTTPException(status_code=404, detail="Not found.")
+            return PlainTextResponse(
+                content=asset_path.read_text(encoding="utf-8"),
+                media_type=_ASSET_MEDIA[suffix],
+            )
 
     # Restrict host header acceptance to expected hostnames.
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=config.trusted_hosts or ["127.0.0.1"])
@@ -196,25 +254,6 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         )
         return response
 
-    @app.get("/", response_class=HTMLResponse)
-    async def dashboard() -> str:
-        return _dashboard_html()
-
-    @app.get("/assets/{filename}")
-    async def assets(filename: str):
-        web_root = Path(__file__).resolve().parent / "web"
-        safe_name = Path(filename).name
-        asset = confine_path(web_root, web_root / safe_name)
-        if not asset.exists() or not asset.is_file():
-            raise HTTPException(status_code=404, detail="Asset not found.")
-        if asset.suffix == ".js":
-            media = "application/javascript"
-        elif asset.suffix == ".css":
-            media = "text/css"
-        else:
-            media = "application/octet-stream"
-        return Response(content=asset.read_text(encoding="utf-8"), media_type=media)
-
     @app.get("/api/health", response_class=JSONResponse)
     async def health() -> dict[str, str]:
         return {"status": "ok"}
@@ -247,13 +286,29 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/cases", response_class=JSONResponse, dependencies=[Depends(api_guard)])
-    async def list_cases() -> list[dict[str, Any]]:
-        return service.list_cases()
+    async def list_cases(
+        q: str | None = Query(default=None, min_length=1, max_length=128),
+        status: str | None = Query(default=None, pattern="^(created|ready|ingesting|analyzing|complete|failed)$"),
+        limit: int = Query(default=200, ge=1, le=1000),
+    ) -> list[dict[str, Any]]:
+        return service.list_cases(query=q, status=status, limit=limit)
+
+    @app.get("/api/stats", response_class=JSONResponse, dependencies=[Depends(api_guard)])
+    async def case_stats() -> dict[str, Any]:
+        return service.case_stats()
 
     @app.get("/api/cases/{case_id}", response_class=JSONResponse, dependencies=[Depends(api_guard)])
     async def get_case(case_id: str) -> dict[str, Any]:
         try:
             return service.case_overview(validate_case_id(case_id))
+        except SecurityError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.delete("/api/cases/{case_id}", response_class=JSONResponse, dependencies=[Depends(api_guard)])
+    async def delete_case(case_id: str) -> dict[str, Any]:
+        """Permanently delete a case, all associated DB records, and on-disk data."""
+        try:
+            return service.delete_case(validate_case_id(case_id))
         except SecurityError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

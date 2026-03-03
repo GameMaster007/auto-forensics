@@ -28,7 +28,7 @@ def test_extract_iocs_from_binary_findings_and_timeline():
             severity="high",
             confidence=0.8,
             tactic="execution",
-            evidence=["contacted 203.0.113.55"],
+            evidence=["contacted 1.1.1.1"],
         )
     ]
     timeline = [
@@ -49,7 +49,7 @@ def test_extract_iocs_from_binary_findings_and_timeline():
     assert ("sha256", "a" * 64) in pairs
     assert ("md5", "b" * 32) in pairs
     assert ("url", "https://c2.example/path") in pairs
-    assert ("ip", "203.0.113.55") in pairs
+    assert ("ip", "1.1.1.1") in pairs
 
 
 def test_db_ioc_cache_roundtrip(tmp_path: Path):

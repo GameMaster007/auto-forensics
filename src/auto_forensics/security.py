@@ -63,6 +63,8 @@ def is_supported_artifact(path: Path) -> bool:
         ".dll",
         ".sys",
         ".bin",
+        ".sqlite",
+        ".db",
     }
 
 
@@ -80,3 +82,35 @@ def read_limited_text(path: Path, max_bytes: int) -> str:
     if len(data) > max_bytes:
         raise SecurityError(f"File exceeds maximum text size: {path}")
     return data.decode("utf-8", errors="replace")
+
+
+def walk_case_directory(root: Path, policy: SecurityPolicy, filter_func=is_supported_artifact):
+    """Efficiently walk a directory while respecting security policy."""
+    import os
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as it:
+                # Sort entries for deterministic behavior across platforms.
+                for entry in sorted(it, key=lambda e: e.name):
+                    if entry.is_dir():
+                        # We don't check depth here, that's done in the caller if needed.
+                        stack.append(Path(entry.path))
+                        continue
+                    if not entry.is_file():
+                        continue
+                    
+                    src = Path(entry.path)
+                    if (not policy.follow_symlinks) and src.is_symlink():
+                        continue
+                        
+                    if filter_func and not filter_func(src):
+                        continue
+                        
+                    if entry.stat().st_size > policy.max_file_size_bytes:
+                        continue
+                        
+                    yield src
+        except PermissionError:
+            continue

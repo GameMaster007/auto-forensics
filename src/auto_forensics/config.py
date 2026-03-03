@@ -73,6 +73,9 @@ class AppConfig:
     db_pool_timeout_seconds: int = 30
     db_pool_recycle_seconds: int = 1800
     job_retention_days: int = 30
+    watch_dir: Path | None = None
+    watch_interval: int = 30
+    auto_extract: bool = True
 
     def __post_init__(self) -> None:
         self.plugin_dirs = [p.expanduser().resolve() for p in self.plugin_dirs] if self.plugin_dirs else []
@@ -160,6 +163,9 @@ class AppConfig:
             db_pool_timeout_seconds=int(os.getenv("AUTO_FORENSICS_DB_POOL_TIMEOUT_SECONDS", "30")),
             db_pool_recycle_seconds=int(os.getenv("AUTO_FORENSICS_DB_POOL_RECYCLE_SECONDS", "1800")),
             job_retention_days=int(os.getenv("AUTO_FORENSICS_JOB_RETENTION_DAYS", "30")),
+            watch_dir=_parse_optional_path_env("AUTO_FORENSICS_WATCH_DIR"),
+            watch_interval=int(os.getenv("AUTO_FORENSICS_WATCH_INTERVAL", "30")),
+            auto_extract=os.getenv("AUTO_FORENSICS_AUTO_EXTRACT", "true").lower() == "true",
         )
 
     def ensure_dirs(self) -> None:
@@ -173,3 +179,5 @@ class AppConfig:
             self.sigma_rules_dir.mkdir(parents=True, exist_ok=True)
         if self.attack_stix_path:
             self.attack_stix_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.watch_dir:
+            self.watch_dir.mkdir(parents=True, exist_ok=True)

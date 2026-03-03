@@ -11,6 +11,34 @@ from .security import confine_path, SecurityError
 logger = logging.getLogger(__name__)
 
 
+# MITRE ATT&CK tactic names as they appear in Sigma rule tags (with both
+# hyphenated and underscore forms to handle different Sigma rule authors).
+_MITRE_TACTICS: frozenset[str] = frozenset({
+    "initial_access", "initial-access",
+    "execution",
+    "persistence",
+    "privilege_escalation", "privilege-escalation",
+    "defense_evasion", "defense-evasion",
+    "credential_access", "credential-access",
+    "discovery",
+    "lateral_movement", "lateral-movement",
+    "collection",
+    "command_and_control", "command-and-control",
+    "exfiltration",
+    "impact",
+})
+
+# Normalise tactic names to the hyphenated form used throughout this codebase.
+_TACTIC_NORMALISE: dict[str, str] = {
+    "initial_access": "initial-access",
+    "privilege_escalation": "privilege-escalation",
+    "defense_evasion": "defense-evasion",
+    "credential_access": "credential-access",
+    "lateral_movement": "lateral-movement",
+    "command_and_control": "command-and-control",
+}
+
+
 def _extract_attack_technique(tags: list[str]) -> tuple[str, str]:
     for tag in tags:
         clean = tag.strip().lower()
@@ -19,6 +47,18 @@ def _extract_attack_technique(tags: list[str]) -> tuple[str, str]:
             if len(parts) == 2 and parts[1]:
                 return parts[1].upper(), ""
     return "", ""
+
+
+def _extract_attack_tactic(tags: list[str]) -> str:
+    """Return the first MITRE ATT&CK tactic found in *tags*, or empty string."""
+    for tag in tags:
+        clean = tag.strip().lower()
+        if not clean.startswith("attack."):
+            continue
+        suffix = clean[len("attack."):]
+        if suffix in _MITRE_TACTICS:
+            return _TACTIC_NORMALISE.get(suffix, suffix)
+    return ""
 
 
 def _detection_keywords(rule: dict[str, Any]) -> list[str]:
@@ -90,6 +130,7 @@ def evaluate_sigma_rules(timeline: list[TimelineEvent], rules_dir: Path | None) 
             continue
 
         technique_id, sub_technique = _extract_attack_technique(tags)
+        tactic = _extract_attack_tactic(tags) or "detection"
         confidence = min(0.95, 0.55 + min(0.35, matched * 0.05))
         findings.append(
             Finding(
@@ -97,7 +138,7 @@ def evaluate_sigma_rules(timeline: list[TimelineEvent], rules_dir: Path | None) 
                 title=f"Sigma rule match: {title}",
                 severity=level if level in {"critical", "high", "medium", "low"} else "medium",
                 confidence=confidence,
-                tactic="detection",
+                tactic=tactic,
                 evidence=[f"rule={rule_path}", f"matched_events={matched}", *keywords[:5]],
                 recommendation="Review matched events and validate against host/network context.",
                 technique_id=technique_id,

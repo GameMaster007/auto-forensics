@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Auto Forensics Team" }]
-dependencies = []
+dependencies = ["rich>=13.0.0"]
 
 [project.optional-dependencies]
 pe = ["pefile>=2023.2.7"]
@@ -24,6 +24,7 @@ pdf = ["reportlab>=4.2.2"]
 db = ["sqlalchemy>=2.0.36", "psycopg[binary]>=3.2.9"]
 server = ["fastapi>=0.110.0,<1.0.0", "uvicorn>=0.30.0,<1.0.0"]
 dev = ["pytest>=8.0.0,<9.0.0"]
+mount = ["pyewf>=20230709", "pytsk3>=20231210"]
 
 [project.scripts]
 auto-forensics = "auto_forensics.cli:main"
@@ -36,4 +37,4 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-auto_forensics = ["web/*.html", "web/*.css", "web/*.js"]
+auto_forensics = []

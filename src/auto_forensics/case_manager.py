@@ -4,7 +4,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from .security import SecurityError, SecurityPolicy, confine_path, is_supported_artifact, sha256_file
+from .security import SecurityError, SecurityPolicy, confine_path, is_supported_artifact, sha256_file, walk_case_directory
 
 
 @dataclass(slots=True)
@@ -48,19 +48,11 @@ class CaseManager:
 
         file_count = 0
         entries: list[ArtifactIndexEntry] = []
-        for src in sorted(source_dir.rglob("*")):
-            if not src.is_file():
-                continue
+        
+        for src in walk_case_directory(source_dir, self.policy):
             if file_count >= self.policy.max_total_files:
                 raise SecurityError("Maximum file count exceeded during ingestion.")
-            if (not self.policy.follow_symlinks) and src.is_symlink():
-                continue
-            if not is_supported_artifact(src):
-                continue
-            size_bytes = src.stat().st_size
-            if size_bytes > self.policy.max_file_size_bytes:
-                continue
-
+            
             rel_path = src.relative_to(source_dir)
             dst = evidence_dir / rel_path
             dst.parent.mkdir(parents=True, exist_ok=True)
@@ -71,7 +63,7 @@ class CaseManager:
                 ArtifactIndexEntry(
                     rel_path=str(rel_path),
                     artifact_type=src.suffix.lower().lstrip("."),
-                    size_bytes=size_bytes,
+                    size_bytes=src.stat().st_size,
                     sha256=sha256_file(dst),
                     metadata={"source_path": str(src)},
                 )

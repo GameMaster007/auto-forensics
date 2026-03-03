@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import Future, ThreadPoolExecutor
 import hashlib
 import json
+import logging
 import shutil
 import threading
 import zipfile
@@ -11,16 +12,18 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
 from .case_manager import CaseManager
 from .config import AppConfig
 from .db_backend import DatabaseBackend
 from .db import Database
 from .db_sqlalchemy import SQLAlchemyDatabase
 from .ioc_enrichment import EnrichmentConfig, enabled_providers, enrich_ioc
-from .models import IOC, IOCEnrichment
+from .models import IOC, IOCEnrichment, utc_now_iso
 from .pipeline import PipelineConfig, run_case
 from .plugins import PluginRegistry
-from .security import SecurityError, sha256_file, validate_case_id
+from .security import SecurityError, sha256_file, validate_case_id, walk_case_directory
 
 
 class AutoForensicsService:
@@ -48,7 +51,20 @@ class AutoForensicsService:
         self._enrichment_job_ids: dict[str, str] = {}
         self._analysis_lock = threading.Lock()
         self._enrichment_lock = threading.Lock()
-        self.cleanup_job_history(retention_days=self.config.job_retention_days)
+        try:
+            self.cleanup_job_history(retention_days=self.config.job_retention_days)
+        except Exception as exc:
+            logger.warning("Job history cleanup failed on init: %s", exc)
+
+    def shutdown(self) -> None:
+        self._analysis_executor.shutdown(wait=False)
+        self._enrichment_executor.shutdown(wait=False)
+
+    def __del__(self) -> None:
+        try:
+            self.shutdown()
+        except Exception:
+            pass
 
     def run_db_migrations(self) -> dict[str, Any]:
         return self.db.run_migrations()
@@ -120,8 +136,54 @@ class AutoForensicsService:
         )
         return self.require_case(case_id)
 
-    def list_cases(self) -> list[dict[str, Any]]:
-        return self.db.list_cases()
+    def list_cases(
+        self,
+        query: str | None = None,
+        status: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        items = self.db.list_cases()
+        clean_query = (query or "").strip().lower()
+        clean_status = (status or "").strip().lower()
+        allowed_statuses = {"created", "ready", "ingesting", "analyzing", "complete", "failed"}
+        if clean_status and clean_status not in allowed_statuses:
+            raise SecurityError(
+                "status must be one of: created, ready, ingesting, analyzing, complete, failed."
+            )
+        if clean_status:
+            items = [item for item in items if str(item.get("status", "")).lower() == clean_status]
+        if clean_query:
+            filtered: list[dict[str, Any]] = []
+            for item in items:
+                blob = " ".join(
+                    [
+                        str(item.get("case_id", "")),
+                        str(item.get("status", "")),
+                        str(item.get("last_error", "") or ""),
+                    ]
+                ).lower()
+                if clean_query in blob:
+                    filtered.append(item)
+            items = filtered
+        limit = max(1, min(1000, int(limit)))
+        return items[:limit]
+
+    def case_stats(self) -> dict[str, Any]:
+        items = self.db.list_cases()
+        by_status: dict[str, int] = {}
+        for case in items:
+            key = str(case.get("status") or "unknown")
+            by_status[key] = by_status.get(key, 0) + 1
+        newest_updated_at = None
+        if items:
+            newest_updated_at = max(str(item.get("updated_at", "") or "") for item in items) or None
+        return {
+            "total_cases": len(items),
+            "by_status": by_status,
+            "active_cases": by_status.get("ingesting", 0) + by_status.get("analyzing", 0),
+            "failed_cases": by_status.get("failed", 0),
+            "newest_updated_at": newest_updated_at,
+        }
 
     def require_case(self, case_id: str) -> dict[str, Any]:
         case_id = validate_case_id(case_id)
@@ -437,6 +499,7 @@ class AutoForensicsService:
         self.require_case(case_id)
         job_id = f"enrich-{uuid.uuid4().hex[:16]}"
 
+        placeholder: Future[dict[str, Any]] = Future()
         with self._enrichment_lock:
             existing = self._enrichment_jobs.get(case_id)
             if existing is not None and not existing.done():
@@ -446,6 +509,7 @@ class AutoForensicsService:
                     "detail": "IOC enrichment already running.",
                     "status": self._enrichment_status.get(case_id),
                 }
+            self._enrichment_jobs[case_id] = placeholder  # claim slot atomically
 
         self._set_enrichment_status(
             case_id,
@@ -471,7 +535,7 @@ class AutoForensicsService:
 
         future = self._enrichment_executor.submit(run_job)
         with self._enrichment_lock:
-            self._enrichment_jobs[case_id] = future
+            self._enrichment_jobs[case_id] = future  # replace placeholder
             self._enrichment_job_ids[case_id] = job_id
         return {
             "case_id": case_id,
@@ -536,6 +600,7 @@ class AutoForensicsService:
         case_id = validate_case_id(case_id)
         self.require_case(case_id)
         job_id = f"job-{uuid.uuid4().hex[:16]}"
+        placeholder: Future[dict[str, Any]] = Future()
         with self._analysis_lock:
             existing = self._analysis_jobs.get(case_id)
             if existing is not None and not existing.done():
@@ -545,6 +610,7 @@ class AutoForensicsService:
                     "detail": "Analysis already running.",
                     "status": self._analysis_status.get(case_id),
                 }
+            self._analysis_jobs[case_id] = placeholder  # claim slot atomically
 
         self._set_analysis_status(
             case_id,
@@ -589,7 +655,7 @@ class AutoForensicsService:
 
         future = self._analysis_executor.submit(run_job)
         with self._analysis_lock:
-            self._analysis_jobs[case_id] = future
+            self._analysis_jobs[case_id] = future  # replace placeholder
             self._analysis_job_ids[case_id] = job_id
         return {
             "case_id": case_id,
@@ -768,16 +834,21 @@ class AutoForensicsService:
             raise SecurityError(f"Case root not found for export: {case_root}")
 
         files: list[dict[str, Any]] = []
-        for path in sorted(case_root.rglob("*")):
-            if not path.is_file():
-                continue
+        # Export everything in the case root, not just supported artifacts.
+        # So we use a permissive filter.
+        def any_file(p: Path) -> bool:
+            return True
+
+        policy = self.config.security_policy
+        for path in walk_case_directory(case_root, policy, filter_func=any_file):
             rel = str(path.relative_to(case_root))
             files.append({"rel_path": rel, "sha256": sha256_file(path), "size_bytes": path.stat().st_size})
 
+        now = utc_now_iso()
         manifest = {
             "case_id": case_id,
             "created_at": case.get("created_at"),
-            "exported_at": case.get("updated_at"),
+            "exported_at": now,
             "files": files,
         }
         manifest["signature"] = self._archive_signature(manifest)
@@ -871,6 +942,41 @@ class AutoForensicsService:
                 "output_dir": str(output_dir),
             }
 
+    def delete_case(self, case_id: str) -> dict[str, Any]:
+        """Permanently delete a case, its database records, and its on-disk directories.
+
+        The case must exist (raises SecurityError otherwise).  Returns a summary
+        dict with ``deleted`` True and the number of filesystem directories removed.
+        """
+        case = self.require_case(case_id)
+
+        # Remove from DB first (CASCADE deletes all child rows).
+        self.db.delete_case(case_id)
+
+        # Best-effort removal of on-disk evidence and output directories.
+        dirs_removed = 0
+        for dir_key in ("evidence_dir", "output_dir"):
+            dir_path_str = case.get(dir_key)
+            if not dir_path_str:
+                continue
+            target = Path(dir_path_str)
+            # Walk up to the parent case folder (evidence_dir is  <cases>/<id>/evidence).
+            case_folder = target.parent if target.name in {"evidence", "output"} else target
+            if case_folder.exists() and case_folder.is_dir():
+                try:
+                    shutil.rmtree(case_folder)
+                    dirs_removed += 1
+                    break  # Both evidence and output share the same parent case folder.
+                except OSError as exc:
+                    logger.warning("Could not remove case directory %s: %s", case_folder, exc)
+
+        self.db.append_audit_log(
+            action="case_deleted",
+            actor="system",
+            details={"case_id": case_id, "dirs_removed": dirs_removed},
+        )
+        return {"deleted": True, "case_id": case_id, "dirs_removed": dirs_removed}
+
     def get_report(self, case_id: str, fmt: str = "json") -> str:
         case = self.require_case(case_id)
         output = Path(case["output_dir"])
@@ -891,3 +997,658 @@ class AutoForensicsService:
         if not path.exists():
             raise SecurityError(f"Report not found: {path}")
         return path.read_text(encoding="utf-8")
+
+    # ------------------------------------------------------------------
+    # Standalone scanning (no case required)
+    # ------------------------------------------------------------------
+
+    def scan_file(self, file_path: Path) -> dict[str, Any]:
+        """Scan a single file: hashes, entropy, suspicious strings, PE imports, YARA."""
+        from .binary_analysis import analyze_binary
+        from .yara_detector import scan_paths_with_yara
+        from dataclasses import asdict
+
+        resolved = file_path.expanduser().resolve()
+        if not resolved.is_file():
+            raise SecurityError(f"Not a file: {resolved}")
+
+        feat = analyze_binary(resolved)
+        result: dict[str, Any] = asdict(feat)
+
+        # YARA scan (best-effort)
+        yara_hits: list[dict[str, Any]] = []
+        if self.config.rules_dir and self.config.rules_dir.exists():
+            try:
+                raw = scan_paths_with_yara([resolved], self.config.rules_dir)
+                for hit in raw:
+                    yara_hits.append({
+                        "rule": hit.get("rule", ""),
+                        "tags": hit.get("tags", []),
+                        "meta": hit.get("meta", {}),
+                    })
+            except Exception as exc:
+                logger.debug("YARA scan failed for %s: %s", resolved, exc)
+        result["yara_hits"] = yara_hits
+        return result
+
+    def scan_directory(
+        self,
+        dir_path: Path,
+        recursive: bool = True,
+        max_files: int = 10_000,
+    ) -> dict[str, Any]:
+        """Walk a directory and scan every file, returning aggregate results."""
+        resolved = dir_path.expanduser().resolve()
+        if not resolved.is_dir():
+            raise SecurityError(f"Not a directory: {resolved}")
+
+        files: list[Path] = []
+        policy = self.config.security_policy
+        # scan_directory might be called on non-case dirs, but we still respect policy limits.
+        
+        # recursive=False isn't directly supported by walk_case_directory yet.
+        # But for scan_directory, we can just use glob if not recursive.
+        if not recursive:
+            for p in sorted(resolved.glob("*")):
+                if p.is_file():
+                    files.append(p)
+                    if len(files) >= max_files:
+                        break
+        else:
+            # For recursive, use walk_case_directory with permissive filter.
+            def any_file(p: Path) -> bool:
+                return True
+            for p in walk_case_directory(resolved, policy, filter_func=any_file):
+                files.append(p)
+                if len(files) >= max_files:
+                    break
+
+        scanned: list[dict[str, Any]] = []
+        total_bytes = 0
+        suspicious_count = 0
+        for f in files:
+            try:
+                result = self.scan_file(f)
+                scanned.append(result)
+                total_bytes += result.get("size_bytes", 0)
+                if result.get("suspicious_score", 0) > 0:
+                    suspicious_count += 1
+            except Exception as exc:
+                logger.debug("Skipping %s: %s", f, exc)
+
+        # Sort most suspicious first
+        scanned.sort(key=lambda x: x.get("suspicious_score", 0), reverse=True)
+
+        return {
+            "directory": str(resolved),
+            "recursive": recursive,
+            "total_files": len(scanned),
+            "total_bytes": total_bytes,
+            "suspicious_files": suspicious_count,
+            "files": scanned,
+        }
+
+    # ------------------------------------------------------------------
+    # Heuristic conclusions engine
+    # ------------------------------------------------------------------
+
+    def generate_conclusions(self, case_id: str) -> dict[str, Any]:
+        """Generate forensic conclusions from case data using heuristic analysis.
+
+        Correlates findings by MITRE tactic, counts severity distributions,
+        identifies the highest-risk timeline window, and produces structured
+        bullet-point conclusions — no LLM required.
+        """
+        case_id = validate_case_id(case_id)
+        overview = self.case_overview(case_id)
+        findings = overview.get("findings", [])
+        timeline = overview.get("timeline", [])
+        iocs = overview.get("iocs", [])
+        artifacts = overview.get("artifacts", [])
+
+        conclusions: list[str] = []
+        details: dict[str, Any] = {}
+
+        # --- Severity distribution ---
+        sev_counts: dict[str, int] = {}
+        for f in findings:
+            sev = str(f.get("severity", "low")).lower()
+            sev_counts[sev] = sev_counts.get(sev, 0) + 1
+        details["severity_distribution"] = sev_counts
+
+        total_findings = len(findings)
+        crit_high = sev_counts.get("critical", 0) + sev_counts.get("high", 0)
+        if total_findings == 0:
+            conclusions.append("No findings were generated. The evidence may be benign or insufficient for automated analysis.")
+        else:
+            conclusions.append(
+                f"Analysis produced {total_findings} finding(s): "
+                f"{sev_counts.get('critical', 0)} critical, {sev_counts.get('high', 0)} high, "
+                f"{sev_counts.get('medium', 0)} medium, {sev_counts.get('low', 0)} low."
+            )
+            if crit_high > 0:
+                ratio = crit_high / total_findings
+                if ratio >= 0.5:
+                    conclusions.append(
+                        f"[!] {crit_high}/{total_findings} findings ({ratio:.0%}) are critical or high severity — "
+                        "this strongly suggests malicious activity requiring immediate incident response."
+                    )
+                else:
+                    conclusions.append(
+                        f"{crit_high} critical/high severity finding(s) detected — manual review recommended."
+                    )
+
+        # --- MITRE ATT&CK tactic coverage ---
+        tactics: dict[str, int] = {}
+        techniques: set[str] = set()
+        for f in findings:
+            tactic = str(f.get("tactic", "") or "").strip()
+            if tactic and tactic != "—":
+                tactics[tactic] = tactics.get(tactic, 0) + 1
+            tech = str(f.get("technique") or f.get("technique_id") or "").strip()
+            if tech and tech != "—":
+                techniques.add(tech)
+        details["mitre_tactics"] = tactics
+        details["mitre_techniques"] = sorted(techniques)
+
+        if tactics:
+            top_tactic = max(tactics, key=lambda k: tactics[k])
+            conclusions.append(
+                f"Attack lifecycle spans {len(tactics)} MITRE ATT&CK tactic(s); "
+                f"dominant tactic: '{top_tactic}' ({tactics[top_tactic]} finding(s))."
+            )
+            kill_chain = [
+                "initial-access", "execution", "persistence", "privilege-escalation",
+                "defense-evasion", "credential-access", "discovery", "lateral-movement",
+                "collection", "command-and-control", "exfiltration", "impact",
+            ]
+            detected_phases = [t for t in kill_chain if t in tactics]
+            if len(detected_phases) >= 3:
+                conclusions.append(
+                    f"Multi-stage attack pattern detected across kill chain phases: "
+                    f"{', '.join(detected_phases)}."
+                )
+
+        # --- IOC summary ---
+        if iocs:
+            ioc_types: dict[str, int] = {}
+            for ioc in iocs:
+                it = str(ioc.get("ioc_type") or ioc.get("type") or "unknown")
+                ioc_types[it] = ioc_types.get(it, 0) + 1
+            details["ioc_type_distribution"] = ioc_types
+            ioc_summary_parts = [f"{count} {t}" for t, count in sorted(ioc_types.items(), key=lambda x: -x[1])]
+            conclusions.append(
+                f"{len(iocs)} Indicator(s) of Compromise extracted: {', '.join(ioc_summary_parts)}."
+            )
+        else:
+            conclusions.append("No IOCs were extracted from the evidence.")
+
+        # --- Timeline analysis ---
+        if timeline:
+            risk_scores = [
+                float(ev.get("risk_score", 0))
+                for ev in timeline
+                if ev.get("risk_score") is not None
+            ]
+            high_risk_events = [ev for ev in timeline if float(ev.get("risk_score", 0)) >= 70]
+            details["timeline_events"] = len(timeline)
+            details["high_risk_events"] = len(high_risk_events)
+
+            if risk_scores:
+                avg_risk = sum(risk_scores) / len(risk_scores)
+                max_risk = max(risk_scores)
+                details["avg_risk_score"] = round(avg_risk, 1)
+                details["max_risk_score"] = max_risk
+                conclusions.append(
+                    f"Timeline contains {len(timeline)} event(s); "
+                    f"average risk score {avg_risk:.1f}, peak {max_risk:.0f}."
+                )
+
+            if high_risk_events:
+                conclusions.append(
+                    f"{len(high_risk_events)} high-risk event(s) (score>=70) detected in the timeline — "
+                    "these warrant prioritized investigation."
+                )
+
+        # --- Evidence scope ---
+        if artifacts:
+            conclusions.append(
+                f"Evidence corpus contains {len(artifacts)} artifact(s) across the case evidence directory."
+            )
+
+        # --- Risk verdict ---
+        if crit_high >= 3 or (len(high_risk_events) if timeline else 0) >= 5:
+            verdict = "HIGH"
+            verdict_text = "This case exhibits strong indicators of compromise and warrants immediate escalation."
+        elif crit_high >= 1 or total_findings >= 3:
+            verdict = "MEDIUM"
+            verdict_text = "This case contains notable findings that require analyst review and potential escalation."
+        else:
+            verdict = "LOW"
+            verdict_text = "This case shows limited or no indicators of compromise based on automated analysis."
+        details["risk_verdict"] = verdict
+
+        conclusions.append(f"Overall risk assessment: {verdict}. {verdict_text}")
+
+        return {
+            "case_id": case_id,
+            "conclusions": conclusions,
+            "details": details,
+            "risk_verdict": verdict,
+            "total_findings": total_findings,
+            "total_iocs": len(iocs),
+            "total_timeline_events": len(timeline),
+        }
+
+    # ------------------------------------------------------------------
+    # Timeline filtering
+    # ------------------------------------------------------------------
+
+    def filter_timeline(
+        self,
+        case_id: str,
+        after: str | None = None,
+        before: str | None = None,
+        min_risk: float | None = None,
+        event_type: str | None = None,
+        keyword: str | None = None,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        """Filter stored timeline events by date range, risk, type, and keyword."""
+        case_id = validate_case_id(case_id)
+        self.require_case(case_id)
+        events = self.db.get_timeline(case_id)
+        filtered: list[dict[str, Any]] = []
+        after_lower = (after or "").strip()
+        before_lower = (before or "").strip()
+        event_type_lower = (event_type or "").strip().lower()
+        keyword_lower = (keyword or "").strip().lower()
+        limit = max(1, min(10_000, int(limit)))
+
+        for ev in events:
+            ts = str(ev.get("timestamp") or "")
+
+            if after_lower and ts < after_lower:
+                continue
+            if before_lower and ts > before_lower:
+                continue
+
+            risk = float(ev.get("risk_score", 0))
+            if min_risk is not None and risk < min_risk:
+                continue
+
+            if event_type_lower:
+                ev_type = str(ev.get("event_type") or "").lower()
+                if event_type_lower not in ev_type:
+                    continue
+
+            if keyword_lower:
+                blob = " ".join([
+                    str(ev.get("description") or ""),
+                    str(ev.get("event_type") or ""),
+                    str(ev.get("source_file") or ""),
+                ]).lower()
+                if keyword_lower not in blob:
+                    continue
+
+            filtered.append(ev)
+            if len(filtered) >= limit:
+                break
+
+        return {
+            "case_id": case_id,
+            "total_events": len(events),
+            "matched_events": len(filtered),
+            "filters": {
+                "after": after_lower or None,
+                "before": before_lower or None,
+                "min_risk": min_risk,
+                "event_type": event_type_lower or None,
+                "keyword": keyword_lower or None,
+            },
+            "events": filtered,
+        }
+
+    # ------------------------------------------------------------------
+    # Watcher / drop-folder support
+    # ------------------------------------------------------------------
+
+    def _ensure_ingest_root(self, path: Path) -> None:
+        """Append *path* to allowed_ingest_roots if not already present.
+
+        Safe because ``AppConfig.allowed_ingest_roots`` is a plain list.
+        """
+        resolved = path.resolve()
+        if resolved not in self.config.allowed_ingest_roots:
+            self.config.allowed_ingest_roots.append(resolved)
+
+    def extract_image_artifacts(
+        self,
+        image_path: Path,
+        staging_dir: Path,
+        case_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Mount *image_path*, extract artifacts to *staging_dir*, then unmount.
+
+        Does NOT create a case or ingest artifacts — call ``ingest_case``
+        separately after confirming the result.
+
+        Returns the result dict from ``extract_image_to_staging``.
+        """
+        from .disk_image import extract_image_to_staging
+
+        image_path = image_path.expanduser().resolve()
+        staging_dir = staging_dir.expanduser().resolve()
+
+        result = extract_image_to_staging(
+            image_path,
+            staging_dir,
+            max_file_size_bytes=self.config.security_policy.max_file_size_bytes,
+        )
+
+        if case_id is not None:
+            try:
+                validate_case_id(case_id)
+                self.db.append_audit_log(
+                    action="image_extracted",
+                    actor="system",
+                    details={
+                        "image": str(image_path),
+                        "staging_dir": str(staging_dir),
+                        "mounted": result.get("mounted"),
+                        "artifacts_copied": result.get("artifacts_copied", 0),
+                    },
+                    case_id=case_id,
+                )
+            except Exception as exc:
+                logger.debug("Could not append audit log for image extraction: %s", exc)
+
+        return result
+
+    def analyse_disk_images_in_case(
+        self,
+        case_id: str,
+        *,
+        output_dir: Path | None = None,
+        extra_search_dir: Path | None = None,
+    ) -> dict[str, Any]:
+        """Scan case evidence for disk images and run wipe-recovery analysis.
+
+        For every ``.e01`` / raw disk image found in the case evidence directory
+        (and optionally *extra_search_dir*), the byte-level wipe-recovery
+        analyser is run.  Results are translated into
+        :class:`~.models.Finding` and :class:`~.models.TimelineEvent` objects
+        and *merged* with any findings already stored for the case (so standard
+        pipeline findings are preserved).
+
+        Args:
+            case_id: Case identifier slug.
+            output_dir: Directory for wipe-recovery reports.  Defaults to the
+                case output directory.
+            extra_search_dir: Additional directory to search for disk images
+                (e.g. the original case source folder when the image was not
+                copied into the internal evidence store due to its size).
+
+        Returns a summary dict with:
+        - ``images_found``  -- number of disk images discovered
+        - ``images_analysed`` -- number successfully analysed
+        - ``new_findings`` -- count of new findings added
+        - ``new_events`` -- count of new timeline events added
+        """
+        from .disk_image import DISK_IMAGE_EXTENSIONS, is_disk_image
+        from .models import Finding, TimelineEvent
+        from .wipe_recovery import analyse_disk_image, write_json_report, write_markdown_report
+
+        case = self.require_case(case_id)
+        evidence_dir = Path(case["evidence_dir"])
+        if output_dir is None:
+            output_dir = Path(case["output_dir"])
+
+        # ------------------------------------------------------------------
+        # Discover disk images in evidence (and optional extra search dir)
+        # ------------------------------------------------------------------
+        search_dirs = [evidence_dir]
+        if extra_search_dir is not None and extra_search_dir.is_dir():
+            search_dirs.append(extra_search_dir)
+
+        seen: set[Path] = set()
+        disk_images: list[Path] = []
+        for search_dir in search_dirs:
+            if not search_dir.exists():
+                continue
+            for f in search_dir.rglob("*"):
+                resolved = f.resolve()
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                if f.is_file() and (
+                    f.suffix.lower() in DISK_IMAGE_EXTENSIONS or is_disk_image(f)
+                ):
+                    disk_images.append(f)
+
+        if not disk_images:
+            return {
+                "images_found": 0,
+                "images_analysed": 0,
+                "new_findings": 0,
+                "new_events": 0,
+            }
+
+        # ------------------------------------------------------------------
+        # Load existing findings / timeline so we can merge
+        # ------------------------------------------------------------------
+        raw_findings = self.db.get_findings(case_id)
+        existing_findings: list[Finding] = [
+            Finding(
+                finding_id=r["finding_id"],
+                title=r["title"],
+                severity=r["severity"],
+                confidence=float(r.get("confidence") or 0.5),
+                tactic=r.get("tactic") or "",
+                evidence=r.get("evidence") or [],
+                recommendation=r.get("recommendation") or "",
+            )
+            for r in raw_findings
+        ]
+
+        raw_timeline = self.db.get_timeline(case_id) if hasattr(self.db, "get_timeline") else []
+        existing_timeline: list[TimelineEvent] = [
+            TimelineEvent(
+                timestamp=r.get("timestamp"),
+                source=r.get("source") or "disk_image",
+                event_type=r.get("event_type") or "event",
+                description=r.get("description") or "",
+                risk_score=float(r.get("risk_score") or 0.0),
+                tags=r.get("tags") or [],
+            )
+            for r in raw_timeline
+        ]
+
+        # ------------------------------------------------------------------
+        # Analyse each disk image
+        # ------------------------------------------------------------------
+        import uuid as _uuid
+
+        new_findings: list[Finding] = []
+        new_events: list[TimelineEvent] = []
+        analysed = 0
+
+        for img_path in disk_images:
+            try:
+                img_output = output_dir / f"{img_path.stem}_recovery"
+                result = analyse_disk_image(img_path, img_output)
+                analysed += 1
+
+                # ---- Translate findings ----
+                severity = "medium"
+                if result.wipe_pct > 95:
+                    severity = "high"
+                elif result.wipe_pct > 80:
+                    severity = "medium"
+                else:
+                    severity = "low"
+
+                evidence_lines = result.findings[:]
+
+                new_findings.append(Finding(
+                    finding_id=f"wr-wipe-{_uuid.uuid4().hex[:8]}",
+                    title=f"Partial disk wipe detected on {img_path.name}",
+                    severity=severity,
+                    confidence=0.95,
+                    tactic="Defense Evasion",
+                    technique_id="T1561",
+                    evidence=evidence_lines,
+                    recommendation=(
+                        "Examine surviving partition structures, LUKS headers "
+                        "and NTFS metadata for attribution artefacts. "
+                        "If LUKS2 keyslot area is intact, passphrase recovery "
+                        "may enable full decryption."
+                    ),
+                ))
+
+                if result.partitions:
+                    new_findings.append(Finding(
+                        finding_id=f"wr-gpt-{_uuid.uuid4().hex[:8]}",
+                        title=(
+                            f"GPT backup partition table recovered "
+                            f"({len(result.partitions)} partition(s))"
+                        ),
+                        severity="informational" if severity == "low" else "medium",
+                        confidence=0.99,
+                        tactic="Discovery",
+                        evidence=[
+                            f"Partition {p.index} '{p.name}': "
+                            f"{p.type_guid}  {p.size_bytes // (1024 ** 2)} MiB"
+                            for p in result.partitions
+                        ],
+                        recommendation=(
+                            "Use recovered partition boundaries to guide "
+                            "targeted sector-by-sector carving."
+                        ),
+                    ))
+
+                if result.luks_headers:
+                    lh = result.luks_headers[0]
+                    new_findings.append(Finding(
+                        finding_id=f"wr-luks-{_uuid.uuid4().hex[:8]}",
+                        title=(
+                            f"LUKS2 encrypted volume found on {img_path.name} "
+                            f"(keyslot area intact)"
+                        ),
+                        severity="high",
+                        confidence=0.97,
+                        tactic="Defense Evasion",
+                        technique_id="T1027",
+                        evidence=[
+                            f"LUKS2 UUID: {lh.uuid}",
+                            f"Cipher: {lh.encryption}",
+                            f"KDF: {lh.kdf_type}",
+                            "Keyslot area not wiped — passphrase brute-force possible",
+                        ],
+                        recommendation=(
+                            "Run cryptsetup luksDump and attempt dictionary "
+                            "attack with recovered Argon2i parameters."
+                        ),
+                    ))
+
+                if result.ntfs_created:
+                    new_events.append(TimelineEvent(
+                        timestamp=result.ntfs_created,
+                        source=img_path.name,
+                        event_type="filesystem_created",
+                        description=(
+                            f"NTFS volume formatted inside LUKS2 container "
+                            f"on {img_path.name}"
+                        ),
+                        risk_score=0.4,
+                        tags=["ntfs", "filesystem", "disk_image"],
+                    ))
+
+                if result.mft_records:
+                    names = [r.filename for r in result.mft_records if r.filename]
+                    ts = result.mft_records[0].created or result.ntfs_created
+                    new_events.append(TimelineEvent(
+                        timestamp=ts,
+                        source=img_path.name,
+                        event_type="mft_records_recovered",
+                        description=(
+                            f"NTFS MFT records recovered from {img_path.name}: "
+                            + ", ".join(names)
+                        ),
+                        risk_score=0.3,
+                        tags=["ntfs", "mft", "disk_image"],
+                    ))
+
+                self.db.append_audit_log(
+                    action="wipe_recovery_analysis",
+                    actor="agent",
+                    details={
+                        "image": img_path.name,
+                        "wipe_pct": result.wipe_pct,
+                        "partitions": len(result.partitions),
+                        "luks_headers": len(result.luks_headers),
+                        "mft_records": len(result.mft_records),
+                    },
+                    case_id=case_id,
+                )
+
+            except Exception as exc:
+                logger.warning(
+                    "Wipe recovery analysis failed for %s: %s", img_path.name, exc
+                )
+
+        # ------------------------------------------------------------------
+        # Persist merged findings + timeline
+        # ------------------------------------------------------------------
+        all_findings = existing_findings + new_findings
+        all_timeline = existing_timeline + new_events
+        if new_findings or new_events:
+            self.db.replace_findings_and_timeline(case_id, all_findings, all_timeline)
+
+        return {
+            "images_found": len(disk_images),
+            "images_analysed": analysed,
+            "new_findings": len(new_findings),
+            "new_events": len(new_events),
+        }
+
+    def process_drop_item(
+        self,
+        item_path: Path,
+        case_id: str,
+        enable_llm: bool = True,
+        auto_extract: bool = True,
+    ) -> dict[str, Any]:
+        """Trusted entry point for the drop-folder watcher.
+
+        Creates a case, extracts artifacts from a disk image (if applicable),
+        ingests the evidence directory, and runs analysis synchronously.
+
+        Returns a summary dict with ``case_id``, ``artifacts``, and
+        ``findings`` keys.
+        """
+        from .disk_image import is_disk_image
+
+        item_path = item_path.expanduser().resolve()
+        case_id = validate_case_id(case_id)
+
+        self.create_case(case_id)
+
+        if item_path.is_file() and is_disk_image(item_path) and auto_extract:
+            staging = self.config.cases_dir / case_id / "extracted"
+            self._ensure_ingest_root(staging)
+            self.extract_image_artifacts(item_path, staging, case_id=case_id)
+            source_dir = staging
+        else:
+            self._ensure_ingest_root(item_path)
+            source_dir = item_path
+
+        self.ingest_case(case_id, source_dir)
+        self.analyze_case(case_id, enable_llama=enable_llm)
+        overview = self.case_overview(case_id)
+
+        return {
+            "case_id": case_id,
+            "artifacts": len(overview.get("artifacts", [])),
+            "findings": len(overview.get("findings", [])),
+        }

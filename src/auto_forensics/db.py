@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
+
+logger = logging.getLogger(__name__)
 
 from .migrations import LATEST_SCHEMA_VERSION, MIGRATION_STEPS
 from .models import IOC, IOCEnrichment, Finding, TimelineEvent, utc_now_iso
@@ -168,6 +171,7 @@ class Database:
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
         con = sqlite3.connect(self.path)
+        con.execute("PRAGMA foreign_keys=ON")
         con.row_factory = sqlite3.Row
         try:
             yield con
@@ -284,6 +288,15 @@ class Database:
             ).fetchone()
         return dict(row) if row else None
 
+    def delete_case(self, case_id: str) -> bool:
+        """Delete a case and all associated data (CASCADE).
+
+        Returns True if a row was deleted, False if the case didn't exist.
+        """
+        with self.connect() as con:
+            cur = con.execute("DELETE FROM cases WHERE case_id = ?", (case_id,))
+        return int(cur.rowcount or 0) > 0
+
     def set_case_status(self, case_id: str, status: str, last_error: str | None = None) -> None:
         now = utc_now_iso()
         with self.connect() as con:
@@ -396,6 +409,10 @@ class Database:
             try:
                 item["evidence"] = json.loads(raw)
             except (json.JSONDecodeError, TypeError):
+                logger.warning(
+                    "Corrupted evidence_json for finding %s: %.100r",
+                    item.get("finding_id"), raw,
+                )
                 item["evidence"] = []
             out.append(item)
         return out
@@ -417,10 +434,18 @@ class Database:
             try:
                 item["tags"] = json.loads(raw_tags)
             except (json.JSONDecodeError, TypeError):
+                logger.warning(
+                    "Corrupted tags_json for timeline event at %s: %.100r",
+                    item.get("timestamp"), raw_tags,
+                )
                 item["tags"] = []
             try:
                 item["related"] = json.loads(raw_related)
             except (json.JSONDecodeError, TypeError):
+                logger.warning(
+                    "Corrupted related_json for timeline event at %s: %.100r",
+                    item.get("timestamp"), raw_related,
+                )
                 item["related"] = {}
             out.append(item)
         return out

@@ -1,255 +1,319 @@
-"use strict";
+'use strict';
 
-const apiKeyInput = document.getElementById("apiKey");
-const logEl = document.getElementById("log");
-const casesEl = document.getElementById("cases");
-const overviewEl = document.getElementById("overview");
-const timelineEl = document.getElementById("timeline");
-const heatmapEl = document.getElementById("heatmap");
-const timelineFilterEl = document.getElementById("timelineFilter");
-let lastOverview = null;
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// Mirrors server-side validate_case_id pattern.
-const CASE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/;
-
-function validateCaseId(value, fieldName) {
-  const trimmed = (value || "").trim();
-  if (!trimmed) {
-    return fieldName + " is required.";
-  }
-  if (!CASE_ID_RE.test(trimmed)) {
-    return fieldName + " must be 2-64 characters: letters, numbers, dot, underscore, or hyphen.";
-  }
-  return null;
+function esc(s) {
+    return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
 }
 
-function validateSourceDir(value) {
-  const trimmed = (value || "").trim();
-  if (!trimmed) {
-    return "Source directory is required.";
-  }
-  // Must look like an absolute path (Windows or POSIX).
-  if (!/^([A-Za-z]:[/\\]|\/|\\\\.+\\)/.test(trimmed)) {
-    return "Source directory must be an absolute path (e.g. C:\\evidence or /mnt/evidence).";
-  }
-  return null;
+function fmtTs(ts) {
+    if (!ts) return '—';
+    try {
+        const d = new Date(String(ts).endsWith('Z') ? ts : ts + 'Z');
+        return d.toLocaleString(undefined, {
+            year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', second: '2-digit',
+        });
+    } catch (_) { return String(ts).slice(0, 19).replace('T', ' '); }
 }
 
-function showFieldError(inputEl, message) {
-  let errEl = inputEl.nextElementSibling;
-  if (!errEl || !errEl.classList.contains("field-error")) {
-    errEl = document.createElement("span");
-    errEl.className = "field-error";
-    inputEl.parentNode.insertBefore(errEl, inputEl.nextSibling);
-  }
-  errEl.textContent = message || "";
-  inputEl.setAttribute("aria-invalid", message ? "true" : "false");
+function statusBadge(s) {
+    const st = (s || 'unknown').toLowerCase();
+    const cls = ['complete', 'analyzing', 'ingesting', 'running', 'failed',
+                 'created', 'pending', 'ready'].includes(st)
+        ? `badge-${st}` : 'badge-default';
+    return `<span class="badge ${cls}">${esc(st)}</span>`;
 }
 
-function clearFieldError(inputEl) {
-  showFieldError(inputEl, "");
-  inputEl.removeAttribute("aria-invalid");
-}
-
-function appendLog(message, payload) {
-  const stamp = new Date().toISOString();
-  let line = "[" + stamp + "] " + message;
-  if (payload !== undefined) {
-    line += "\n" + JSON.stringify(payload, null, 2);
-  }
-  logEl.textContent = line + "\n\n" + logEl.textContent;
-}
-
-async function api(path, method, body) {
-  const headers = { "Content-Type": "application/json" };
-  const key = apiKeyInput.value.trim();
-  if (key) {
-    headers["X-API-Key"] = key;
-  }
-  const res = await fetch(path, {
-    method: method,
-    headers: headers,
-    body: body ? JSON.stringify(body) : undefined
-  });
-  const text = await res.text();
-  let parsed = text;
-  try {
-    parsed = JSON.parse(text);
-  } catch (_err) {
-    parsed = text;
-  }
-  if (!res.ok) {
-    throw new Error((parsed && parsed.detail) ? parsed.detail : ("HTTP " + res.status));
-  }
-  return parsed;
-}
-
-function renderCases(items) {
-  if (!items.length) {
-    casesEl.innerHTML = "<p>No cases found.</p>";
-    return;
-  }
-  const html = items.map(function (c) {
-    return (
-      '<div class="case-item">' +
-      "<strong>" + c.case_id + "</strong>" +
-      '<div class="case-meta">status=' + c.status + " | updated=" + c.updated_at + "</div>" +
-      "</div>"
-    );
-  }).join("");
-  casesEl.innerHTML = '<div class="case-list">' + html + "</div>";
-}
-
-function renderTimeline(items, filterText) {
-  const needle = (filterText || "").trim().toLowerCase();
-  const filtered = items.filter(function (item) {
-    if (!needle) return true;
-    const blob = [item.timestamp, item.source, item.event_type, item.description].join(" ").toLowerCase();
-    return blob.includes(needle);
-  });
-  const rows = filtered.map(function (item) {
-    return (
-      "<tr>" +
-      "<td>" + (item.timestamp || "") + "</td>" +
-      "<td>" + (item.event_type || "") + "</td>" +
-      "<td>" + (item.source || "") + "</td>" +
-      "<td>" + (item.description || "") + "</td>" +
-      "</tr>"
-    );
-  }).join("");
-
-  timelineEl.innerHTML =
-    '<table class="timeline-table">' +
-    "<thead><tr><th>Timestamp</th><th>Type</th><th>Source</th><th>Description</th></tr></thead>" +
-    "<tbody>" + (rows || "<tr><td colspan=\"4\">No timeline events.</td></tr>") + "</tbody>" +
-    "</table>";
-}
-
-function renderHeatmap(items) {
-  const byHour = new Array(24).fill(0);
-  items.forEach(function (item) {
-    if (!item.timestamp) return;
-    const d = new Date(item.timestamp);
-    if (Number.isNaN(d.getTime())) return;
-    byHour[d.getUTCHours()] += 1;
-  });
-
-  const peak = byHour.reduce(function (acc, value) { return Math.max(acc, value); }, 0) || 1;
-  const html = byHour.map(function (count, hour) {
-    const width = Math.round((count / peak) * 100);
-    return (
-      '<div class="heat-cell">' +
-      '<div class="heat-label">' + String(hour).padStart(2, "0") + ':00Z (' + count + ")</div>" +
-      '<div class="heat-bar-wrap"><div class="heat-bar" style="width:' + width + '%"></div></div>' +
-      "</div>"
-    );
-  }).join("");
-  heatmapEl.innerHTML = '<div class="heatmap">' + html + "</div>";
-}
-
-async function refreshCases() {
-  try {
-    const data = await api("/api/cases", "GET");
-    renderCases(data);
-    appendLog("Case list refreshed", { count: data.length });
-  } catch (err) {
-    appendLog("Refresh failed: " + err.message);
-  }
-}
-
-async function waitForCaseCompletion(caseId) {
-  for (let attempt = 0; attempt < 1800; attempt += 1) {
-    const status = await api("/api/cases/" + encodeURIComponent(caseId) + "/status", "GET");
-    appendLog("Case status", status);
-    if (status.state === "complete" || status.state === "failed" || status.state === "not_found") {
-      return status;
+async function apiFetch(path) {
+    const r = await fetch(path, { headers: { 'Accept': 'application/json' } });
+    if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${r.status}`);
     }
-    await new Promise(function (resolve) {
-      setTimeout(resolve, 1000);
-    });
-  }
-  return { case_id: caseId, state: "timeout", progress: 0, message: "Status polling timed out" };
+    return r.json();
 }
 
-document.getElementById("createCaseBtn").addEventListener("click", async function () {
-  const inputEl = document.getElementById("newCaseId");
-  const caseId = inputEl.value.trim();
-  const err = validateCaseId(caseId, "Case ID");
-  if (err) { showFieldError(inputEl, err); return; }
-  clearFieldError(inputEl);
-  try {
-    const data = await api("/api/cases", "POST", { case_id: caseId });
-    appendLog("Case created", data);
-    await refreshCases();
-  } catch (apiErr) {
-    appendLog("Create failed: " + apiErr.message);
-  }
-});
+// ─── State ────────────────────────────────────────────────────────────────────
 
-document.getElementById("ingestBtn").addEventListener("click", async function () {
-  const caseIdEl = document.getElementById("ingestCaseId");
-  const sourceDirEl = document.getElementById("sourceDir");
-  const caseId = caseIdEl.value.trim();
-  const sourceDir = sourceDirEl.value.trim();
-  const caseErr = validateCaseId(caseId, "Case ID");
-  const dirErr = validateSourceDir(sourceDir);
-  if (caseErr) showFieldError(caseIdEl, caseErr); else clearFieldError(caseIdEl);
-  if (dirErr) showFieldError(sourceDirEl, dirErr); else clearFieldError(sourceDirEl);
-  if (caseErr || dirErr) return;
-  try {
-    const data = await api("/api/cases/" + encodeURIComponent(caseId) + "/ingest", "POST", {
-      source_dir: sourceDir
+let allCases = [];
+let refreshTimer = null;
+
+// ─── DOM refs ─────────────────────────────────────────────────────────────────
+
+const healthPill  = document.getElementById('health-pill');
+const healthText  = document.getElementById('health-text');
+const refreshBtn  = document.getElementById('refresh-btn');
+const casesCtn    = document.getElementById('cases-container');
+const searchInp   = document.getElementById('search-input');
+const statusSel   = document.getElementById('status-filter');
+const drawer      = document.getElementById('detail-drawer');
+const drawerTitle = document.getElementById('drawer-title');
+const drawerBody  = document.getElementById('drawer-body');
+const drawerClose = document.getElementById('drawer-close');
+const overlay     = document.getElementById('overlay');
+
+// ─── Health ───────────────────────────────────────────────────────────────────
+
+async function checkHealth() {
+    try {
+        await apiFetch('/api/health');
+        healthPill.className = 'health-pill health-pill--ok';
+        healthText.textContent = 'Connected';
+    } catch (_) {
+        healthPill.className = 'health-pill health-pill--err';
+        healthText.textContent = 'Unreachable';
+    }
+}
+
+// ─── Stats ────────────────────────────────────────────────────────────────────
+
+async function loadStats() {
+    try {
+        const data = await apiFetch('/api/stats');
+        const by = data.by_status || {};
+        const total = data.total_cases ?? Object.values(by).reduce((a, b) => a + b, 0);
+        document.getElementById('stat-total').textContent    = total;
+        document.getElementById('stat-complete').textContent  = by.complete  ?? 0;
+        document.getElementById('stat-analyzing').textContent = (by.analyzing ?? 0) + (by.ingesting ?? 0);
+        document.getElementById('stat-failed').textContent    = by.failed    ?? 0;
+        document.getElementById('stat-ready').textContent     = by.ready     ?? 0;
+    } catch (_) {
+        ['stat-total', 'stat-complete', 'stat-analyzing', 'stat-failed', 'stat-ready']
+            .forEach(id => { document.getElementById(id).textContent = '?'; });
+    }
+}
+
+// ─── Cases list ───────────────────────────────────────────────────────────────
+
+function buildSevRow(findings) {
+    if (!Array.isArray(findings) || findings.length === 0) return '<span class="ts">—</span>';
+    const counts = { critical: 0, high: 0, medium: 0, low: 0 };
+    for (const f of findings) {
+        const s = (f.severity || 'low').toLowerCase();
+        if (s in counts) counts[s]++;
+    }
+    const parts = [];
+    for (const [sev, label] of [['critical','C'], ['high','H'], ['medium','M'], ['low','L']]) {
+        if (counts[sev]) {
+            parts.push(
+                `<span class="sev-pip">` +
+                `<span class="sev-dot sev-dot--${sev}"></span>` +
+                `<span class="sev-count">${counts[sev]}${label}</span>` +
+                `</span>`
+            );
+        }
+    }
+    return parts.length ? `<span class="sev-row">${parts.join('')}</span>` : '<span class="ts">—</span>';
+}
+
+function renderCasesTable(cases) {
+    if (!cases || cases.length === 0) {
+        casesCtn.innerHTML = '<div class="empty-msg">No cases found. Use the CLI to initialize a case.</div>';
+        return;
+    }
+    const rows = cases.map(c => `
+        <tr data-case="${esc(c.case_id)}">
+            <td><span class="case-id">${esc(c.case_id)}</span></td>
+            <td>${statusBadge(c.status)}</td>
+            <td>${buildSevRow(c.findings)}</td>
+            <td><span class="ts">${fmtTs(c.created_at)}</span></td>
+            <td><span class="ts">${fmtTs(c.updated_at)}</span></td>
+        </tr>`).join('');
+
+    casesCtn.innerHTML = `
+        <table class="cases-table">
+            <thead>
+                <tr>
+                    <th>Case ID</th>
+                    <th>Status</th>
+                    <th>Findings</th>
+                    <th>Created</th>
+                    <th>Updated</th>
+                </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+        </table>`;
+
+    casesCtn.querySelectorAll('tbody tr').forEach(row => {
+        row.addEventListener('click', () => openDrawer(row.dataset.case));
     });
-    appendLog("Ingestion complete", data);
-    await refreshCases();
-  } catch (apiErr) {
-    appendLog("Ingest failed: " + apiErr.message);
-  }
-});
+}
 
-document.getElementById("analyzeBtn").addEventListener("click", async function () {
-  const inputEl = document.getElementById("analyzeCaseId");
-  const caseId = inputEl.value.trim();
-  const enableLlama = document.getElementById("enableLlama").checked;
-  const err = validateCaseId(caseId, "Case ID");
-  if (err) { showFieldError(inputEl, err); return; }
-  clearFieldError(inputEl);
-  try {
-    const data = await api("/api/cases/" + encodeURIComponent(caseId) + "/analyze/async", "POST", {
-      enable_llama: enableLlama
-    });
-    appendLog("Analysis started", data);
-    const finalStatus = await waitForCaseCompletion(caseId);
-    appendLog("Analysis status final", finalStatus);
-    await refreshCases();
-  } catch (apiErr) {
-    appendLog("Analyze failed: " + apiErr.message);
-  }
-});
+async function loadCases() {
+    try {
+        allCases = await apiFetch('/api/cases');
+        applyFilter();
+    } catch (err) {
+        casesCtn.innerHTML = `<div class="error-msg">Failed to load cases: ${esc(err.message)}</div>`;
+    }
+}
 
-document.getElementById("inspectBtn").addEventListener("click", async function () {
-  const inputEl = document.getElementById("inspectCaseId");
-  const caseId = inputEl.value.trim();
-  const err = validateCaseId(caseId, "Case ID");
-  if (err) { showFieldError(inputEl, err); return; }
-  clearFieldError(inputEl);
-  try {
-    const data = await api("/api/cases/" + encodeURIComponent(caseId), "GET");
-    lastOverview = data;
-    overviewEl.textContent = JSON.stringify(data, null, 2);
-    renderTimeline(Array.isArray(data.timeline) ? data.timeline : [], timelineFilterEl.value);
-    renderHeatmap(Array.isArray(data.timeline) ? data.timeline : []);
-    appendLog("Case overview loaded", { case_id: caseId });
-  } catch (apiErr) {
-    appendLog("Inspect failed: " + apiErr.message);
-  }
-});
+function applyFilter() {
+    const q  = searchInp.value.trim().toLowerCase();
+    const st = statusSel.value;
+    let filtered = allCases;
+    if (q)  filtered = filtered.filter(c => (c.case_id || '').toLowerCase().includes(q));
+    if (st) filtered = filtered.filter(c => (c.status  || '') === st);
+    renderCasesTable(filtered);
+}
 
-document.getElementById("refreshBtn").addEventListener("click", refreshCases);
-timelineFilterEl.addEventListener("input", function () {
-  if (!lastOverview || !Array.isArray(lastOverview.timeline)) {
-    return;
-  }
-  renderTimeline(lastOverview.timeline, timelineFilterEl.value);
+// ─── Drawer ───────────────────────────────────────────────────────────────────
+
+function openDrawer(caseId) {
+    drawerTitle.textContent = caseId;
+    drawerBody.innerHTML = '<div class="placeholder">Loading…</div>';
+    drawer.classList.remove('drawer--hidden');
+    overlay.classList.remove('overlay--hidden');
+    loadCaseDetail(caseId);
+}
+
+function closeDrawer() {
+    drawer.classList.add('drawer--hidden');
+    overlay.classList.add('overlay--hidden');
+}
+
+async function loadCaseDetail(caseId) {
+    try {
+        const d = await apiFetch(`/api/cases/${encodeURIComponent(caseId)}`);
+        renderDrawer(d);
+    } catch (err) {
+        drawerBody.innerHTML = `<div class="error-msg">Failed to load: ${esc(err.message)}</div>`;
+    }
+}
+
+function renderDrawer(d) {
+    const overview  = d.case || d;
+    const findings  = Array.isArray(d.findings)  ? d.findings  : [];
+    const artifacts = Array.isArray(d.artifacts)  ? d.artifacts : [];
+    const iocs      = Array.isArray(d.iocs)       ? d.iocs      : [];
+    const timeline  = Array.isArray(d.timeline)   ? d.timeline  : [];
+
+    // Overview section
+    let html = `
+        <div class="dsection">
+            <div class="dsection-title">Overview</div>
+            <div class="meta-grid">
+                <div>
+                    <div class="meta-key">Status</div>
+                    <div class="meta-val">${statusBadge(overview.status || d.status)}</div>
+                </div>
+                <div>
+                    <div class="meta-key">Created</div>
+                    <div class="meta-val ts">${fmtTs(overview.created_at || d.created_at)}</div>
+                </div>
+                <div>
+                    <div class="meta-key">Artifacts</div>
+                    <div class="meta-val">${artifacts.length}</div>
+                </div>
+                <div>
+                    <div class="meta-key">Timeline Events</div>
+                    <div class="meta-val">${timeline.length}</div>
+                </div>
+                <div>
+                    <div class="meta-key">Findings</div>
+                    <div class="meta-val">${findings.length}</div>
+                </div>
+                <div>
+                    <div class="meta-key">IOCs</div>
+                    <div class="meta-val">${iocs.length}</div>
+                </div>
+            </div>
+        </div>`;
+
+    // Findings section
+    if (findings.length > 0) {
+        const order = { critical: 0, high: 1, medium: 2, low: 3 };
+        const sorted = [...findings].sort(
+            (a, b) => (order[a.severity] ?? 4) - (order[b.severity] ?? 4)
+        );
+        const shown = sorted.slice(0, 20);
+        html += `
+            <div class="dsection">
+                <div class="dsection-title">Findings (${findings.length})</div>
+                ${shown.map(f => {
+                    const sev = (f.severity || 'low').toLowerCase();
+                    const sub = [f.tactic, f.technique ? `· ${f.technique}` : '']
+                        .filter(Boolean).join(' ');
+                    return `
+                        <div class="finding-item finding-item--${sev}">
+                            <div class="finding-title">${esc(f.title || f.name || 'Finding')}</div>
+                            ${sub ? `<div class="finding-sub">${esc(sub)}</div>` : ''}
+                        </div>`;
+                }).join('')}
+                ${sorted.length > 20 ? `<div class="more-note">… and ${sorted.length - 20} more</div>` : ''}
+            </div>`;
+    }
+
+    // IOCs section
+    if (iocs.length > 0) {
+        const shown = iocs.slice(0, 15);
+        html += `
+            <div class="dsection">
+                <div class="dsection-title">IOCs (${iocs.length})</div>
+                ${shown.map(i => `
+                    <div class="row-item">
+                        <span class="row-item-val">${esc(i.value || i.ioc_value || '')}</span>
+                        <span class="row-item-type">${esc(i.ioc_type || i.type || '')}</span>
+                    </div>`).join('')}
+                ${iocs.length > 15 ? `<div class="more-note">… and ${iocs.length - 15} more</div>` : ''}
+            </div>`;
+    }
+
+    // Artifacts section
+    if (artifacts.length > 0) {
+        const shown = artifacts.slice(0, 10);
+        html += `
+            <div class="dsection">
+                <div class="dsection-title">Artifacts (${artifacts.length})</div>
+                ${shown.map(a => `
+                    <div class="row-item">
+                        <span class="row-item-val">${esc(a.rel_path || a.path || '')}</span>
+                        <span class="row-item-type">${esc(a.artifact_type || a.type || '')}</span>
+                    </div>`).join('')}
+                ${artifacts.length > 10 ? `<div class="more-note">… and ${artifacts.length - 10} more</div>` : ''}
+            </div>`;
+    }
+
+    drawerBody.innerHTML = html;
+}
+
+// ─── Refresh ──────────────────────────────────────────────────────────────────
+
+async function refresh() {
+    const icon = refreshBtn.textContent;
+    refreshBtn.innerHTML = '<span class="spinning">↻</span>';
+    refreshBtn.disabled = true;
+    try {
+        await Promise.all([checkHealth(), loadStats(), loadCases()]);
+    } finally {
+        refreshBtn.textContent = icon;
+        refreshBtn.disabled = false;
+    }
+    resetTimer();
+}
+
+function resetTimer() {
+    clearInterval(refreshTimer);
+    refreshTimer = setInterval(refresh, 30_000);
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+
+refreshBtn.addEventListener('click', refresh);
+drawerClose.addEventListener('click', closeDrawer);
+overlay.addEventListener('click', closeDrawer);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+
+let searchTimeout;
+searchInp.addEventListener('input', () => {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(applyFilter, 200);
 });
-refreshCases();
+statusSel.addEventListener('change', applyFilter);
+
+refresh();

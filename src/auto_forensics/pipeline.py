@@ -18,6 +18,7 @@ from .llama_workflow import LlamaWorkflow, heuristic_fallback
 from .models import CaseReport, Finding, TimelineEvent, utc_now_iso
 from .pdf_report import write_pdf_report
 from .plugins import PluginRegistry
+from .security import SecurityPolicy, walk_case_directory
 from .sigma_rules import evaluate_sigma_rules
 from .stix_export import build_stix_bundle
 from .timeline import normalize_timeline
@@ -118,138 +119,257 @@ def _to_markdown(report: CaseReport) -> str:
     return "\n".join(lines)
 
 
-def _to_html(report: CaseReport) -> str:
-    payload = json.dumps(report.to_dict())
-    escaped_case = html.escape(report.case_id)
-    return f"""<!DOCTYPE html>
-<html lang=\"en\">
-<head>
-  <meta charset=\"utf-8\" />
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
-  <title>Auto Forensics Report - {escaped_case}</title>
-  <style>
-    :root {{
-      --bg: #f4f6f3;
-      --panel: #ffffff;
-      --ink: #17201a;
-      --muted: #4f5e54;
-      --line: #ced7d0;
-      --accent: #0f6f58;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{ margin: 0; font-family: "IBM Plex Sans", "Segoe UI", sans-serif; color: var(--ink); background: linear-gradient(180deg, #f9fcf8, var(--bg)); }}
-    main {{ max-width: 1200px; margin: 0 auto; padding: 1.2rem; display: grid; gap: 0.9rem; }}
-    .card {{ background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 1rem; box-shadow: 0 5px 16px rgba(14, 35, 26, 0.08); }}
-    .meta {{ display: flex; flex-wrap: wrap; gap: 0.8rem; color: var(--muted); }}
-    .kpi {{ border: 1px solid var(--line); border-radius: 10px; padding: 0.5rem 0.7rem; background: #f8fbf7; }}
-    table {{ width: 100%; border-collapse: collapse; font-size: 0.93rem; }}
-    th, td {{ text-align: left; border-bottom: 1px solid var(--line); padding: 0.5rem; vertical-align: top; }}
-    th {{ color: var(--muted); font-weight: 600; }}
-    .chip {{ display: inline-block; font-size: 0.8rem; border-radius: 999px; padding: 0.14rem 0.55rem; border: 1px solid var(--line); background: #f3faf6; }}
-    .sev-critical {{ background: #ffe6df; border-color: #f2b9a7; }}
-    .sev-high {{ background: #fff0da; border-color: #edc28a; }}
-    .sev-medium {{ background: #f7f3d5; border-color: #d8cb88; }}
-    .sev-low {{ background: #e7f3e7; border-color: #bad8b8; }}
-    .toolbar {{ display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }}
-    input, select {{ border: 1px solid var(--line); border-radius: 8px; padding: 0.4rem 0.6rem; }}
-    @media (max-width: 900px) {{ table, thead, tbody, th, td, tr {{ display: block; }} th {{ display: none; }} td {{ border: none; border-bottom: 1px solid var(--line); }} }}
-  </style>
-</head>
-<body>
-  <main>
-    <section class=\"card\">
-      <h1>Case Report: {escaped_case}</h1>
-      <p class=\"meta\">Generated at <strong>{html.escape(report.generated_at)}</strong></p>
-      <div class=\"meta\" id=\"kpis\"></div>
-    </section>
-    <section class=\"card\">
-      <h2>Findings</h2>
-      <table id=\"findings\"></table>
-    </section>
-    <section class=\"card\">
-      <h2>Timeline</h2>
-      <div class=\"toolbar\">
-        <label>Filter event type <input id=\"typeFilter\" placeholder=\"e.g. dns_query\" /></label>
-      </div>
-      <table id=\"timeline\"></table>
-    </section>
-    <section class=\"card\">
-      <h2>IOCs</h2>
-      <table id=\"iocs\"></table>
-    </section>
-  </main>
-  <script>
-    const report = {payload};
-    function esc(value) {{
-      return String(value === undefined || value === null ? "" : value)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
-    }}
-    document.getElementById("kpis").innerHTML = [
-      `<span class=\"kpi\">Findings: <strong>${{report.summary.total_findings || 0}}</strong></span>`,
-      `<span class=\"kpi\">Timeline: <strong>${{report.summary.timeline_events || 0}}</strong></span>`,
-      `<span class=\"kpi\">IOCs: <strong>${{report.summary.ioc_count || 0}}</strong></span>`,
-      `<span class=\"kpi\">ATT&CK techniques: <strong>${{report.summary.attack_technique_coverage || 0}}</strong></span>`
-    ].join("");
-
-    function renderFindings() {{
-      const rows = report.findings.map(item =>
-        `<tr>` +
-        `<td><span class=\"chip sev-${{esc(item.severity)}}\">${{esc(item.severity)}}</span></td>` +
-        `<td>${{esc(item.title)}}</td>` +
-        `<td>${{esc(item.tactic)}}</td>` +
-        `<td>${{esc(item.technique_id || "")}}</td>` +
-        `<td>${{esc(item.confidence)}}</td>` +
-        `</tr>`
-      ).join("");
-      document.getElementById("findings").innerHTML =
-        `<thead><tr><th>Severity</th><th>Title</th><th>Tactic</th><th>Technique</th><th>Confidence</th></tr></thead>` +
-        `<tbody>${{rows || "<tr><td colspan='5'>No findings.</td></tr>"}}</tbody>`;
-    }}
-
-    function renderTimeline(filterValue) {{
-      const rows = report.timeline
-        .filter(item => !filterValue || String(item.event_type || "").toLowerCase().includes(filterValue.toLowerCase()))
-        .map(item =>
-          `<tr>` +
-          `<td>${{esc(item.timestamp || "")}}</td>` +
-          `<td>${{esc(item.event_type)}}</td>` +
-          `<td>${{esc(item.source)}}</td>` +
-          `<td>${{esc(item.description)}}</td>` +
-          `</tr>`
-        ).join("");
-      document.getElementById("timeline").innerHTML =
-        `<thead><tr><th>Timestamp</th><th>Type</th><th>Source</th><th>Description</th></tr></thead>` +
-        `<tbody>${{rows || "<tr><td colspan='4'>No timeline events.</td></tr>"}}</tbody>`;
-    }}
-
-    function renderIocs() {{
-      const rows = (report.iocs || []).map(item =>
-        `<tr>` +
-        `<td>${{esc(item.ioc_type)}}</td>` +
-        `<td>${{esc(item.value)}}</td>` +
-        `<td>${{esc((item.sources || []).join(", "))}}</td>` +
-        `</tr>`
-      ).join("");
-      document.getElementById("iocs").innerHTML =
-        `<thead><tr><th>Type</th><th>Value</th><th>Sources</th></tr></thead>` +
-        `<tbody>${{rows || "<tr><td colspan='3'>No IOCs.</td></tr>"}}</tbody>`;
-    }}
-
-    renderFindings();
-    renderTimeline("");
-    renderIocs();
-    document.getElementById("typeFilter").addEventListener("input", (event) => renderTimeline(event.target.value));
-  </script>
-</body>
-</html>
-"""
+def _to_html(report: "CaseReport") -> str:
+    import html as _html, json as _json
+    payload = _json.dumps(report.to_dict())
+    ec = _html.escape(report.case_id)
+    ts = _html.escape(report.generated_at)
+    tf = len(report.findings)
+    tt = len(report.timeline)
+    ti = len(report.iocs)
+    ac = len({f.technique_id for f in report.findings if f.technique_id})
+    sc: dict[str, int] = {}
+    for f in report.findings:
+        s = str(getattr(f, "severity", None) or "low").lower()
+        sc[s] = sc.get(s, 0) + 1
+    cc = sc.get("critical", 0)
+    ch = sc.get("high", 0)
+    CSS = (
+        "*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}"
+        ":root{--bg:#0d1117;--surface:#161b22;--surface2:#1c2333;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--accent:#58a6ff;--accent2:#1f6feb;--crit:#f85149;--high:#fb8500;--med:#d29922;--low:#3fb950;--radius:12px}"
+        "html{scroll-behavior:smooth}"
+        "body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:14px;line-height:1.6}"
+        ".shell{display:flex;min-height:100vh}"
+        ".sidebar{width:220px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);position:sticky;top:0;height:100vh;overflow-y:auto;display:flex;flex-direction:column;gap:4px;padding:1.4rem .8rem}"
+        ".sidebar-logo{font-size:.78rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);padding:0 .4rem 1rem;border-bottom:1px solid var(--border);margin-bottom:.6rem}"
+        ".nav-item{display:flex;align-items:center;gap:.55rem;padding:.52rem .7rem;border-radius:8px;color:var(--muted);text-decoration:none;font-size:.85rem;font-weight:500;transition:background .15s,color .15s;cursor:pointer}"
+        ".nav-item:hover,.nav-item.active{background:var(--surface2);color:var(--text)}"
+        ".nav-icon{font-size:1rem;width:1.2rem;text-align:center}"
+        ".nav-badge{margin-left:auto;background:var(--surface2);border:1px solid var(--border);border-radius:999px;padding:.05rem .5rem;font-size:.75rem;color:var(--muted)}"
+        ".main{flex:1;overflow:hidden}"
+        ".header{background:linear-gradient(135deg,#0d1117 0%,#1a2332 40%,#0f2240 100%);border-bottom:1px solid var(--border);padding:2.5rem 2.5rem 2rem;position:relative;overflow:hidden}"
+        ".header::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse 800px 400px at 70% -20%,rgba(31,111,235,.18),transparent);pointer-events:none}"
+        ".header-eyebrow{font-size:.72rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:.4rem}"
+        ".header-title{font-size:1.9rem;font-weight:700;letter-spacing:-.02em;color:var(--text);margin-bottom:.35rem}"
+        ".header-meta{color:var(--muted);font-size:.82rem}"
+        ".header-meta code{font-family:'JetBrains Mono',monospace;font-size:.8rem;background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.25);border-radius:5px;padding:.1rem .45rem;color:var(--accent)}"
+        ".stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;padding:1.8rem 2.5rem;border-bottom:1px solid var(--border);background:var(--surface)}"
+        ".stat-card{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:1.1rem 1.2rem;display:flex;flex-direction:column;gap:.3rem;transition:border-color .2s,transform .2s}"
+        ".stat-card:hover{border-color:var(--accent2);transform:translateY(-2px)}"
+        ".stat-label{font-size:.73rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}"
+        ".stat-value{font-size:2rem;font-weight:700;letter-spacing:-.03em;color:var(--text);line-height:1}"
+        ".stat-value.crit{color:var(--crit)}.stat-value.high{color:var(--high)}.stat-value.accent{color:var(--accent)}"
+        ".stat-sub{font-size:.78rem;color:var(--muted)}"
+        ".sev-section{padding:1.8rem 2.5rem;border-bottom:1px solid var(--border)}"
+        ".section-title{font-size:.73rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:1.1rem}"
+        ".sev-bars{display:flex;flex-direction:column;gap:.55rem;max-width:500px}"
+        ".sev-row{display:flex;align-items:center;gap:.8rem}"
+        ".sev-label{font-size:.8rem;font-weight:600;width:60px;text-transform:uppercase;letter-spacing:.05em}"
+        ".sev-track{flex:1;height:8px;background:var(--surface2);border-radius:999px;overflow:hidden}"
+        ".sev-fill{height:100%;border-radius:999px;transition:width .6s cubic-bezier(.4,0,.2,1)}"
+        ".sev-fill.crit{background:linear-gradient(90deg,#f85149,#ff6b6b)}"
+        ".sev-fill.high{background:linear-gradient(90deg,#fb8500,#ffa94d)}"
+        ".sev-fill.med{background:linear-gradient(90deg,#d29922,#f0c040)}"
+        ".sev-fill.low{background:linear-gradient(90deg,#3fb950,#69db7c)}"
+        ".sev-count{font-size:.8rem;font-weight:600;color:var(--muted);width:28px;text-align:right}"
+        ".content-section{padding:1.8rem 2.5rem;border-bottom:1px solid var(--border)}"
+        ".toolbar{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;margin-bottom:1rem}"
+        ".toolbar-label{font-size:.8rem;color:var(--muted);font-weight:500}"
+        ".ctrl{background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:.4rem .75rem;font-size:.82rem;font-family:inherit;outline:none;transition:border-color .15s}"
+        ".ctrl:focus{border-color:var(--accent)}.ctrl-search{min-width:200px}"
+        ".tbl-wrap{overflow-x:auto;border-radius:var(--radius);border:1px solid var(--border)}"
+        "table{width:100%;border-collapse:collapse;font-size:.82rem}"
+        "thead tr{background:var(--surface2)}"
+        "th{padding:.65rem .85rem;text-align:left;white-space:nowrap;font-size:.72rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border)}"
+        "td{padding:.6rem .85rem;border-bottom:1px solid var(--border);vertical-align:top;color:var(--text)}"
+        "tbody tr{transition:background .12s}tbody tr:hover{background:var(--surface2)}tbody tr:last-child td{border-bottom:none}"
+        ".chip{display:inline-flex;align-items:center;gap:4px;font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border-radius:6px;padding:.2rem .55rem;border:1px solid transparent}"
+        ".chip-critical{background:rgba(248,81,73,.15);color:#ff7b72;border-color:rgba(248,81,73,.3)}"
+        ".chip-high{background:rgba(251,133,0,.15);color:#ffa657;border-color:rgba(251,133,0,.3)}"
+        ".chip-medium{background:rgba(210,153,34,.15);color:#d29922;border-color:rgba(210,153,34,.3)}"
+        ".chip-low{background:rgba(63,185,80,.15);color:#56d364;border-color:rgba(63,185,80,.3)}"
+        ".type-badge{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:.72rem;font-weight:500;border-radius:5px;padding:.15rem .45rem;background:rgba(88,166,255,.1);color:var(--accent);border:1px solid rgba(88,166,255,.2)}"
+        ".risk-pill{display:inline-block;border-radius:999px;font-size:.78rem;font-weight:700;padding:.15rem .55rem}"
+        ".risk-high{background:rgba(248,81,73,.18);color:var(--crit)}.risk-med{background:rgba(210,153,34,.18);color:var(--med)}.risk-low{background:rgba(63,185,80,.18);color:var(--low)}"
+        ".mono{font-family:'JetBrains Mono',monospace;font-size:.8rem;word-break:break-all}"
+        ".copy-btn{background:none;border:1px solid var(--border);border-radius:6px;color:var(--muted);font-size:.7rem;padding:.12rem .45rem;cursor:pointer;transition:all .15s;font-family:inherit}"
+        ".copy-btn:hover{background:var(--surface2);color:var(--text);border-color:var(--accent)}"
+        ".conf-bar{display:flex;align-items:center;gap:.5rem}"
+        ".conf-track{flex:1;height:5px;background:var(--surface2);border-radius:999px;overflow:hidden}"
+        ".conf-fill{height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent));border-radius:999px}"
+        ".conf-label{font-size:.78rem;color:var(--muted);width:34px;text-align:right}"
+        ".empty{text-align:center;padding:2.5rem;color:var(--muted);font-size:.85rem}"
+        ".empty-icon{font-size:2rem;margin-bottom:.4rem;display:block}"
+        ".tactic{display:inline-block;font-size:.72rem;padding:.12rem .45rem;background:rgba(139,148,158,.1);border:1px solid var(--border);border-radius:5px;color:var(--muted)}"
+        ".technique{font-family:'JetBrains Mono',monospace;font-size:.78rem;color:var(--muted)}"
+        ".footer{padding:1.4rem 2.5rem;text-align:center;font-size:.78rem;color:var(--muted);border-top:1px solid var(--border)}"
+        "::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--border);border-radius:999px}"
+        "@media print{.sidebar{display:none}.header{background:none;border:1px solid #ccc}body{background:#fff;color:#000}}"
+    )
+    JS = (
+        f"const _DATA={payload};\n"
+        "function e(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}\n"
+        "function goTo(id){const el=document.getElementById(id);if(el)el.scrollIntoView({behavior:'smooth',block:'start'})}\n"
+        "(function(){const order=['critical','high','medium','low'];const counts={};\n"
+        "(_DATA.findings||[]).forEach(f=>{const s=(f.severity||'low').toLowerCase();counts[s]=(counts[s]||0)+1});\n"
+        "const max=Math.max(...Object.values(counts),1);\n"
+        "const color={critical:'crit',high:'high',medium:'med',low:'low'};\n"
+        "const container=document.getElementById('sevBars');\n"
+        "if(!Object.values(counts).some(Boolean)){container.innerHTML='<p style=\"color:var(--muted)\">No findings.</p>';return}\n"
+        "order.forEach(s=>{const c=counts[s]||0;if(!c)return;const pct=Math.round(c/max*100);const cls=color[s]||'low';\n"
+        "container.insertAdjacentHTML('beforeend',`<div class='sev-row'><span class='sev-label' style='color:var(--${cls})'>${s}</span><div class='sev-track'><div class='sev-fill ${cls}' style='width:${pct}%'></div></div><span class='sev-count'>${c}</span></div>`)})})();\n"
+        "(function(){const tactics=[...new Set((_DATA.findings||[]).map(f=>f.tactic||'').filter(Boolean))].sort();\n"
+        "const sel=document.getElementById('tacticFilter');\n"
+        "tactics.forEach(t=>sel.insertAdjacentHTML('beforeend',`<option value='${e(t)}'>${e(t)}</option>`))})();\n"
+        "function renderFindings(){\n"
+        "  const sevF=document.getElementById('sevFilter').value.toLowerCase();\n"
+        "  const tacF=document.getElementById('tacticFilter').value.toLowerCase();\n"
+        "  const kw=document.getElementById('findingSearch').value.toLowerCase();\n"
+        "  const rows=(_DATA.findings||[])\n"
+        "    .filter(f=>!sevF||(f.severity||'').toLowerCase()===sevF)\n"
+        "    .filter(f=>!tacF||(f.tactic||'').toLowerCase()===tacF)\n"
+        "    .filter(f=>!kw||(f.title||'').toLowerCase().includes(kw)||(f.tactic||'').toLowerCase().includes(kw)||(f.technique_id||'').toLowerCase().includes(kw))\n"
+        "    .map(f=>{const sev=(f.severity||'low').toLowerCase();\n"
+        "      const conf=f.confidence!=null?Math.round(f.confidence*100):null;\n"
+        "      const cb=conf!=null?`<div class='conf-bar'><div class='conf-track'><div class='conf-fill' style='width:${conf}%'></div></div><span class='conf-label'>${conf}%</span></div>`:'\\u2014';\n"
+        "      return `<tr><td><span class='chip chip-${sev}'>${e(sev)}</span></td><td><strong>${e(f.title||f.rule_name||'')}</strong></td><td><span class='tactic'>${e(f.tactic||'\\u2014')}</span></td><td><span class='technique'>${e(f.technique_id||'\\u2014')}</span></td><td>${cb}</td><td style='font-size:.8rem;color:var(--muted);max-width:260px'>${e(f.recommendation||'\\u2014')}</td></tr>`})\n"
+        "    .join('');\n"
+        "  document.getElementById('findingsTbody').innerHTML=rows||`<tr><td colspan='6'><div class='empty'><span class='empty-icon'>&#128269;</span>No findings match the current filter.</div></td></tr>`}\n"
+        "function riskPill(score){if(score==null)return '\\u2014';const cls=score>=70?'high':score>=40?'med':'low';return `<span class='risk-pill risk-${cls}'>${Math.round(score)}</span>`}\n"
+        "function renderTimeline(){\n"
+        "  const typeF=document.getElementById('typeFilter').value.toLowerCase();\n"
+        "  const minR=parseFloat(document.getElementById('riskFilter').value)||0;\n"
+        "  const kw=document.getElementById('tlSearch').value.toLowerCase();\n"
+        "  const rows=(_DATA.timeline||[])\n"
+        "    .filter(ev=>!typeF||(ev.event_type||'').toLowerCase().includes(typeF))\n"
+        "    .filter(ev=>!minR||(ev.risk_score||0)>=minR)\n"
+        "    .filter(ev=>!kw||(ev.description||'').toLowerCase().includes(kw)||(ev.source||'').toLowerCase().includes(kw))\n"
+        "    .map(ev=>`<tr><td class='mono' style='white-space:nowrap;font-size:.75rem'>${e(ev.timestamp||'\\u2014')}</td><td><span class='type-badge'>${e(ev.event_type||'')}</span></td><td style='font-size:.78rem;color:var(--muted)'>${e(ev.source||'\\u2014')}</td><td style='max-width:360px'>${e(ev.description||'')}</td><td>${riskPill(ev.risk_score)}</td></tr>`)\n"
+        "    .join('');\n"
+        "  document.getElementById('timelineTbody').innerHTML=rows||`<tr><td colspan='5'><div class='empty'><span class='empty-icon'>&#128336;</span>No events match the current filter.</div></td></tr>`}\n"
+        "function renderIocs(){\n"
+        "  const typeF=document.getElementById('iocTypeFilter').value.toLowerCase();\n"
+        "  const kw=document.getElementById('iocSearch').value.toLowerCase();\n"
+        "  const rows=(_DATA.iocs||[])\n"
+        "    .filter(i=>!typeF||(i.ioc_type||'').toLowerCase()===typeF)\n"
+        "    .filter(i=>!kw||(i.value||'').toLowerCase().includes(kw)||((i.sources||[]).join(' ')).toLowerCase().includes(kw))\n"
+        "    .map(i=>{const raw=String(i.value||'');return `<tr><td><span class='type-badge'>${e(i.ioc_type||'')}</span></td><td class='mono'>${e(raw)}</td><td style='font-size:.78rem;color:var(--muted)'>${e((i.sources||[]).join(', '))}</td><td><button class='copy-btn' onclick=\"navigator.clipboard.writeText(${JSON.stringify(raw)}).then(()=>{this.textContent='\\u2713';setTimeout(()=>this.textContent='copy',1200)})\">copy</button></td></tr>`})\n"
+        "    .join('');\n"
+        "  document.getElementById('iocsTbody').innerHTML=rows||`<tr><td colspan='4'><div class='empty'><span class='empty-icon'>&#128737;</span>No IOCs match the current filter.</div></td></tr>`}\n"
+        "(function(){const rows=(_DATA.binary_features||[]).map(b=>{\n"
+        "  const score=b.suspicious_score||0;\n"
+        "  const sc2=score>=4?'var(--crit)':score>0?'var(--high)':'var(--low)';\n"
+        "  const ent=b.entropy!=null?Number(b.entropy).toFixed(3):'\\u2014';\n"
+        "  const sha=b.sha256?b.sha256.slice(0,16)+'\\u2026':'\\u2014';\n"
+        "  const rat=(b.rationale||[]).slice(0,2).join('; ')||'\\u2014';\n"
+        "  return `<tr><td class='mono' style='font-size:.76rem'>${e(b.path||'\\u2014')}</td><td class='mono' style='font-size:.75rem;color:var(--muted)'>${e(sha)}</td><td style='font-size:.82rem'>${ent}</td><td><strong style='color:${sc2}'>${score}</strong></td><td style='font-size:.78rem;color:var(--muted);max-width:260px'>${e(rat)}</td></tr>`})\n"
+        "  .join('');\n"
+        "  document.getElementById('binariesTbody').innerHTML=rows||`<tr><td colspan='5'><div class='empty'><span class='empty-icon'>&#128190;</span>No binaries analysed.</div></td></tr>`})();\n"
+        "(function(){const en=_DATA.ioc_enrichments||[];if(!en.length)return;\n"
+        "  document.getElementById('enrichments').style.display='';\n"
+        "  const vc=v=>{if(!v)return '';const lv=v.toLowerCase();return lv.includes('malicious')?'chip chip-critical':lv.includes('suspicious')?'chip chip-high':'chip chip-low'};\n"
+        "  const rows=en.map(r=>`<tr><td><span class='type-badge'>${e(r.ioc_type||'')}</span></td><td class='mono'>${e(r.value||'')}</td><td style='color:var(--muted)'>${e(r.provider||'')}</td><td><span class='${vc(r.verdict)}'>${e(r.verdict||'\\u2014')}</span></td><td>${r.confidence!=null?Math.round(r.confidence*100)+'%':'\\u2014'}</td></tr>`).join('');\n"
+        "  document.getElementById('enrichTbody').innerHTML=rows})();\n"
+        "document.getElementById('sevFilter').addEventListener('change',renderFindings);\n"
+        "document.getElementById('tacticFilter').addEventListener('change',renderFindings);\n"
+        "document.getElementById('findingSearch').addEventListener('input',renderFindings);\n"
+        "document.getElementById('typeFilter').addEventListener('input',renderTimeline);\n"
+        "document.getElementById('riskFilter').addEventListener('input',renderTimeline);\n"
+        "document.getElementById('tlSearch').addEventListener('input',renderTimeline);\n"
+        "document.getElementById('iocTypeFilter').addEventListener('change',renderIocs);\n"
+        "document.getElementById('iocSearch').addEventListener('input',renderIocs);\n"
+        "renderFindings();renderTimeline();renderIocs();\n"
+        "const _secs=['overview','findings','timeline','iocs','binaries','enrichments'];\n"
+        "const _navs=document.querySelectorAll('.nav-item');\n"
+        "window.addEventListener('scroll',()=>{const y=window.scrollY+120;\n"
+        "  _secs.forEach((id,i)=>{const el=document.getElementById(id);\n"
+        "    if(el&&el.offsetTop<=y){_navs.forEach(n=>n.classList.remove('active'));_navs[i]&&_navs[i].classList.add('active')}})\n"
+        "},{passive:true});\n"
+    )
+    return (
+        "<!DOCTYPE html>\n"
+        "<html lang='en'>\n<head>\n"
+        "  <meta charset='utf-8' />\n"
+        "  <meta name='viewport' content='width=device-width, initial-scale=1' />\n"
+        f"  <title>Auto Forensics \u2014 {ec}</title>\n"
+        "  <link rel='preconnect' href='https://fonts.googleapis.com' />\n"
+        "  <link href='https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap' rel='stylesheet' />\n"
+        f"  <style>\n{CSS}\n  </style>\n</head>\n<body>\n"
+        "<div class='shell'>\n"
+        "<nav class='sidebar'>\n"
+        "  <div class='sidebar-logo'>&#9889; AutoForensics</div>\n"
+        "  <a class='nav-item active' onclick=\"goTo('overview')\"><span class='nav-icon'>&#128203;</span> Overview</a>\n"
+        f"  <a class='nav-item' onclick=\"goTo('findings')\"><span class='nav-icon'>&#128269;</span> Findings<span class='nav-badge'>{tf}</span></a>\n"
+        f"  <a class='nav-item' onclick=\"goTo('timeline')\"><span class='nav-icon'>&#128336;</span> Timeline<span class='nav-badge'>{tt}</span></a>\n"
+        f"  <a class='nav-item' onclick=\"goTo('iocs')\"><span class='nav-icon'>&#128737;</span> IOCs<span class='nav-badge'>{ti}</span></a>\n"
+        "  <a class='nav-item' onclick=\"goTo('binaries')\"><span class='nav-icon'>&#128190;</span> Binaries</a>\n"
+        "  <a class='nav-item' onclick='window.print()'><span class='nav-icon'>&#128424;</span> Print</a>\n"
+        "</nav>\n"
+        "<div class='main'>\n"
+        f"<header class='header' id='overview'>\n"
+        "  <div class='header-eyebrow'>Auto Forensics &#x2014; Incident Report</div>\n"
+        f"  <h1 class='header-title'>{ec}</h1>\n"
+        f"  <p class='header-meta'>Generated <code>{ts}</code>"
+        f" &nbsp;&middot;&nbsp; <code>{tf}</code> findings"
+        f" &nbsp;&middot;&nbsp; <code>{ti}</code> IOCs"
+        f" &nbsp;&middot;&nbsp; <code>{tt}</code> events"
+        f" &nbsp;&middot;&nbsp; <code>{ac}</code> MITRE techniques</p>\n"
+        "</header>\n"
+        "<div class='stat-grid'>\n"
+        f"  <div class='stat-card'><span class='stat-label'>Total Findings</span><span class='stat-value accent'>{tf}</span><span class='stat-sub'>across all severities</span></div>\n"
+        f"  <div class='stat-card'><span class='stat-label'>Critical</span><span class='stat-value crit'>{cc}</span><span class='stat-sub'>immediate action</span></div>\n"
+        f"  <div class='stat-card'><span class='stat-label'>High</span><span class='stat-value high'>{ch}</span><span class='stat-sub'>urgent review</span></div>\n"
+        f"  <div class='stat-card'><span class='stat-label'>IOCs</span><span class='stat-value accent'>{ti}</span><span class='stat-sub'>indicators extracted</span></div>\n"
+        f"  <div class='stat-card'><span class='stat-label'>Timeline Events</span><span class='stat-value' style='font-size:1.5rem'>{tt}</span><span class='stat-sub'>chronological view</span></div>\n"
+        f"  <div class='stat-card'><span class='stat-label'>ATT&amp;CK Coverage</span><span class='stat-value accent'>{ac}</span><span class='stat-sub'>unique techniques</span></div>\n"
+        "</div>\n"
+        "<div class='sev-section'><div class='section-title'>Severity Breakdown</div><div class='sev-bars' id='sevBars'></div></div>\n"
+        "<section class='content-section' id='findings'>\n"
+        "  <div class='section-title'>Findings</div>\n"
+        "  <div class='toolbar'>\n"
+        "    <label><span class='toolbar-label'>Severity</span>&nbsp;<select id='sevFilter' class='ctrl'><option value=''>All</option><option value='critical'>Critical</option><option value='high'>High</option><option value='medium'>Medium</option><option value='low'>Low</option></select></label>\n"
+        "    <label><span class='toolbar-label'>Tactic</span>&nbsp;<select id='tacticFilter' class='ctrl'><option value=''>All</option></select></label>\n"
+        "    <input id='findingSearch' class='ctrl ctrl-search' placeholder='Search title, tactic, technique\u2026' />\n"
+        "  </div>\n"
+        "  <div class='tbl-wrap'><table><thead><tr><th>Severity</th><th>Title</th><th>Tactic</th><th>Technique</th><th>Confidence</th><th>Recommendation</th></tr></thead><tbody id='findingsTbody'></tbody></table></div>\n"
+        "</section>\n"
+        "<section class='content-section' id='timeline'>\n"
+        "  <div class='section-title'>Timeline</div>\n"
+        "  <div class='toolbar'>\n"
+        "    <input id='typeFilter' class='ctrl' placeholder='Filter event type\u2026' style='min-width:180px' />\n"
+        "    <label><span class='toolbar-label'>Min Risk</span>&nbsp;<input id='riskFilter' type='number' class='ctrl' min='0' max='100' placeholder='0' style='width:75px' /></label>\n"
+        "    <input id='tlSearch' class='ctrl ctrl-search' placeholder='Search description\u2026' />\n"
+        "  </div>\n"
+        "  <div class='tbl-wrap'><table><thead><tr><th>Timestamp</th><th>Event Type</th><th>Source</th><th>Description</th><th>Risk</th></tr></thead><tbody id='timelineTbody'></tbody></table></div>\n"
+        "</section>\n"
+        "<section class='content-section' id='iocs'>\n"
+        "  <div class='section-title'>Indicators of Compromise</div>\n"
+        "  <div class='toolbar'>\n"
+        "    <select id='iocTypeFilter' class='ctrl'><option value=''>All Types</option><option value='ip'>IP Address</option><option value='domain'>Domain</option><option value='url'>URL</option><option value='sha256'>SHA-256</option><option value='md5'>MD5</option><option value='email'>Email</option><option value='path'>Path</option></select>\n"
+        "    <input id='iocSearch' class='ctrl ctrl-search' placeholder='Search value or source\u2026' />\n"
+        "  </div>\n"
+        "  <div class='tbl-wrap'><table><thead><tr><th>Type</th><th>Value</th><th>Sources</th><th>Copy</th></tr></thead><tbody id='iocsTbody'></tbody></table></div>\n"
+        "</section>\n"
+        "<section class='content-section' id='binaries'>\n"
+        "  <div class='section-title'>Binary Analysis</div>\n"
+        "  <div class='tbl-wrap'><table><thead><tr><th>Path</th><th>SHA-256</th><th>Entropy</th><th>Score</th><th>Notes</th></tr></thead><tbody id='binariesTbody'></tbody></table></div>\n"
+        "</section>\n"
+        "<section class='content-section' id='enrichments' style='display:none'>\n"
+        "  <div class='section-title'>IOC Enrichment</div>\n"
+        "  <div class='tbl-wrap'><table><thead><tr><th>Type</th><th>Value</th><th>Provider</th><th>Verdict</th><th>Confidence</th></tr></thead><tbody id='enrichTbody'></tbody></table></div>\n"
+        "</section>\n"
+        f"<footer class='footer'>Auto Forensics &nbsp;&middot;&nbsp; Case <strong>{ec}</strong> &nbsp;&middot;&nbsp; Generated {ts}</footer>\n"
+        "</div></div>\n"
+        f"<script>\n{JS}</script>\n"
+        "</body>\n</html>\n"
+    )
 
 
 def run_case(config: PipelineConfig) -> CaseReport:
+    _external_registry = config.plugin_registry is not None
     registry = config.plugin_registry or PluginRegistry()
-    registry.register_defaults()
+    if not _external_registry:
+        registry.register_defaults()
     artifacts, binaries = discover_artifacts(
         config.input_dir,
         max_text_bytes=config.max_text_bytes,
@@ -257,11 +377,15 @@ def run_case(config: PipelineConfig) -> CaseReport:
     )
     with ThreadPoolExecutor(max_workers=4, thread_name_prefix="af-binary") as pool:
         binary_features = list(pool.map(registry.analyze_binary, binaries))
+
     # Cap directory traversal depth at 20 to avoid runaway scans on deep trees.
-    # Use a generator to avoid materialising the full list in memory for large trees.
-    scan_candidates = (
-        p for p in sorted(config.input_dir.rglob("*"))
-        if p.is_file() and len(p.relative_to(config.input_dir).parts) <= 20
+    def yara_filter(p: Path) -> bool:
+        return len(p.relative_to(config.input_dir).parts) <= 20
+
+    scan_candidates = walk_case_directory(
+        config.input_dir,
+        SecurityPolicy(max_text_bytes=config.max_text_bytes),
+        filter_func=yara_filter
     )
 
     findings: list[Finding] = []

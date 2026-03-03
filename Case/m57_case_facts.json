@@ -1,0 +1,78 @@
+{
+  "case_name": "M57.biz Corporate Exfiltration",
+  "case_type": "insider_threat",
+  "incident_summary": "A confidential spreadsheet (m57plan.xlsx) containing M57.biz employee salary and SSN data was posted as an attachment in the technical support forum of a competitor's website. The spreadsheet originated from CFO Jean Jones's computer.",
+  "subjects": [
+    {
+      "name": "Jean Jones",
+      "role": "CFO",
+      "email": "jean@m57.biz",
+      "status": "primary_suspect",
+      "statement": "Alison asked me to prepare the spreadsheet as part of new funding round. Alison asked me to send the spreadsheet to her by email. That is all I know."
+    },
+    {
+      "name": "Alison Smith",
+      "role": "President",
+      "email": "alison@m57.biz",
+      "status": "witness",
+      "statement": "I don't know what Jean is talking about. I never asked Jean for the spreadsheet. I never received the spreadsheet by email."
+    }
+  ],
+  "exfiltrated_document": {
+    "filename": "m57plan.xlsx",
+    "description": "M57.biz company spreadsheet containing employee names, roles, salaries, and SSNs",
+    "classification": "confidential",
+    "data_fields": ["Name", "Position", "Salary", "SSN"],
+    "known_recipients_outside_company": ["competitor_website_forum"],
+    "total_annual_salary_exposed": 1009000,
+    "employees_exposed": [
+      {"name": "Alison Smith", "role": "President", "salary": 140000, "ssn": "103-44-3134"},
+      {"name": "Jean Jones",   "role": "CFO",       "salary": 120000, "ssn": "432-34-6432"},
+      {"name": "Bob Blackman", "role": "Apps 1",    "salary": 90000,  "ssn": "493-46-3329"},
+      {"name": "Carol Canfred","role": "Apps 2",    "salary": 110000, "ssn": "894-33-4560"},
+      {"name": "Dave Daubert", "role": "QA",        "salary": 67000,  "ssn": "331-95-1020"},
+      {"name": "Emmy Arlington","role":"Entry Level","salary": 57000,  "ssn": "404-98-4079"},
+      {"name": "Gina Tangers", "role": "Creative 1","salary": 80000,  "ssn": "980-97-3311"},
+      {"name": "Harris Jenkins","role":"G&C",       "salary": 105000, "ssn": "887-33-5532"},
+      {"name": "Indy CounterchingOutreach","role":"BizDev","salary": 240000,"ssn": "123-45-6789"}
+    ]
+  },
+  "evidence_sources": [
+    {
+      "source": "disk_image",
+      "description": "EnCase image of Jean Jones's computer (jeanm57.E01 / jeanm57.aff)",
+      "status": "to_be_analyzed"
+    },
+    {
+      "source": "spreadsheet_copy",
+      "description": "Copy of m57plan.xlsx recovered from competitor website",
+      "status": "recovered"
+    }
+  ],
+  "investigation_questions": [
+    "When did Jean create the spreadsheet m57plan.xlsx?",
+    "How did the document travel from Jean's computer to the competitor's website?",
+    "Who else from the company may be involved in the exfiltration?"
+  ],
+  "conflict_of_statements": {
+    "jean_claims": "Alison requested the spreadsheet for the funding round and asked her to email it.",
+    "alison_denies": "Alison says she never asked for or received the spreadsheet.",
+    "conclusion": "One of the two parties is lying. Physical disk evidence is required to resolve the conflict."
+  },
+  "threat_indicators": {
+    "tactic": "exfiltration",
+    "technique": "T1048",
+    "technique_name": "Exfiltration Over Alternative Protocol",
+    "data_sensitivity": "PII + compensation data",
+    "potential_motives": ["competitive espionage", "insider grievance", "financial gain"],
+    "attack_surface": "email, web upload, removable media"
+  },
+  "company_context": {
+    "name": "M57.biz",
+    "description": "Virtual web startup developing a body art catalog",
+    "funding": "$3M seed, closing $10M round",
+    "employees": 10,
+    "work_model": "fully_remote",
+    "document_exchange": "primarily_email"
+  }
+}
