@@ -29,6 +29,7 @@ src/auto_forensics/sigma_rules.py
 src/auto_forensics/stix_export.py
 src/auto_forensics/timeline.py
 src/auto_forensics/watcher.py
+src/auto_forensics/wipe_recovery.py
 src/auto_forensics/yara_detector.py
 src/auto_forensics_framework.egg-info/PKG-INFO
 src/auto_forensics_framework.egg-info/SOURCES.txt

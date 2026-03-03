@@ -103,21 +103,21 @@ class ForensicAgent:
     # ------------------------------------------------------------------
 
     def _step_init(self, case_id: str) -> dict[str, Any]:
-        console.print(f"  [dim]►[/] Initialising case [bold cyan]{case_id}[/]…")
+        console.print(f"  [dim]>[/] Initialising case [bold cyan]{case_id}[/]…")
         return self.svc.create_case(case_id)
 
     def _step_ingest(self, case_id: str, evidence_dir: Path) -> dict[str, Any]:
-        console.print(f"  [dim]►[/] Ingesting evidence from [dim]{evidence_dir}[/]…")
+        console.print(f"  [dim]>[/] Ingesting evidence from [dim]{evidence_dir}[/]…")
         result = self.svc.ingest_case(case_id, evidence_dir)
         files = result.get("ingested_files", 0)
-        console.print(f"  [dim]►[/] [bold]{files}[/] file(s) ingested")
+        console.print(f"  [dim]>[/] [bold]{files}[/] file(s) ingested")
         return result
 
     def _step_analyze(self, case_id: str) -> dict[str, Any]:
-        console.print("  [dim]►[/] Starting analysis engine…")
+        console.print("  [dim]>[/] Starting analysis engine…")
         resp = self.svc.analyze_case_async(case_id, enable_llama=self.enable_llm)
         if not resp.get("accepted"):
-            console.print("  [dim]►[/] Analysis already running — waiting for completion…")
+            console.print("  [dim]>[/] Analysis already running — waiting for completion…")
 
         state = ""
         status: dict[str, Any] = {}
@@ -151,13 +151,39 @@ class ForensicAgent:
             ))
         return status
 
+    def _step_wipe_recovery(
+        self, case_id: str, case_dir: Path
+    ) -> dict[str, Any]:
+        """Byte-level wipe-recovery analysis for any disk images in the case."""
+        console.print(
+            "  [dim]>[/] Scanning for disk images to run wipe-recovery analysis…"
+        )
+        output_dir = case_dir / "recovery_reports"
+        result = self.svc.analyse_disk_images_in_case(
+            case_id, output_dir=output_dir, extra_search_dir=case_dir
+        )
+        found = result.get("images_found", 0)
+        analysed = result.get("images_analysed", 0)
+        new_f = result.get("new_findings", 0)
+        new_e = result.get("new_events", 0)
+        if found == 0:
+            console.print("  [dim]>[/] No disk images found — skipping wipe recovery")
+        else:
+            console.print(
+                f"  [dim]>[/] Wipe recovery: "
+                f"[bold]{analysed}/{found}[/] image(s) analysed  "
+                f"[bold cyan]{new_f}[/] finding(s)  "
+                f"[bold cyan]{new_e}[/] timeline event(s) added"
+            )
+        return result
+
     def _step_conclusions(self, case_id: str) -> dict[str, Any]:
-        console.print("  [dim]►[/] Generating forensic conclusions…")
+        console.print("  [dim]>[/] Generating forensic conclusions…")
         return self.svc.generate_conclusions(case_id)
 
     def _step_report(self, case_id: str, case_dir: Path) -> tuple[str, str]:
         """Write both markdown and HTML reports; return (md_path, html_path)."""
-        console.print("  [dim]►[/] Rendering reports…")
+        console.print("  [dim]>[/] Rendering reports…")
         md = self.svc.get_report(case_id, fmt="md")
         html = self.svc.get_report(case_id, fmt="html")
         md_path = case_dir / "agent_report.md"
@@ -283,10 +309,10 @@ class ForensicAgent:
                 f"  Case ID      :  [bold cyan]{case_id}[/]",
                 f"  LLM enabled  :  {'[green]yes[/]' if self.enable_llm else '[dim]no (heuristics only)[/]'}",
                 "",
-                "[dim]Pipeline:  init → ingest → analyse → conclude → report[/]",
+                "[dim]Pipeline:  init > ingest > analyse > wipe-recovery > conclude > report[/]",
                 "[dim]No user input required.[/]",
             ]),
-            title="[bold]🔍 Autonomous Agent[/]",
+            title="[bold]Autonomous Agent[/]",
             border_style="cyan",
             expand=False,
         ))
@@ -294,19 +320,22 @@ class ForensicAgent:
         t0 = time.monotonic()
 
         # ── Pipeline ─────────────────────────────────────────────────────
-        console.print(Rule("[bold dim]Step 1 / 5  ·  Init[/]", style="bright_black"))
+        console.print(Rule("[bold dim]Step 1 / 6  ·  Init[/]", style="bright_black"))
         self._step_init(case_id)
 
-        console.print(Rule("[bold dim]Step 2 / 5  ·  Ingest[/]", style="bright_black"))
+        console.print(Rule("[bold dim]Step 2 / 6  ·  Ingest[/]", style="bright_black"))
         ingest_result = self._step_ingest(case_id, evidence_dir)
 
-        console.print(Rule("[bold dim]Step 3 / 5  ·  Analyse[/]", style="bright_black"))
+        console.print(Rule("[bold dim]Step 3 / 6  ·  Analyse[/]", style="bright_black"))
         self._step_analyze(case_id)
 
-        console.print(Rule("[bold dim]Step 4 / 5  ·  Conclusions[/]", style="bright_black"))
+        console.print(Rule("[bold dim]Step 4 / 6  ·  Wipe Recovery[/]", style="bright_black"))
+        self._step_wipe_recovery(case_id, case_dir)
+
+        console.print(Rule("[bold dim]Step 5 / 6  ·  Conclusions[/]", style="bright_black"))
         conclusions_data = self._step_conclusions(case_id)
 
-        console.print(Rule("[bold dim]Step 5 / 5  ·  Report[/]", style="bright_black"))
+        console.print(Rule("[bold dim]Step 6 / 6  ·  Report[/]", style="bright_black"))
         md_path, html_path = self._step_report(case_id, case_dir)
 
         elapsed = time.monotonic() - t0
@@ -350,7 +379,7 @@ class ForensicAgent:
                 f"  [dim]Markdown report :[/]  [bold green]{md_path}[/]",
                 f"  [dim]HTML report    :[/]  [bold green]{html_path}[/]",
             ]),
-            title="[bold green]✅ Agent Complete[/]",
+            title="[bold green]Agent Complete[/]",
             border_style="green",
             expand=False,
         ))

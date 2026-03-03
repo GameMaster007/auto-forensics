@@ -1106,6 +1106,81 @@ def _cmd_hash(args: argparse.Namespace) -> None:
     console.print(Panel("\n".join(lines), title="[bold]File Hash[/]", border_style="cyan", expand=False))
 
 
+def _cmd_disk_analyze(args: argparse.Namespace) -> None:
+    """Byte-level wipe recovery analysis of a disk image."""
+    from .wipe_recovery import analyse_disk_image
+
+    image_path = args.image.expanduser().resolve()
+    if not image_path.is_file():
+        err_console.print(f"[bold red]Not a file:[/] {image_path}")
+        raise SystemExit(1)
+
+    output_dir = (
+        args.output.expanduser().resolve()
+        if args.output
+        else image_path.parent / f"{image_path.stem}_recovered"
+    )
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        transient=True,
+        console=console,
+    ) as prog:
+        prog.add_task(f"Analysing [cyan]{image_path.name}[/]…")
+        result = analyse_disk_image(image_path, output_dir)
+
+    # Summary panel
+    wipe_color = "red" if result.wipe_pct > 90 else "yellow"
+    lines = [
+        f"Image:      [bold]{image_path.name}[/]",
+        f"Size:       {result.disk_size_bytes:,} bytes "
+        f"({result.disk_size_bytes / (1024 ** 3):.2f} GiB)",
+        f"Wiped:      [{wipe_color}]{result.wipe_pct:.1f}%[/{wipe_color}]"
+        f"  Intact: [green]{result.data_pct:.1f}%[/green]"
+        f"  ({len(result.data_runs)} runs)",
+        f"Partitions: [bold]{len(result.partitions)}[/] recovered",
+    ]
+    if result.gpt_backup_sector:
+        lines.append(
+            f"GPT backup: [green]sector {result.gpt_backup_sector:,}[/green]"
+        )
+    if result.luks_headers:
+        lh = result.luks_headers[0]
+        lines.append(
+            f"LUKS2:      [yellow]found[/yellow]  UUID={lh.uuid}  {lh.encryption}"
+        )
+    if result.ntfs_created:
+        lines.append(f"NTFS created: {result.ntfs_created}")
+    if result.mft_records:
+        names = ", ".join(
+            f"'{r.filename}'" for r in result.mft_records if r.filename
+        )
+        lines.append(f"MFT records: {names}")
+    if result.indx_entries:
+        idx_names = [e["name"] for e in result.indx_entries if e.get("name")]
+        lines.append(f"INDX entries: {', '.join(idx_names[:8])}")
+    lines.append(f"Reports:    [dim]{output_dir}[/dim]")
+
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title="[bold]Disk Wipe Recovery Analysis[/]",
+            border_style="cyan",
+            expand=False,
+        )
+    )
+
+    console.print("\n[bold]Key Findings:[/]")
+    for f in result.findings:
+        console.print(f"  • {f}")
+
+    if args.json:
+        import json as _json
+        console.print_json(_json.dumps(result.to_dict(), indent=2))
+
+
 def _cmd_extract(args: argparse.Namespace, svc: AutoForensicsService) -> None:
     """Mount a disk image, copy artifacts to a staging directory, optionally ingest."""
     image_path = args.image.expanduser().resolve()
@@ -1531,6 +1606,31 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--case-id", default=None, help="Case ID for the ingest step (default: derived from image name).")
     p.add_argument("--no-ingest", action="store_true", help="Extract only, skip case creation and ingest.")
 
+    p = sub.add_parser(
+        "disk-analyze",
+        help="Byte-level wipe recovery analysis of a disk image (E01/raw).",
+    )
+    p.add_argument(
+        "--image",
+        required=True,
+        type=Path,
+        help="Disk image file (.e01, .dd, .img, .raw, …).",
+    )
+    p.add_argument(
+        "--output",
+        default=None,
+        type=Path,
+        help=(
+            "Output directory for reports "
+            "(default: <image_dir>/<image_name>_recovered/)."
+        ),
+    )
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the full JSON result to stdout (in addition to files).",
+    )
+
     return parser
 
 
@@ -1688,6 +1788,10 @@ def main() -> None:
 
         if args.command == "extract":
             _cmd_extract(args, ensure_service())
+            return
+
+        if args.command == "disk-analyze":
+            _cmd_disk_analyze(args)
             return
 
         if args.command == "solve":

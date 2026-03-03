@@ -1130,7 +1130,7 @@ class AutoForensicsService:
                 ratio = crit_high / total_findings
                 if ratio >= 0.5:
                     conclusions.append(
-                        f"⚠ {crit_high}/{total_findings} findings ({ratio:.0%}) are critical or high severity — "
+                        f"[!] {crit_high}/{total_findings} findings ({ratio:.0%}) are critical or high severity — "
                         "this strongly suggests malicious activity requiring immediate incident response."
                     )
                 else:
@@ -1206,7 +1206,7 @@ class AutoForensicsService:
 
             if high_risk_events:
                 conclusions.append(
-                    f"{len(high_risk_events)} high-risk event(s) (≥70) detected in the timeline — "
+                    f"{len(high_risk_events)} high-risk event(s) (score>=70) detected in the timeline — "
                     "these warrant prioritized investigation."
                 )
 
@@ -1364,6 +1364,253 @@ class AutoForensicsService:
                 logger.debug("Could not append audit log for image extraction: %s", exc)
 
         return result
+
+    def analyse_disk_images_in_case(
+        self,
+        case_id: str,
+        *,
+        output_dir: Path | None = None,
+        extra_search_dir: Path | None = None,
+    ) -> dict[str, Any]:
+        """Scan case evidence for disk images and run wipe-recovery analysis.
+
+        For every ``.e01`` / raw disk image found in the case evidence directory
+        (and optionally *extra_search_dir*), the byte-level wipe-recovery
+        analyser is run.  Results are translated into
+        :class:`~.models.Finding` and :class:`~.models.TimelineEvent` objects
+        and *merged* with any findings already stored for the case (so standard
+        pipeline findings are preserved).
+
+        Args:
+            case_id: Case identifier slug.
+            output_dir: Directory for wipe-recovery reports.  Defaults to the
+                case output directory.
+            extra_search_dir: Additional directory to search for disk images
+                (e.g. the original case source folder when the image was not
+                copied into the internal evidence store due to its size).
+
+        Returns a summary dict with:
+        - ``images_found``  -- number of disk images discovered
+        - ``images_analysed`` -- number successfully analysed
+        - ``new_findings`` -- count of new findings added
+        - ``new_events`` -- count of new timeline events added
+        """
+        from .disk_image import DISK_IMAGE_EXTENSIONS, is_disk_image
+        from .models import Finding, TimelineEvent
+        from .wipe_recovery import analyse_disk_image, write_json_report, write_markdown_report
+
+        case = self.require_case(case_id)
+        evidence_dir = Path(case["evidence_dir"])
+        if output_dir is None:
+            output_dir = Path(case["output_dir"])
+
+        # ------------------------------------------------------------------
+        # Discover disk images in evidence (and optional extra search dir)
+        # ------------------------------------------------------------------
+        search_dirs = [evidence_dir]
+        if extra_search_dir is not None and extra_search_dir.is_dir():
+            search_dirs.append(extra_search_dir)
+
+        seen: set[Path] = set()
+        disk_images: list[Path] = []
+        for search_dir in search_dirs:
+            if not search_dir.exists():
+                continue
+            for f in search_dir.rglob("*"):
+                resolved = f.resolve()
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                if f.is_file() and (
+                    f.suffix.lower() in DISK_IMAGE_EXTENSIONS or is_disk_image(f)
+                ):
+                    disk_images.append(f)
+
+        if not disk_images:
+            return {
+                "images_found": 0,
+                "images_analysed": 0,
+                "new_findings": 0,
+                "new_events": 0,
+            }
+
+        # ------------------------------------------------------------------
+        # Load existing findings / timeline so we can merge
+        # ------------------------------------------------------------------
+        raw_findings = self.db.get_findings(case_id)
+        existing_findings: list[Finding] = [
+            Finding(
+                finding_id=r["finding_id"],
+                title=r["title"],
+                severity=r["severity"],
+                confidence=float(r.get("confidence") or 0.5),
+                tactic=r.get("tactic") or "",
+                evidence=r.get("evidence") or [],
+                recommendation=r.get("recommendation") or "",
+            )
+            for r in raw_findings
+        ]
+
+        raw_timeline = self.db.get_timeline(case_id) if hasattr(self.db, "get_timeline") else []
+        existing_timeline: list[TimelineEvent] = [
+            TimelineEvent(
+                timestamp=r.get("timestamp"),
+                source=r.get("source") or "disk_image",
+                event_type=r.get("event_type") or "event",
+                description=r.get("description") or "",
+                risk_score=float(r.get("risk_score") or 0.0),
+                tags=r.get("tags") or [],
+            )
+            for r in raw_timeline
+        ]
+
+        # ------------------------------------------------------------------
+        # Analyse each disk image
+        # ------------------------------------------------------------------
+        import uuid as _uuid
+
+        new_findings: list[Finding] = []
+        new_events: list[TimelineEvent] = []
+        analysed = 0
+
+        for img_path in disk_images:
+            try:
+                img_output = output_dir / f"{img_path.stem}_recovery"
+                result = analyse_disk_image(img_path, img_output)
+                analysed += 1
+
+                # ---- Translate findings ----
+                severity = "medium"
+                if result.wipe_pct > 95:
+                    severity = "high"
+                elif result.wipe_pct > 80:
+                    severity = "medium"
+                else:
+                    severity = "low"
+
+                evidence_lines = result.findings[:]
+
+                new_findings.append(Finding(
+                    finding_id=f"wr-wipe-{_uuid.uuid4().hex[:8]}",
+                    title=f"Partial disk wipe detected on {img_path.name}",
+                    severity=severity,
+                    confidence=0.95,
+                    tactic="Defense Evasion",
+                    technique_id="T1561",
+                    evidence=evidence_lines,
+                    recommendation=(
+                        "Examine surviving partition structures, LUKS headers "
+                        "and NTFS metadata for attribution artefacts. "
+                        "If LUKS2 keyslot area is intact, passphrase recovery "
+                        "may enable full decryption."
+                    ),
+                ))
+
+                if result.partitions:
+                    new_findings.append(Finding(
+                        finding_id=f"wr-gpt-{_uuid.uuid4().hex[:8]}",
+                        title=(
+                            f"GPT backup partition table recovered "
+                            f"({len(result.partitions)} partition(s))"
+                        ),
+                        severity="informational" if severity == "low" else "medium",
+                        confidence=0.99,
+                        tactic="Discovery",
+                        evidence=[
+                            f"Partition {p.index} '{p.name}': "
+                            f"{p.type_guid}  {p.size_bytes // (1024 ** 2)} MiB"
+                            for p in result.partitions
+                        ],
+                        recommendation=(
+                            "Use recovered partition boundaries to guide "
+                            "targeted sector-by-sector carving."
+                        ),
+                    ))
+
+                if result.luks_headers:
+                    lh = result.luks_headers[0]
+                    new_findings.append(Finding(
+                        finding_id=f"wr-luks-{_uuid.uuid4().hex[:8]}",
+                        title=(
+                            f"LUKS2 encrypted volume found on {img_path.name} "
+                            f"(keyslot area intact)"
+                        ),
+                        severity="high",
+                        confidence=0.97,
+                        tactic="Defense Evasion",
+                        technique_id="T1027",
+                        evidence=[
+                            f"LUKS2 UUID: {lh.uuid}",
+                            f"Cipher: {lh.encryption}",
+                            f"KDF: {lh.kdf_type}",
+                            "Keyslot area not wiped — passphrase brute-force possible",
+                        ],
+                        recommendation=(
+                            "Run cryptsetup luksDump and attempt dictionary "
+                            "attack with recovered Argon2i parameters."
+                        ),
+                    ))
+
+                if result.ntfs_created:
+                    new_events.append(TimelineEvent(
+                        timestamp=result.ntfs_created,
+                        source=img_path.name,
+                        event_type="filesystem_created",
+                        description=(
+                            f"NTFS volume formatted inside LUKS2 container "
+                            f"on {img_path.name}"
+                        ),
+                        risk_score=0.4,
+                        tags=["ntfs", "filesystem", "disk_image"],
+                    ))
+
+                if result.mft_records:
+                    names = [r.filename for r in result.mft_records if r.filename]
+                    ts = result.mft_records[0].created or result.ntfs_created
+                    new_events.append(TimelineEvent(
+                        timestamp=ts,
+                        source=img_path.name,
+                        event_type="mft_records_recovered",
+                        description=(
+                            f"NTFS MFT records recovered from {img_path.name}: "
+                            + ", ".join(names)
+                        ),
+                        risk_score=0.3,
+                        tags=["ntfs", "mft", "disk_image"],
+                    ))
+
+                self.db.append_audit_log(
+                    action="wipe_recovery_analysis",
+                    actor="agent",
+                    details={
+                        "image": img_path.name,
+                        "wipe_pct": result.wipe_pct,
+                        "partitions": len(result.partitions),
+                        "luks_headers": len(result.luks_headers),
+                        "mft_records": len(result.mft_records),
+                    },
+                    case_id=case_id,
+                )
+
+            except Exception as exc:
+                logger.warning(
+                    "Wipe recovery analysis failed for %s: %s", img_path.name, exc
+                )
+
+        # ------------------------------------------------------------------
+        # Persist merged findings + timeline
+        # ------------------------------------------------------------------
+        all_findings = existing_findings + new_findings
+        all_timeline = existing_timeline + new_events
+        if new_findings or new_events:
+            self.db.replace_findings_and_timeline(case_id, all_findings, all_timeline)
+
+        return {
+            "images_found": len(disk_images),
+            "images_analysed": analysed,
+            "new_findings": len(new_findings),
+            "new_events": len(new_events),
+        }
 
     def process_drop_item(
         self,

@@ -45,7 +45,7 @@ let refreshTimer = null;
 
 // ─── DOM refs ─────────────────────────────────────────────────────────────────
 
-const healthDot   = document.getElementById('health-dot');
+const healthPill  = document.getElementById('health-pill');
 const healthText  = document.getElementById('health-text');
 const refreshBtn  = document.getElementById('refresh-btn');
 const casesCtn    = document.getElementById('cases-container');
@@ -62,11 +62,11 @@ const overlay     = document.getElementById('overlay');
 async function checkHealth() {
     try {
         await apiFetch('/api/health');
-        healthDot.className = 'health-dot health-dot--ok';
+        healthPill.className = 'health-pill health-pill--ok';
         healthText.textContent = 'Connected';
     } catch (_) {
-        healthDot.className = 'health-dot health-dot--err';
-        healthText.textContent = 'API unreachable';
+        healthPill.className = 'health-pill health-pill--err';
+        healthText.textContent = 'Unreachable';
     }
 }
 

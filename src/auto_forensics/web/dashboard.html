@@ -4,18 +4,28 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Auto Forensics</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/assets/dashboard.css">
 </head>
 <body>
     <nav class="topnav">
         <div class="nav-brand">
-            <span class="nav-icon">⚡</span>
+            <div class="nav-logo">
+                <!-- Forensics spark icon -->
+                <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M8.5 1L3 8.5h4.5L7 15l6-8H8.5L8.5 1z"/>
+                </svg>
+            </div>
             <span class="nav-title">Auto Forensics</span>
         </div>
         <div class="nav-right">
-            <span id="health-dot" class="health-dot"></span>
-            <span id="health-text" class="health-text">Connecting…</span>
-            <button id="refresh-btn" class="btn-icon" title="Refresh">↻</button>
+            <div id="health-pill" class="health-pill">
+                <span class="health-dot"></span>
+                <span id="health-text">Connecting</span>
+            </div>
+            <button id="refresh-btn" class="btn-icon" title="Refresh">&#8635;</button>
         </div>
     </nav>
 
@@ -48,7 +58,7 @@
                 <h2 class="panel-title">Cases</h2>
                 <div class="filter-row">
                     <input type="search" id="search-input" class="search-input"
-                           placeholder="Search by case ID…" autocomplete="off">
+                           placeholder="Search by case ID..." autocomplete="off">
                     <select id="status-filter" class="select-input">
                         <option value="">All statuses</option>
                         <option value="created">Created</option>
@@ -61,7 +71,7 @@
                 </div>
             </div>
             <div id="cases-container">
-                <div class="placeholder">Loading cases…</div>
+                <div class="placeholder">Loading cases...</div>
             </div>
         </section>
     </main>
@@ -69,10 +79,10 @@
     <aside id="detail-drawer" class="drawer drawer--hidden">
         <div class="drawer-header">
             <span id="drawer-title" class="drawer-title">—</span>
-            <button id="drawer-close" class="btn-icon">✕</button>
+            <button id="drawer-close" class="btn-icon" title="Close">&#x2715;</button>
         </div>
         <div id="drawer-body" class="drawer-body">
-            <div class="placeholder">Loading…</div>
+            <div class="placeholder">Loading...</div>
         </div>
     </aside>
     <div id="overlay" class="overlay overlay--hidden"></div>
