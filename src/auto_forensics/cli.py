@@ -1326,6 +1326,28 @@ def _cmd_solve(args: argparse.Namespace, config: AppConfig) -> None:
     agent.run(case_dir=case_dir, case_id=case_id, base_dir=base_dir)
 
 
+def _cmd_shell(args: argparse.Namespace) -> None:
+    """Manage Windows Explorer context-menu integration."""
+    import sys as _sys
+    if _sys.platform != "win32":
+        err_console.print(
+            "[bold red]Shell integration is only supported "
+            "on Windows.[/]"
+        )
+        raise SystemExit(1)
+    from auto_forensics.shell_integration import (
+        install,
+        status,
+        uninstall,
+    )
+    if args.install:
+        install()
+    elif args.uninstall:
+        uninstall()
+    elif args.status:
+        status()
+
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
@@ -1531,6 +1553,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--case-id", default=None, help="Case ID for the ingest step (default: derived from image name).")
     p.add_argument("--no-ingest", action="store_true", help="Extract only, skip case creation and ingest.")
 
+    # shell (Windows Explorer integration)
+    p = sub.add_parser(
+        "shell",
+        help="Manage Windows Explorer context-menu integration.",
+    )
+    grp = p.add_mutually_exclusive_group(required=True)
+    grp.add_argument(
+        "--install", action="store_true",
+        help="Register right-click context menus (requires admin).",
+    )
+    grp.add_argument(
+        "--uninstall", action="store_true",
+        help="Remove right-click context menus (requires admin).",
+    )
+    grp.add_argument(
+        "--status", action="store_true",
+        help="Show current shell-integration status.",
+    )
+
     return parser
 
 
@@ -1692,6 +1733,10 @@ def main() -> None:
 
         if args.command == "solve":
             _cmd_solve(args, config)
+            return
+
+        if args.command == "shell":
+            _cmd_shell(args)
             return
 
     except SecurityError as exc:

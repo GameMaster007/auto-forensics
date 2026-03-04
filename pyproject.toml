@@ -25,10 +25,13 @@ db = ["sqlalchemy>=2.0.36", "psycopg[binary]>=3.2.9"]
 server = ["fastapi>=0.110.0,<1.0.0", "uvicorn>=0.30.0,<1.0.0"]
 dev = ["pytest>=8.0.0,<9.0.0"]
 mount = ["pyewf>=20230709", "pytsk3>=20231210"]
+tray = ["pystray>=0.19.5", "Pillow>=10.0.0"]
+build = ["pyinstaller>=6.0.0"]
 
 [project.scripts]
 auto-forensics = "auto_forensics.cli:main"
 auto-forensics-api = "auto_forensics.api:main"
+auto-forensics-launcher = "auto_forensics.launcher:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

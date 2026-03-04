@@ -11,3 +11,10 @@ training/.venv/
 training/outputs/
 output/
 .auto_forensics/
+
+# Build artifacts
+dist/
+build/
+*.spec.log
+assets/icon.ico
+assets/icon.png
