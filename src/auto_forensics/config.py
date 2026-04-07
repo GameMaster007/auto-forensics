@@ -24,6 +24,38 @@ def _parse_path_list_env(name: str, default: str) -> list[Path]:
     return [Path(p).expanduser().resolve() for p in _parse_csv_env(name, default)]
 
 
+def _parse_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _parse_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _parse_float_env(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 def _hash_api_key(raw: str | None) -> str | None:
     if not raw:
         return None
@@ -109,7 +141,7 @@ class AppConfig:
             cases_dir=cases_dir,
             db_path=db_path,
             host=os.getenv("AUTO_FORENSICS_HOST", "127.0.0.1"),
-            port=int(os.getenv("AUTO_FORENSICS_PORT", "8765")),
+            port=_parse_int_env("AUTO_FORENSICS_PORT", 8765),
             production=production,
             api_key_hash=_hash_api_key(os.getenv("AUTO_FORENSICS_API_KEY")),
             allowed_origins=_parse_csv_env("AUTO_FORENSICS_ALLOWED_ORIGINS", ""),
@@ -118,19 +150,29 @@ class AppConfig:
                 "AUTO_FORENSICS_ALLOWED_INGEST_ROOTS",
                 str(Path.home()),
             ),
-            rate_limit_per_minute=int(os.getenv("AUTO_FORENSICS_RATE_LIMIT_PER_MINUTE", "240")),
+            rate_limit_per_minute=_parse_int_env(
+                "AUTO_FORENSICS_RATE_LIMIT_PER_MINUTE",
+                240,
+            ),
             llama_endpoint=os.getenv("AUTO_FORENSICS_LLAMA_ENDPOINT", "http://localhost:11434"),
             llama_model=os.getenv("AUTO_FORENSICS_LLAMA_MODEL", "llama3.1:8b"),
             security_policy=SecurityPolicy(
-                max_file_size_bytes=int(
-                    os.getenv("AUTO_FORENSICS_MAX_FILE_SIZE_BYTES", str(100 * 1024 * 1024))
+                max_file_size_bytes=_parse_int_env(
+                    "AUTO_FORENSICS_MAX_FILE_SIZE_BYTES",
+                    100 * 1024 * 1024,
                 ),
-                max_total_files=int(os.getenv("AUTO_FORENSICS_MAX_TOTAL_FILES", "200000")),
-                max_text_bytes=int(
-                    os.getenv("AUTO_FORENSICS_MAX_TEXT_BYTES", str(4 * 1024 * 1024))
+                max_total_files=_parse_int_env(
+                    "AUTO_FORENSICS_MAX_TOTAL_FILES",
+                    200000,
                 ),
-                follow_symlinks=os.getenv("AUTO_FORENSICS_FOLLOW_SYMLINKS", "false").lower()
-                == "true",
+                max_text_bytes=_parse_int_env(
+                    "AUTO_FORENSICS_MAX_TEXT_BYTES",
+                    4 * 1024 * 1024,
+                ),
+                follow_symlinks=_parse_bool_env(
+                    "AUTO_FORENSICS_FOLLOW_SYMLINKS",
+                    False,
+                ),
             ),
             plugin_dirs=_parse_path_list_env(
                 "AUTO_FORENSICS_PLUGIN_DIRS",
@@ -147,25 +189,43 @@ class AppConfig:
             virustotal_api_key=os.getenv("AUTO_FORENSICS_VIRUSTOTAL_API_KEY"),
             malwarebazaar_api_key=os.getenv("AUTO_FORENSICS_MALWAREBAZAAR_API_KEY"),
             abuseipdb_api_key=os.getenv("AUTO_FORENSICS_ABUSEIPDB_API_KEY"),
-            enable_whois_lookup=os.getenv("AUTO_FORENSICS_ENABLE_WHOIS", "false").lower() == "true",
-            enrichment_cache_ttl_minutes=int(
-                os.getenv("AUTO_FORENSICS_ENRICHMENT_CACHE_TTL_MINUTES", str(24 * 60))
+            enable_whois_lookup=_parse_bool_env(
+                "AUTO_FORENSICS_ENABLE_WHOIS",
+                False,
             ),
-            enrichment_http_retries=int(os.getenv("AUTO_FORENSICS_ENRICHMENT_HTTP_RETRIES", "2")),
-            enrichment_backoff_base_seconds=float(
-                os.getenv("AUTO_FORENSICS_ENRICHMENT_BACKOFF_BASE_SECONDS", "0.75")
+            enrichment_cache_ttl_minutes=_parse_int_env(
+                "AUTO_FORENSICS_ENRICHMENT_CACHE_TTL_MINUTES",
+                24 * 60,
             ),
-            enrichment_backoff_max_seconds=float(
-                os.getenv("AUTO_FORENSICS_ENRICHMENT_BACKOFF_MAX_SECONDS", "8.0")
+            enrichment_http_retries=_parse_int_env(
+                "AUTO_FORENSICS_ENRICHMENT_HTTP_RETRIES",
+                2,
             ),
-            db_pool_size=int(os.getenv("AUTO_FORENSICS_DB_POOL_SIZE", "5")),
-            db_max_overflow=int(os.getenv("AUTO_FORENSICS_DB_MAX_OVERFLOW", "10")),
-            db_pool_timeout_seconds=int(os.getenv("AUTO_FORENSICS_DB_POOL_TIMEOUT_SECONDS", "30")),
-            db_pool_recycle_seconds=int(os.getenv("AUTO_FORENSICS_DB_POOL_RECYCLE_SECONDS", "1800")),
-            job_retention_days=int(os.getenv("AUTO_FORENSICS_JOB_RETENTION_DAYS", "30")),
+            enrichment_backoff_base_seconds=_parse_float_env(
+                "AUTO_FORENSICS_ENRICHMENT_BACKOFF_BASE_SECONDS",
+                0.75,
+            ),
+            enrichment_backoff_max_seconds=_parse_float_env(
+                "AUTO_FORENSICS_ENRICHMENT_BACKOFF_MAX_SECONDS",
+                8.0,
+            ),
+            db_pool_size=_parse_int_env("AUTO_FORENSICS_DB_POOL_SIZE", 5),
+            db_max_overflow=_parse_int_env("AUTO_FORENSICS_DB_MAX_OVERFLOW", 10),
+            db_pool_timeout_seconds=_parse_int_env(
+                "AUTO_FORENSICS_DB_POOL_TIMEOUT_SECONDS",
+                30,
+            ),
+            db_pool_recycle_seconds=_parse_int_env(
+                "AUTO_FORENSICS_DB_POOL_RECYCLE_SECONDS",
+                1800,
+            ),
+            job_retention_days=_parse_int_env(
+                "AUTO_FORENSICS_JOB_RETENTION_DAYS",
+                30,
+            ),
             watch_dir=_parse_optional_path_env("AUTO_FORENSICS_WATCH_DIR"),
-            watch_interval=int(os.getenv("AUTO_FORENSICS_WATCH_INTERVAL", "30")),
-            auto_extract=os.getenv("AUTO_FORENSICS_AUTO_EXTRACT", "true").lower() == "true",
+            watch_interval=_parse_int_env("AUTO_FORENSICS_WATCH_INTERVAL", 30),
+            auto_extract=_parse_bool_env("AUTO_FORENSICS_AUTO_EXTRACT", True),
         )
 
     def ensure_dirs(self) -> None:

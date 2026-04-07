@@ -45,6 +45,72 @@ class DatabaseBackend(Protocol):
 
     def add_analyst_note(self, case_id: str, author: str, content: str) -> dict[str, Any]: ...
     def get_analyst_notes(self, case_id: str) -> list[dict[str, Any]]: ...
+    def list_workspace_views(self, case_id: str) -> list[dict[str, Any]]: ...
+    def upsert_workspace_view(
+        self,
+        case_id: str,
+        name: str,
+        section: str,
+        filters: dict[str, Any],
+        sort: dict[str, Any],
+        layout: dict[str, Any],
+        view_id: str | None = None,
+    ) -> dict[str, Any]: ...
+    def delete_workspace_view(self, case_id: str, view_id: str) -> bool: ...
+    def list_notebook_entries(self, case_id: str) -> list[dict[str, Any]]: ...
+    def create_notebook_entry(
+        self,
+        case_id: str,
+        kind: str,
+        title: str,
+        body: str,
+        links: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
+    def update_notebook_entry(
+        self,
+        case_id: str,
+        entry_id: str,
+        title: str | None = None,
+        body: str | None = None,
+        kind: str | None = None,
+        links: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None: ...
+    def create_agent_session(
+        self,
+        case_id: str,
+        goal: str,
+        status: str,
+        model_config: dict[str, Any],
+        summary: str = "",
+        error: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]: ...
+    def update_agent_session(
+        self,
+        session_id: str,
+        status: str | None = None,
+        summary: str | None = None,
+        error: str | None = None,
+        completed_at: str | None = None,
+    ) -> dict[str, Any] | None: ...
+    def list_agent_sessions(self, case_id: str) -> list[dict[str, Any]]: ...
+    def get_agent_session(self, case_id: str, session_id: str) -> dict[str, Any] | None: ...
+    def replace_agent_steps(self, session_id: str, steps: list[dict[str, Any]]) -> None: ...
+    def list_agent_steps(self, session_id: str) -> list[dict[str, Any]]: ...
+    def replace_agent_recommendations(
+        self,
+        session_id: str,
+        case_id: str,
+        recommendations: list[dict[str, Any]],
+    ) -> None: ...
+    def list_agent_recommendations(self, session_id: str) -> list[dict[str, Any]]: ...
+    def replace_case_graph(
+        self,
+        case_id: str,
+        nodes: list[dict[str, Any]],
+        edges: list[dict[str, Any]],
+    ) -> None: ...
+    def get_case_graph(self, case_id: str) -> dict[str, list[dict[str, Any]]]: ...
 
     def append_audit_log(
         self,

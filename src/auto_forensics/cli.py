@@ -26,8 +26,16 @@ from .agent import ForensicAgent
 from .api import main as api_main
 from .config import AppConfig
 from .pipeline import PipelineConfig, run_case
-from .security import SecurityError, validate_case_id
+from .security import SecurityError, validate_case_id, validate_webhook_url
 from .service import AutoForensicsService
+
+# TUI import with graceful fallback
+try:
+    from .tui import main as tui_main
+    TUI_AVAILABLE = True
+except ImportError:
+    TUI_AVAILABLE = False
+    tui_main = None  # type: ignore
 
 console = Console()
 err_console = Console(stderr=True)
@@ -777,6 +785,161 @@ def _cmd_add_note(args: argparse.Namespace, svc: AutoForensicsService) -> None:
     console.print(Panel("\n".join(lines), title="[bold green]Note Added[/]", border_style="green", expand=False))
 
 
+def _cmd_workspace(args: argparse.Namespace, svc: AutoForensicsService) -> None:
+    data = svc.case_overview(args.case_id)
+    payload = {
+        "case": data.get("case", {}),
+        "summary": data.get("summary", {}),
+        "threads": data.get("threads", []),
+        "workspace_views": data.get("workspace_views", []),
+        "notebook_entries": data.get("notebook_entries", []),
+        "agent_sessions": data.get("agent_sessions", []),
+    }
+    if args.json:
+        console.print_json(json.dumps(payload))
+        return
+    case = payload["case"]
+    summary = payload["summary"]
+    lines = [
+        f"Case:      [bold cyan]{case.get('case_id', args.case_id)}[/]",
+        f"Status:    {_badge(str(case.get('status', 'unknown')))}",
+        f"Risk:      {summary.get('risk_score') or summary.get('total_risk_score') or '—'}",
+        f"Views:     [bold]{len(payload['workspace_views'])}[/]",
+        f"Notebook:  [bold]{len(payload['notebook_entries'])}[/]",
+        f"Threads:   [bold]{len(payload['threads'])}[/]",
+        f"Agents:    [bold]{len(payload['agent_sessions'])}[/]",
+    ]
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title="[bold]Workspace Summary[/]",
+            border_style="cyan",
+            expand=False,
+        )
+    )
+
+
+def _cmd_notebook(args: argparse.Namespace, svc: AutoForensicsService) -> None:
+    if getattr(args, "add", None):
+        entry = svc.create_notebook_entry(
+            args.case_id,
+            kind=args.kind,
+            title=args.title or args.kind.replace("_", " ").title(),
+            body=args.add,
+            links={},
+        )
+        console.print(
+            Panel(
+                "\n".join(
+                    [
+                        f"Case:  [bold cyan]{args.case_id}[/]",
+                        f"Kind:  [bold]{entry.get('kind', args.kind)}[/]",
+                        f"Title: {entry.get('title', '—')}",
+                        f"ID:    [dim]{entry.get('entry_id', '—')}[/]",
+                    ]
+                ),
+                title="[bold green]Notebook Entry Added[/]",
+                border_style="green",
+                expand=False,
+            )
+        )
+        return
+    entries = svc.list_notebook_entries(args.case_id)
+    if args.json:
+        console.print_json(json.dumps(entries))
+        return
+    if not entries:
+        console.print("[dim]No notebook entries found.[/]")
+        return
+    table = Table(
+        box=box.ROUNDED,
+        show_header=True,
+        header_style="bold cyan",
+        border_style="dim",
+        caption=f"[dim]{len(entries)} entry(s)[/]",
+    )
+    table.add_column("Kind", width=14)
+    table.add_column("Title", style="bold")
+    table.add_column("Updated", width=20, style="dim")
+    table.add_column("Body")
+    for entry in entries:
+        table.add_row(
+            str(entry.get("kind", "")),
+            str(entry.get("title", "")),
+            _fmt_ts(entry.get("updated_at")),
+            str(entry.get("body", ""))[:120],
+        )
+    console.print(table)
+
+
+def _cmd_agent(args: argparse.Namespace, svc: AutoForensicsService) -> None:
+    if args.agent_command == "start":
+        result = svc.start_agent_session(args.case_id, goal=args.goal)
+        if args.json:
+            console.print_json(json.dumps(result))
+            return
+        session = dict(result.get("session") or {})
+        border_style = "green" if result.get("accepted", True) else "yellow"
+        title = (
+            "[bold green]Agent Session Started[/]"
+            if result.get("accepted", True)
+            else "[bold yellow]Agent Session Already Running[/]"
+        )
+        console.print(
+            Panel(
+                "\n".join(
+                    [
+                        f"Case:    [bold cyan]{args.case_id}[/]",
+                        f"Session: [bold]{session.get('session_id', '—')}[/]",
+                        f"Status:  {_badge(str(session.get('status', 'queued')))}",
+                        f"Goal:    {session.get('goal', '')}",
+                    ]
+                ),
+                title=title,
+                border_style=border_style,
+                expand=False,
+            )
+        )
+        return
+    if args.agent_command == "approve":
+        session = svc.approve_agent_session(
+            args.case_id,
+            args.session_id,
+            action=args.action,
+        )
+    else:
+        session = svc.get_agent_session(args.case_id, args.session_id) if args.session_id else (
+            svc.list_agent_sessions(args.case_id)[0]
+            if svc.list_agent_sessions(args.case_id)
+            else {}
+        )
+    if args.agent_command == "cancel":
+        session = svc.cancel_agent_session(args.case_id, args.session_id)
+    if args.json:
+        console.print_json(json.dumps(session))
+        return
+    if not session:
+        console.print("[dim]No agent session found.[/]")
+        return
+    lines = [
+        f"Case:      [bold cyan]{session.get('case_id', args.case_id)}[/]",
+        f"Session:   [bold]{session.get('session_id', '—')}[/]",
+        f"Status:    {_badge(str(session.get('status', 'unknown')))}",
+        f"Goal:      {session.get('goal', '—')}",
+        f"Summary:   {session.get('summary', '—') or '—'}",
+        f"Steps:     [bold]{len(session.get('steps', []))}[/]",
+        f"Recs:      [bold]{len(session.get('recommendations', []))}[/]",
+    ]
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title="[bold]Agent Session[/]",
+            border_style="cyan",
+            expand=False,
+        )
+    )
+
+
 def _cmd_scan(args: argparse.Namespace, svc: AutoForensicsService) -> None:
     with Progress(
         SpinnerColumn(),
@@ -1314,16 +1477,47 @@ def _cmd_version() -> None:
 
 
 def _cmd_solve(args: argparse.Namespace, config: AppConfig) -> None:
-    """Launch the autonomous forensic agent to solve a case without user input."""
+    """Launch the autonomous workflow using the agent session model."""
     agent = ForensicAgent(config, enable_llm=not getattr(args, "disable_llama", False))
-
     case_dir = Path(args.case_dir).expanduser().resolve() if getattr(args, "case_dir", None) else None
     case_id = getattr(args, "case_id", None) or None
-
-    # base_dir: directory that contains the Case folder (tool root)
     base_dir = Path(__file__).resolve().parent.parent.parent
+    if case_dir is None:
+        case_dir = agent.discover_case_dir(base_dir) if hasattr(agent, "discover_case_dir") else None
+    if case_dir is None:
+        case_dir = Path(args.case_dir).expanduser().resolve() if getattr(args, "case_dir", None) else None
+    if case_dir is None:
+        from .agent import discover_case_dir
 
-    agent.run(case_dir=case_dir, case_id=case_id, base_dir=base_dir)
+        case_dir = discover_case_dir(base_dir)
+    if case_dir is None:
+        raise SecurityError("No Case folder found for autonomous solve.")
+    from .agent import _find_evidence_dir, derive_case_id
+
+    resolved_case_dir = Path(case_dir).expanduser().resolve()
+    resolved_case_id = case_id or derive_case_id(resolved_case_dir)
+    svc = AutoForensicsService(config)
+    svc.create_case(resolved_case_id)
+    svc.ingest_case(resolved_case_id, _find_evidence_dir(resolved_case_dir))
+    session = svc.run_agent_session_sync(
+        resolved_case_id,
+        goal="Solve the case end-to-end and produce an analyst-ready brief.",
+    )
+    console.print(
+        Panel(
+            "\n".join(
+                [
+                    f"Case:    [bold cyan]{resolved_case_id}[/]",
+                    f"Session: [bold]{session.get('session_id', '—')}[/]",
+                    f"Status:  {_badge(str(session.get('status', 'unknown')))}",
+                    f"Summary: {session.get('summary', '—')}",
+                ]
+            ),
+            title="[bold green]Solve Complete[/]",
+            border_style="green",
+            expand=False,
+        )
+    )
 
 
 def _cmd_shell(args: argparse.Namespace) -> None:
@@ -1346,6 +1540,219 @@ def _cmd_shell(args: argparse.Namespace) -> None:
         uninstall()
     elif args.status:
         status()
+
+
+def _cmd_ti(args: argparse.Namespace, svc: AutoForensicsService) -> None:
+    """Threat Intelligence feed operations."""
+    if args.json:
+        console.print_json = lambda x: console.print(x)
+
+    if args.update:
+        result = svc.update_ti_feeds()
+        lines: list[str] = [
+            "[bold cyan]Threat Intelligence Feed Update[/]",
+            "",
+        ]
+        for name, info in result.items():
+            status = info.get("status", "unknown")
+            if status == "ok":
+                lines.append(f"  [green]✓[/] {name}: {info.get('records', 0)} records")
+            else:
+                lines.append(f"  [red]✗[/] {name}: {info.get('message', 'failed')}")
+        console.print(Panel("\n".join(lines), border_style="cyan", expand=False))
+        return
+
+    if args.lookup_type and args.lookup_value:
+        result = svc.lookup_ti_ioc(args.lookup_type, args.lookup_value)
+        if result:
+            lines = [
+                f"[bold cyan]IOC Lookup Result[/]",
+                "",
+                f"  Type:   [bold]{result['ioc_type']}[/]",
+                f"  Value:  [bold]{result['value']}[/]",
+                f"  Source: {result['source']}",
+                f"  Confidence: {result['confidence']}%",
+            ]
+            if result.get('tags'):
+                lines.append(f"  Tags:   {', '.join(result['tags'])}")
+            console.print(Panel("\n".join(lines), border_style="green", expand=False))
+        else:
+            console.print(Panel(
+                f"[dim]No TI match for {args.lookup_type}:{args.lookup_value}[/]",
+                border_style="yellow", expand=False
+            ))
+        return
+
+    if args.status:
+        status_info = svc.get_ti_feed_status()
+        lines = [
+            "[bold cyan]Threat Intelligence Status[/]",
+            "",
+            f"  Cached records:  [bold]{status_info['cached_records']}[/]",
+            f"  Feeds configured: [bold]{status_info['feeds_configured']}[/]",
+        ]
+        for feed, ts in status_info.get('last_updates', {}).items():
+            lines.append(f"  [dim]{feed}:[/] [dim]{ts.split('T')[0] if ts else '—'}[/]")
+        console.print(Panel("\n".join(lines), border_style="cyan", expand=False))
+        return
+
+    if args.enrich_case:
+        validate_case_id(args.enrich_case)
+        result = svc.enrich_case_with_ti(args.enrich_case)
+        lines = [
+            f"[bold cyan]TI Enrichment for {args.enrich_case}[/]",
+            "",
+            f"  Total IOCs:      [bold]{result['total_iocs']}[/]",
+            f"  Matches found:   [bold green]{result['matches_found']}[/]",
+        ]
+        if result.get('matches'):
+            lines.extend(["", "  Top matches:"])
+            for m in result['matches'][:5]:
+                ioc = m.get('ioc', {})
+                ti = m.get('ti_record', {})
+                lines.append(f"    [dim]•[/] {ioc.get('value', '—')} from {ti.get('source', '—')}")
+        console.print(Panel("\n".join(lines), border_style="green", expand=False))
+        return
+
+    console.print("[dim]Use --update, --status, --lookup-type/--lookup-value, or --enrich-case[/]")
+
+
+def _cmd_diff(args: argparse.Namespace, svc: AutoForensicsService) -> None:
+    """Compare two cases."""
+    validate_case_id(args.case_a)
+    validate_case_id(args.case_b)
+
+    if args.format == "json":
+        result = svc.compare_cases(args.case_a, args.case_b, "all")
+        console.print_json(json.dumps(result))
+        return
+
+    if args.format == "html":
+        report = svc.diff_report_md_html(args.case_a, args.case_b, "html")
+        print(report)
+        return
+
+    # Default markdown output
+    report = svc.diff_report_md_html(args.case_a, args.case_b, "md")
+    console.print(Markdown(report))
+
+
+def _cmd_alert(args: argparse.Namespace, svc: AutoForensicsService) -> None:
+    """Manage alert rules and evaluate cases."""
+    cmd = getattr(args, "alert_command", None)
+
+    if cmd == "list":
+        rules = svc.list_alert_rules()
+        if args.json:
+            console.print_json(json.dumps(rules))
+            return
+        if not rules:
+            console.print("[dim]No alert rules configured.[/]")
+            return
+        t = Table(
+            box=box.ROUNDED,
+            show_header=True,
+            header_style="bold cyan",
+            border_style="dim",
+            caption=f"[dim]{len(rules)} rule(s)[/]",
+        )
+        t.add_column("ID", style="dim", min_width=20)
+        t.add_column("Name", style="bold")
+        t.add_column("Condition")
+        t.add_column("Channels")
+        t.add_column("Enabled", justify="center")
+        for r in rules:
+            cond = r.get("trigger_condition", {})
+            cond_str = f"{cond.get('type', '—')}"
+            if cond.get('threshold'):
+                cond_str += f"={cond.get('threshold')}"
+            t.add_row(
+                r.get("rule_id", "—")[:20],
+                r.get("name", "—"),
+                cond_str,
+                ", ".join(r.get("channels", [])),
+                "[green]yes[/]" if r.get("enabled") else "[dim]no[/]",
+            )
+        console.print(t)
+        return
+
+    if cmd == "add":
+        rule = {
+            "rule_id": args.rule_id,
+            "name": args.name,
+            "description": args.description,
+            "enabled": True,
+            "trigger_condition": {
+                "type": args.condition_type,
+                "threshold": args.threshold,
+            },
+            "channels": ["console"],
+        }
+        ok = svc.add_alert_rule(rule)
+        if ok:
+            console.print(f"[green]✓[/] Added alert rule: {args.rule_id}")
+        else:
+            console.print("[red]✗[/] Failed to add rule")
+        return
+
+    if cmd == "remove":
+        ok = svc.remove_alert_rule(args.rule_id)
+        if ok:
+            console.print(f"[green]✓[/] Removed alert rule: {args.rule_id}")
+        else:
+            console.print("[red]✗[/] Rule not found")
+        return
+
+    if cmd == "eval":
+        validate_case_id(args.case_id)
+        alerts = svc.run_alert_evaluation(args.case_id)
+        if args.json:
+            console.print_json(json.dumps(alerts))
+            return
+        if not alerts:
+            console.print("[dim]No alerts triggered for this case.[/]")
+            return
+        t = Table(
+            box=box.ROUNDED,
+            show_header=True,
+            header_style="bold red",
+            border_style="dim",
+            caption=f"[dim]{len(alerts)} alert(s) triggered[/]",
+        )
+        t.add_column("Severity", width=10)
+        t.add_column("Rule")
+        t.add_column("Message", max_width=50)
+        for a in alerts:
+            sev_style = {
+                "critical": "bold red",
+                "high": "red",
+                "medium": "yellow",
+                "low": "dim",
+                "info": "dim",
+            }.get(a.get("severity"), "white")
+            t.add_row(
+                Text(a.get("severity", "—").upper(), style=sev_style),
+                a.get("rule_id", "—")[:20],
+                a.get("message", "—")[:50],
+            )
+        console.print(t)
+        return
+
+    if cmd == "test-webhook":
+        try:
+            # Validate URL to prevent SSRF attacks
+            require_https = svc.config.production
+            validate_webhook_url(args.url, require_https=require_https)
+            ok = svc.test_webhook(args.url)
+            if ok:
+                console.print(f"[green]✓[/] Webhook {args.url} responded successfully")
+            else:
+                console.print(f"[red]✗[/] Webhook {args.url} test failed")
+        except SecurityError as exc:
+            console.print(f"[red]✗[/] {exc}")
+        return
+
+    console.print("[dim]Use: list, add, remove, eval, or test-webhook[/]")
 
 
 # ---------------------------------------------------------------------------
@@ -1393,7 +1800,11 @@ def build_parser() -> argparse.ArgumentParser:
     # report
     p = sub.add_parser("report", help="Print generated case report.")
     p.add_argument("--case-id", required=True, help="Case identifier.")
-    p.add_argument("--format", choices=["json", "md", "html", "navigator", "stix"], default="json")
+    p.add_argument(
+        "--format",
+        choices=["json", "md", "html", "brief", "navigator", "stix"],
+        default="json",
+    )
 
     # jobs
     p = sub.add_parser("jobs", help="List case analysis/enrichment jobs.")
@@ -1419,6 +1830,63 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--case-id", required=True, help="Case identifier.")
     p.add_argument("--text", required=True, help="Note text content.")
     p.add_argument("--author", default="analyst", help="Note author (default: analyst).")
+
+    # workspace
+    p = sub.add_parser("workspace", help="Show workspace summary for a case.")
+    p.add_argument("--case-id", required=True, help="Case identifier.")
+    p.add_argument("--json", action="store_true", help="Emit JSON output.")
+
+    # notebook
+    p = sub.add_parser("notebook", help="List or add case notebook entries.")
+    p.add_argument("--case-id", required=True, help="Case identifier.")
+    p.add_argument("--json", action="store_true", help="Emit JSON output.")
+    p.add_argument("--add", default=None, help="Create a new notebook entry with this body.")
+    p.add_argument(
+        "--kind",
+        choices=["note", "hypothesis", "verdict", "agent_summary"],
+        default="note",
+        help="Notebook entry kind when using --add.",
+    )
+    p.add_argument("--title", default=None, help="Optional title when using --add.")
+
+    # agent
+    p = sub.add_parser("agent", help="Manage autonomous agent sessions.")
+    agent_sub = p.add_subparsers(dest="agent_command", required=True)
+
+    p_start = agent_sub.add_parser("start", help="Start a case agent session.")
+    p_start.add_argument("--case-id", required=True, help="Case identifier.")
+    p_start.add_argument(
+        "--goal",
+        default="Investigate this case and prioritize the next analyst actions.",
+        help="Agent goal statement.",
+    )
+    p_start.add_argument("--json", action="store_true", help="Emit JSON output.")
+
+    p_status = agent_sub.add_parser("status", help="Show agent session status.")
+    p_status.add_argument("--case-id", required=True, help="Case identifier.")
+    p_status.add_argument("--session-id", default=None, help="Specific session identifier.")
+    p_status.add_argument("--json", action="store_true", help="Emit JSON output.")
+
+    p_approve = agent_sub.add_parser("approve", help="Approve a pending agent action.")
+    p_approve.add_argument("--case-id", required=True, help="Case identifier.")
+    p_approve.add_argument("--session-id", required=True, help="Session identifier.")
+    p_approve.add_argument(
+        "--action",
+        required=True,
+        choices=[
+            "rerun_analysis",
+            "start_enrichment",
+            "generate_verdict",
+            "export_report_bundle",
+        ],
+        help="Pending action to approve.",
+    )
+    p_approve.add_argument("--json", action="store_true", help="Emit JSON output.")
+
+    p_cancel = agent_sub.add_parser("cancel", help="Cancel an agent session.")
+    p_cancel.add_argument("--case-id", required=True, help="Case identifier.")
+    p_cancel.add_argument("--session-id", required=True, help="Session identifier.")
+    p_cancel.add_argument("--json", action="store_true", help="Emit JSON output.")
 
     # serve
     p = sub.add_parser("serve", help="Start the API server.")
@@ -1572,6 +2040,96 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show current shell-integration status.",
     )
 
+    # ti (Threat Intelligence)
+    p = sub.add_parser(
+        "ti",
+        help="Threat Intelligence feed operations.",
+    )
+    p.add_argument(
+        "--lookup-type",
+        default=None,
+        help="IOC type for lookup (ip, domain, hash, etc.)",
+    )
+    p.add_argument(
+        "--lookup-value",
+        default=None,
+        help="IOC value to look up",
+    )
+    p.add_argument(
+        "--update", action="store_true",
+        help="Update TI feeds from configured sources",
+    )
+    p.add_argument(
+        "--status", action="store_true",
+        help="Show TI feed status",
+    )
+    p.add_argument(
+        "--enrich-case",
+        default=None,
+        help="Enrich a case's IOCs with TI data",
+    )
+    p.add_argument(
+        "--json", action="store_true",
+        help="Emit JSON output",
+    )
+
+    # diff (Case comparison)
+    p = sub.add_parser(
+        "diff",
+        help="Compare two cases for differences.",
+    )
+    p.add_argument(
+        "--case-a", required=True,
+        help="First case ID",
+    )
+    p.add_argument(
+        "--case-b", required=True,
+        help="Second case ID",
+    )
+    p.add_argument(
+        "--format", choices=["md", "json", "html"], default="md",
+        help="Output format",
+    )
+
+    # alert (Alerting)
+    p = sub.add_parser(
+        "alert",
+        help="Manage alert rules and trigger alerts.",
+    )
+    sub_alert = p.add_subparsers(dest="alert_command", required=True)
+
+    p_list = sub_alert.add_parser("list", help="List alert rules")
+    p_list.add_argument("--json", action="store_true", help="Emit JSON")
+
+    p_add = sub_alert.add_parser("add", help="Add a new alert rule")
+    p_add.add_argument("--rule-id", required=True, help="Rule identifier")
+    p_add.add_argument("--name", required=True, help="Rule name")
+    p_add.add_argument("--description", default="", help="Rule description")
+    p_add.add_argument(
+        "--condition-type",
+        choices=["severity_threshold", "finding_count", "risk_score", "critical_ioc"],
+        default="severity_threshold",
+        help="Trigger condition type",
+    )
+    p_add.add_argument(
+        "--threshold",
+        default="high",
+        help="Threshold value for condition",
+    )
+
+    p_remove = sub_alert.add_parser("remove", help="Remove an alert rule")
+    p_remove.add_argument("--rule-id", required=True, help="Rule to remove")
+
+    p_eval = sub_alert.add_parser("eval", help="Evaluate a case against rules")
+    p_eval.add_argument("--case-id", required=True, help="Case to evaluate")
+    p_eval.add_argument("--json", action="store_true", help="Emit JSON")
+
+    p_test = sub_alert.add_parser("test-webhook", help="Test webhook URL")
+    p_test.add_argument("--url", required=True, help="Webhook URL to test")
+
+    # tui (interactive TUI dashboard)
+    p = sub.add_parser("tui", help="Launch the interactive TUI dashboard.")
+
     return parser
 
 
@@ -1643,6 +2201,21 @@ def main() -> None:
         if args.command == "notes":
             validate_case_id(args.case_id)
             _cmd_notes(args, ensure_service())
+            return
+
+        if args.command == "workspace":
+            validate_case_id(args.case_id)
+            _cmd_workspace(args, ensure_service())
+            return
+
+        if args.command == "notebook":
+            validate_case_id(args.case_id)
+            _cmd_notebook(args, ensure_service())
+            return
+
+        if args.command == "agent":
+            validate_case_id(args.case_id)
+            _cmd_agent(args, ensure_service())
             return
 
         if args.command == "add-note":
@@ -1737,6 +2310,28 @@ def main() -> None:
 
         if args.command == "shell":
             _cmd_shell(args)
+            return
+
+        if args.command == "ti":
+            _cmd_ti(args, ensure_service())
+            return
+
+        if args.command == "diff":
+            _cmd_diff(args, ensure_service())
+            return
+
+        if args.command == "alert":
+            _cmd_alert(args, ensure_service())
+            return
+
+        if args.command == "tui":
+            if not TUI_AVAILABLE:
+                err_console.print(
+                    "[bold red]Textual is not installed.[/]\n"
+                    "Install with: pip install textual>=0.85.0"
+                )
+                raise SystemExit(1)
+            tui_main()
             return
 
     except SecurityError as exc:

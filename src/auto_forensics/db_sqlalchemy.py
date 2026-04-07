@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from ._db_sqlalchemy_tables import define_tables
 from .migrations import LATEST_SCHEMA_VERSION, MIGRATION_STEPS
 from .models import IOC, IOCEnrichment, Finding, TimelineEvent, utc_now_iso
 
@@ -42,144 +43,25 @@ class SQLAlchemyDatabase:
         self.engine = sa.create_engine(database_url, **engine_kwargs)
         md = sa.MetaData()
 
-        self.cases = sa.Table(
-            "cases",
-            md,
-            sa.Column("case_id", sa.String(128), primary_key=True),
-            sa.Column("created_at", sa.Text, nullable=False),
-            sa.Column("updated_at", sa.Text, nullable=False),
-            sa.Column("status", sa.String(64), nullable=False),
-            sa.Column("evidence_dir", sa.Text, nullable=False),
-            sa.Column("output_dir", sa.Text, nullable=False),
-            sa.Column("last_error", sa.Text, nullable=True),
-        )
-
-        self.artifacts = sa.Table(
-            "artifacts",
-            md,
-            sa.Column("artifact_pk", sa.Integer, primary_key=True, autoincrement=True),
-            sa.Column("case_id", sa.String(128), sa.ForeignKey("cases.case_id", ondelete="CASCADE"), nullable=False),
-            sa.Column("rel_path", sa.Text, nullable=False),
-            sa.Column("artifact_type", sa.String(64), nullable=False),
-            sa.Column("size_bytes", sa.Integer, nullable=False),
-            sa.Column("sha256", sa.String(128), nullable=False),
-            sa.Column("ingested_at", sa.Text, nullable=False),
-            sa.Column("metadata_json", sa.Text, nullable=False),
-        )
-
-        self.findings = sa.Table(
-            "findings",
-            md,
-            sa.Column("finding_id", sa.String(128), primary_key=True),
-            sa.Column("case_id", sa.String(128), sa.ForeignKey("cases.case_id", ondelete="CASCADE"), nullable=False),
-            sa.Column("title", sa.Text, nullable=False),
-            sa.Column("severity", sa.String(32), nullable=False),
-            sa.Column("confidence", sa.Float, nullable=False),
-            sa.Column("tactic", sa.String(128), nullable=False),
-            sa.Column("evidence_json", sa.Text, nullable=False),
-            sa.Column("recommendation", sa.Text, nullable=False),
-            sa.Column("created_at", sa.Text, nullable=False),
-        )
-
-        self.timeline = sa.Table(
-            "timeline",
-            md,
-            sa.Column("timeline_pk", sa.Integer, primary_key=True, autoincrement=True),
-            sa.Column("case_id", sa.String(128), sa.ForeignKey("cases.case_id", ondelete="CASCADE"), nullable=False),
-            sa.Column("timestamp", sa.Text, nullable=True),
-            sa.Column("source", sa.Text, nullable=False),
-            sa.Column("event_type", sa.Text, nullable=False),
-            sa.Column("description", sa.Text, nullable=False),
-            sa.Column("risk_score", sa.Float, nullable=False),
-            sa.Column("tags_json", sa.Text, nullable=False),
-            sa.Column("related_json", sa.Text, nullable=False),
-            sa.Column("created_at", sa.Text, nullable=False),
-        )
-
-        self.case_iocs = sa.Table(
-            "case_iocs",
-            md,
-            sa.Column("ioc_pk", sa.Integer, primary_key=True, autoincrement=True),
-            sa.Column("case_id", sa.String(128), sa.ForeignKey("cases.case_id", ondelete="CASCADE"), nullable=False),
-            sa.Column("ioc_id", sa.String(128), nullable=False),
-            sa.Column("ioc_type", sa.String(64), nullable=False),
-            sa.Column("value", sa.Text, nullable=False),
-            sa.Column("first_seen", sa.Text, nullable=True),
-            sa.Column("last_seen", sa.Text, nullable=True),
-            sa.Column("sources_json", sa.Text, nullable=False),
-            sa.Column("metadata_json", sa.Text, nullable=False),
-            sa.Column("created_at", sa.Text, nullable=False),
-        )
-
-        self.ioc_enrichment_cache = sa.Table(
-            "ioc_enrichment_cache",
-            md,
-            sa.Column("cache_pk", sa.Integer, primary_key=True, autoincrement=True),
-            sa.Column("ioc_type", sa.String(64), nullable=False),
-            sa.Column("value", sa.Text, nullable=False),
-            sa.Column("provider", sa.String(64), nullable=False),
-            sa.Column("verdict", sa.String(64), nullable=False),
-            sa.Column("confidence", sa.Float, nullable=False),
-            sa.Column("details_json", sa.Text, nullable=False),
-            sa.Column("fetched_at", sa.Text, nullable=False),
-            sa.UniqueConstraint("ioc_type", "value", "provider", name="uq_ioc_cache"),
-        )
-
-        self.analyst_notes = sa.Table(
-            "analyst_notes",
-            md,
-            sa.Column("note_pk", sa.Integer, primary_key=True, autoincrement=True),
-            sa.Column("case_id", sa.String(128), sa.ForeignKey("cases.case_id", ondelete="CASCADE"), nullable=False),
-            sa.Column("note_id", sa.String(64), nullable=False),
-            sa.Column("author", sa.String(128), nullable=False),
-            sa.Column("content", sa.Text, nullable=False),
-            sa.Column("created_at", sa.Text, nullable=False),
-        )
-
-        self.evidence_hash_log = sa.Table(
-            "evidence_hash_log",
-            md,
-            sa.Column("hash_pk", sa.Integer, primary_key=True, autoincrement=True),
-            sa.Column("case_id", sa.String(128), sa.ForeignKey("cases.case_id", ondelete="CASCADE"), nullable=False),
-            sa.Column("rel_path", sa.Text, nullable=False),
-            sa.Column("sha256", sa.String(128), nullable=False),
-            sa.Column("size_bytes", sa.Integer, nullable=False),
-            sa.Column("logged_at", sa.Text, nullable=False),
-        )
-
-        self.audit_log = sa.Table(
-            "audit_log",
-            md,
-            sa.Column("audit_pk", sa.Integer, primary_key=True, autoincrement=True),
-            sa.Column("case_id", sa.String(128), nullable=True),
-            sa.Column("action", sa.String(128), nullable=False),
-            sa.Column("actor", sa.String(128), nullable=False),
-            sa.Column("details_json", sa.Text, nullable=False),
-            sa.Column("created_at", sa.Text, nullable=False),
-        )
-
-        self.schema_migrations = sa.Table(
-            "schema_migrations",
-            md,
-            sa.Column("version", sa.Integer, primary_key=True),
-            sa.Column("name", sa.String(255), nullable=False),
-            sa.Column("applied_at", sa.Text, nullable=False),
-        )
-
-        self.analysis_jobs = sa.Table(
-            "analysis_jobs",
-            md,
-            sa.Column("job_id", sa.String(128), primary_key=True),
-            sa.Column("case_id", sa.String(128), sa.ForeignKey("cases.case_id", ondelete="CASCADE"), nullable=False),
-            sa.Column("job_type", sa.String(64), nullable=False, default="analysis"),
-            sa.Column("state", sa.String(64), nullable=False),
-            sa.Column("progress", sa.Integer, nullable=False, default=0),
-            sa.Column("message", sa.Text, nullable=False, default=""),
-            sa.Column("error", sa.Text, nullable=True),
-            sa.Column("result_json", sa.Text, nullable=True),
-            sa.Column("created_at", sa.Text, nullable=False),
-            sa.Column("updated_at", sa.Text, nullable=False),
-        )
+        tables = define_tables(sa, md)
+        self.cases = tables["cases"]
+        self.artifacts = tables["artifacts"]
+        self.findings = tables["findings"]
+        self.timeline = tables["timeline"]
+        self.case_iocs = tables["case_iocs"]
+        self.ioc_enrichment_cache = tables["ioc_enrichment_cache"]
+        self.analyst_notes = tables["analyst_notes"]
+        self.workspace_views = tables["workspace_views"]
+        self.notebook_entries = tables["notebook_entries"]
+        self.agent_sessions = tables["agent_sessions"]
+        self.agent_steps = tables["agent_steps"]
+        self.agent_recommendations = tables["agent_recommendations"]
+        self.graph_nodes = tables["graph_nodes"]
+        self.graph_edges = tables["graph_edges"]
+        self.evidence_hash_log = tables["evidence_hash_log"]
+        self.audit_log = tables["audit_log"]
+        self.schema_migrations = tables["schema_migrations"]
+        self.analysis_jobs = tables["analysis_jobs"]
 
         md.create_all(self.engine)
         self.run_migrations()
@@ -647,6 +529,466 @@ class SQLAlchemyDatabase:
         )
         with self.engine.begin() as con:
             return self._rows(con.execute(stmt))
+
+    def list_workspace_views(self, case_id: str) -> list[dict[str, Any]]:
+        stmt = (
+            self.sa.select(
+                self.workspace_views.c.view_id,
+                self.workspace_views.c.name,
+                self.workspace_views.c.section,
+                self.workspace_views.c.filters_json,
+                self.workspace_views.c.sort_json,
+                self.workspace_views.c.layout_json,
+                self.workspace_views.c.created_at,
+                self.workspace_views.c.updated_at,
+            )
+            .where(self.workspace_views.c.case_id == case_id)
+            .order_by(self.workspace_views.c.updated_at.desc(), self.workspace_views.c.name.asc())
+        )
+        with self.engine.begin() as con:
+            rows = self._rows(con.execute(stmt))
+        output: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["filters"] = json.loads(item.pop("filters_json"))
+            item["sort"] = json.loads(item.pop("sort_json"))
+            item["layout"] = json.loads(item.pop("layout_json"))
+            output.append(item)
+        return output
+
+    def upsert_workspace_view(
+        self,
+        case_id: str,
+        name: str,
+        section: str,
+        filters: dict[str, Any],
+        sort: dict[str, Any],
+        layout: dict[str, Any],
+        view_id: str | None = None,
+    ) -> dict[str, Any]:
+        now = utc_now_iso()
+        clean_view_id = view_id or uuid.uuid4().hex[:16]
+        with self.engine.begin() as con:
+            update_stmt = (
+                self.workspace_views.update()
+                .where(self.workspace_views.c.view_id == clean_view_id)
+                .values(
+                    case_id=case_id,
+                    name=name,
+                    section=section,
+                    filters_json=json.dumps(filters or {}),
+                    sort_json=json.dumps(sort or {}),
+                    layout_json=json.dumps(layout or {}),
+                    updated_at=now,
+                )
+            )
+            result = con.execute(update_stmt)
+            if int(result.rowcount or 0) == 0:
+                con.execute(
+                    self.workspace_views.insert().values(
+                        view_id=clean_view_id,
+                        case_id=case_id,
+                        name=name,
+                        section=section,
+                        filters_json=json.dumps(filters or {}),
+                        sort_json=json.dumps(sort or {}),
+                        layout_json=json.dumps(layout or {}),
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+        return {
+            "view_id": clean_view_id,
+            "name": name,
+            "section": section,
+            "filters": filters or {},
+            "sort": sort or {},
+            "layout": layout or {},
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    def delete_workspace_view(self, case_id: str, view_id: str) -> bool:
+        stmt = self.workspace_views.delete().where(
+            self.workspace_views.c.case_id == case_id,
+            self.workspace_views.c.view_id == view_id,
+        )
+        with self.engine.begin() as con:
+            result = con.execute(stmt)
+        return int(result.rowcount or 0) > 0
+
+    def list_notebook_entries(self, case_id: str) -> list[dict[str, Any]]:
+        stmt = (
+            self.sa.select(
+                self.notebook_entries.c.entry_id,
+                self.notebook_entries.c.kind,
+                self.notebook_entries.c.title,
+                self.notebook_entries.c.body,
+                self.notebook_entries.c.links_json,
+                self.notebook_entries.c.created_at,
+                self.notebook_entries.c.updated_at,
+            )
+            .where(self.notebook_entries.c.case_id == case_id)
+            .order_by(self.notebook_entries.c.updated_at.desc(), self.notebook_entries.c.created_at.desc())
+        )
+        with self.engine.begin() as con:
+            rows = self._rows(con.execute(stmt))
+        output: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["links"] = json.loads(item.pop("links_json"))
+            output.append(item)
+        return output
+
+    def create_notebook_entry(
+        self,
+        case_id: str,
+        kind: str,
+        title: str,
+        body: str,
+        links: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = utc_now_iso()
+        entry_id = uuid.uuid4().hex[:16]
+        with self.engine.begin() as con:
+            con.execute(
+                self.notebook_entries.insert().values(
+                    entry_id=entry_id,
+                    case_id=case_id,
+                    kind=kind,
+                    title=title,
+                    body=body,
+                    links_json=json.dumps(links or {}),
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        return {
+            "entry_id": entry_id,
+            "kind": kind,
+            "title": title,
+            "body": body,
+            "links": links or {},
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    def update_notebook_entry(
+        self,
+        case_id: str,
+        entry_id: str,
+        title: str | None = None,
+        body: str | None = None,
+        kind: str | None = None,
+        links: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        stmt = self.sa.select(self.notebook_entries).where(
+            self.notebook_entries.c.case_id == case_id,
+            self.notebook_entries.c.entry_id == entry_id,
+        )
+        with self.engine.begin() as con:
+            row = con.execute(stmt).first()
+            if row is None:
+                return None
+            current = dict(row._mapping)
+            now = utc_now_iso()
+            next_kind = kind if kind is not None else str(current.get("kind") or "note")
+            next_title = title if title is not None else str(current.get("title") or "")
+            next_body = body if body is not None else str(current.get("body") or "")
+            next_links = links if links is not None else json.loads(str(current.get("links_json") or "{}"))
+            con.execute(
+                self.notebook_entries.update()
+                .where(
+                    self.notebook_entries.c.case_id == case_id,
+                    self.notebook_entries.c.entry_id == entry_id,
+                )
+                .values(
+                    kind=next_kind,
+                    title=next_title,
+                    body=next_body,
+                    links_json=json.dumps(next_links),
+                    updated_at=now,
+                )
+            )
+        return {
+            "entry_id": entry_id,
+            "kind": next_kind,
+            "title": next_title,
+            "body": next_body,
+            "links": next_links,
+            "created_at": current.get("created_at"),
+            "updated_at": now,
+        }
+
+    def create_agent_session(
+        self,
+        case_id: str,
+        goal: str,
+        status: str,
+        model_config: dict[str, Any],
+        summary: str = "",
+        error: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        now = utc_now_iso()
+        clean_session_id = session_id or uuid.uuid4().hex[:16]
+        with self.engine.begin() as con:
+            con.execute(
+                self.agent_sessions.insert().values(
+                    session_id=clean_session_id,
+                    case_id=case_id,
+                    goal=goal,
+                    status=status,
+                    model_config_json=json.dumps(model_config or {}),
+                    summary=summary,
+                    error=error,
+                    created_at=now,
+                    updated_at=now,
+                    completed_at=None,
+                )
+            )
+        return {
+            "session_id": clean_session_id,
+            "case_id": case_id,
+            "goal": goal,
+            "status": status,
+            "model_config": model_config or {},
+            "summary": summary,
+            "error": error,
+            "created_at": now,
+            "updated_at": now,
+            "completed_at": None,
+        }
+
+    def update_agent_session(
+        self,
+        session_id: str,
+        status: str | None = None,
+        summary: str | None = None,
+        error: str | None = None,
+        completed_at: str | None = None,
+    ) -> dict[str, Any] | None:
+        stmt = self.sa.select(self.agent_sessions).where(self.agent_sessions.c.session_id == session_id)
+        with self.engine.begin() as con:
+            row = con.execute(stmt).first()
+            if row is None:
+                return None
+            current = dict(row._mapping)
+            now = utc_now_iso()
+            con.execute(
+                self.agent_sessions.update()
+                .where(self.agent_sessions.c.session_id == session_id)
+                .values(
+                    status=status if status is not None else current["status"],
+                    summary=summary if summary is not None else current["summary"],
+                    error=error if error is not None else current["error"],
+                    updated_at=now,
+                    completed_at=(
+                        completed_at if completed_at is not None else current["completed_at"]
+                    ),
+                )
+            )
+        current["status"] = status if status is not None else current["status"]
+        current["summary"] = summary if summary is not None else current["summary"]
+        current["error"] = error if error is not None else current["error"]
+        current["updated_at"] = now
+        current["completed_at"] = (
+            completed_at if completed_at is not None else current["completed_at"]
+        )
+        current["model_config"] = json.loads(str(current.pop("model_config_json") or "{}"))
+        return current
+
+    def list_agent_sessions(self, case_id: str) -> list[dict[str, Any]]:
+        stmt = (
+            self.sa.select(self.agent_sessions)
+            .where(self.agent_sessions.c.case_id == case_id)
+            .order_by(self.agent_sessions.c.updated_at.desc())
+        )
+        with self.engine.begin() as con:
+            rows = self._rows(con.execute(stmt))
+        output: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["model_config"] = json.loads(item.pop("model_config_json"))
+            output.append(item)
+        return output
+
+    def get_agent_session(self, case_id: str, session_id: str) -> dict[str, Any] | None:
+        stmt = self.sa.select(self.agent_sessions).where(
+            self.agent_sessions.c.case_id == case_id,
+            self.agent_sessions.c.session_id == session_id,
+        )
+        with self.engine.begin() as con:
+            row = con.execute(stmt).first()
+        if row is None:
+            return None
+        item = dict(row._mapping)
+        item["model_config"] = json.loads(item.pop("model_config_json"))
+        return item
+
+    def replace_agent_steps(self, session_id: str, steps: list[dict[str, Any]]) -> None:
+        with self.engine.begin() as con:
+            con.execute(self.agent_steps.delete().where(self.agent_steps.c.session_id == session_id))
+            if steps:
+                con.execute(
+                    self.agent_steps.insert(),
+                    [
+                        {
+                            "step_id": str(step.get("step_id") or uuid.uuid4().hex[:16]),
+                            "session_id": session_id,
+                            "step_index": int(step.get("step_index", 0) or 0),
+                            "title": str(step.get("title") or ""),
+                            "rationale": str(step.get("rationale") or ""),
+                            "linked_entities_json": json.dumps(step.get("linked_entities") or {}),
+                            "proposed_action_json": json.dumps(step.get("proposed_action") or {}),
+                            "approval_state": str(step.get("approval_state") or "not_required"),
+                            "result_json": json.dumps(step.get("result") or {}),
+                            "created_at": str(step.get("created_at") or utc_now_iso()),
+                            "updated_at": str(step.get("updated_at") or utc_now_iso()),
+                        }
+                        for step in steps
+                    ],
+                )
+
+    def list_agent_steps(self, session_id: str) -> list[dict[str, Any]]:
+        stmt = (
+            self.sa.select(self.agent_steps)
+            .where(self.agent_steps.c.session_id == session_id)
+            .order_by(self.agent_steps.c.step_index.asc(), self.agent_steps.c.created_at.asc())
+        )
+        with self.engine.begin() as con:
+            rows = self._rows(con.execute(stmt))
+        output: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["linked_entities"] = json.loads(item.pop("linked_entities_json"))
+            item["proposed_action"] = json.loads(item.pop("proposed_action_json"))
+            item["result"] = json.loads(item.pop("result_json"))
+            output.append(item)
+        return output
+
+    def replace_agent_recommendations(
+        self,
+        session_id: str,
+        case_id: str,
+        recommendations: list[dict[str, Any]],
+    ) -> None:
+        with self.engine.begin() as con:
+            con.execute(
+                self.agent_recommendations.delete().where(
+                    self.agent_recommendations.c.session_id == session_id
+                )
+            )
+            if recommendations:
+                con.execute(
+                    self.agent_recommendations.insert(),
+                    [
+                        {
+                            "recommendation_id": str(item.get("recommendation_id") or uuid.uuid4().hex[:16]),
+                            "session_id": session_id,
+                            "case_id": case_id,
+                            "priority": int(item.get("priority", 0) or 0),
+                            "title": str(item.get("title") or ""),
+                            "reason": str(item.get("reason") or ""),
+                            "linked_entities_json": json.dumps(item.get("linked_entities") or {}),
+                            "suggested_action_json": json.dumps(item.get("suggested_action") or {}),
+                            "status": str(item.get("status") or "pending"),
+                            "confidence": float(item.get("confidence", 0) or 0),
+                            "evidence_count": int(item.get("evidence_count", 0) or 0),
+                            "created_at": str(item.get("created_at") or utc_now_iso()),
+                            "updated_at": str(item.get("updated_at") or utc_now_iso()),
+                        }
+                        for item in recommendations
+                    ],
+                )
+
+    def list_agent_recommendations(self, session_id: str) -> list[dict[str, Any]]:
+        stmt = (
+            self.sa.select(self.agent_recommendations)
+            .where(self.agent_recommendations.c.session_id == session_id)
+            .order_by(
+                self.agent_recommendations.c.priority.desc(),
+                self.agent_recommendations.c.updated_at.desc(),
+            )
+        )
+        with self.engine.begin() as con:
+            rows = self._rows(con.execute(stmt))
+        output: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["linked_entities"] = json.loads(item.pop("linked_entities_json"))
+            item["suggested_action"] = json.loads(item.pop("suggested_action_json"))
+            output.append(item)
+        return output
+
+    def replace_case_graph(
+        self,
+        case_id: str,
+        nodes: list[dict[str, Any]],
+        edges: list[dict[str, Any]],
+    ) -> None:
+        with self.engine.begin() as con:
+            con.execute(self.graph_nodes.delete().where(self.graph_nodes.c.case_id == case_id))
+            con.execute(self.graph_edges.delete().where(self.graph_edges.c.case_id == case_id))
+            if nodes:
+                con.execute(
+                    self.graph_nodes.insert(),
+                    [
+                        {
+                            "node_id": str(node.get("node_id") or uuid.uuid4().hex[:16]),
+                            "case_id": case_id,
+                            "node_type": str(node.get("node_type") or ""),
+                            "label": str(node.get("label") or ""),
+                            "score": float(node.get("score", 0) or 0),
+                            "metadata_json": json.dumps(node.get("metadata") or {}),
+                            "created_at": str(node.get("created_at") or utc_now_iso()),
+                        }
+                        for node in nodes
+                    ],
+                )
+            if edges:
+                con.execute(
+                    self.graph_edges.insert(),
+                    [
+                        {
+                            "edge_id": str(edge.get("edge_id") or uuid.uuid4().hex[:16]),
+                            "case_id": case_id,
+                            "source_node_id": str(edge.get("source_node_id") or ""),
+                            "target_node_id": str(edge.get("target_node_id") or ""),
+                            "relation": str(edge.get("relation") or ""),
+                            "confidence": float(edge.get("confidence", 0) or 0),
+                            "metadata_json": json.dumps(edge.get("metadata") or {}),
+                            "created_at": str(edge.get("created_at") or utc_now_iso()),
+                        }
+                        for edge in edges
+                    ],
+                )
+
+    def get_case_graph(self, case_id: str) -> dict[str, list[dict[str, Any]]]:
+        node_stmt = (
+            self.sa.select(self.graph_nodes)
+            .where(self.graph_nodes.c.case_id == case_id)
+            .order_by(self.graph_nodes.c.score.desc(), self.graph_nodes.c.label.asc())
+        )
+        edge_stmt = (
+            self.sa.select(self.graph_edges)
+            .where(self.graph_edges.c.case_id == case_id)
+            .order_by(self.graph_edges.c.confidence.desc(), self.graph_edges.c.relation.asc())
+        )
+        with self.engine.begin() as con:
+            node_rows = self._rows(con.execute(node_stmt))
+            edge_rows = self._rows(con.execute(edge_stmt))
+        nodes: list[dict[str, Any]] = []
+        edges: list[dict[str, Any]] = []
+        for row in node_rows:
+            item = dict(row)
+            item["metadata"] = json.loads(item.pop("metadata_json"))
+            nodes.append(item)
+        for row in edge_rows:
+            item = dict(row)
+            item["metadata"] = json.loads(item.pop("metadata_json"))
+            edges.append(item)
+        return {"nodes": nodes, "edges": edges}
 
     def append_audit_log(
         self,

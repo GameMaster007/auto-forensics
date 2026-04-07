@@ -82,6 +82,100 @@ class TimelineEvent:
 
 
 @dataclass(slots=True)
+class WorkspaceView:
+    view_id: str
+    case_id: str
+    name: str
+    section: str
+    filters: dict[str, Any] = field(default_factory=dict)
+    sort: dict[str, Any] = field(default_factory=dict)
+    layout: dict[str, Any] = field(default_factory=dict)
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+
+
+@dataclass(slots=True)
+class NotebookEntry:
+    entry_id: str
+    case_id: str
+    kind: str
+    title: str
+    body: str
+    links: dict[str, list[str]] = field(default_factory=dict)
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+
+
+@dataclass(slots=True)
+class AgentStep:
+    step_id: str
+    session_id: str
+    step_index: int
+    title: str
+    rationale: str
+    linked_entities: dict[str, list[str]] = field(default_factory=dict)
+    proposed_action: dict[str, Any] = field(default_factory=dict)
+    approval_state: str = "not_required"
+    result: dict[str, Any] = field(default_factory=dict)
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+
+
+@dataclass(slots=True)
+class AgentRecommendation:
+    recommendation_id: str
+    session_id: str
+    case_id: str
+    priority: int
+    title: str
+    reason: str
+    linked_entities: dict[str, list[str]] = field(default_factory=dict)
+    suggested_action: dict[str, Any] = field(default_factory=dict)
+    status: str = "pending"
+    confidence: float = 0.0
+    evidence_count: int = 0
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+
+
+@dataclass(slots=True)
+class AgentSession:
+    session_id: str
+    case_id: str
+    goal: str
+    status: str
+    model_config: dict[str, Any] = field(default_factory=dict)
+    summary: str = ""
+    error: str | None = None
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    completed_at: str | None = None
+
+
+@dataclass(slots=True)
+class GraphNode:
+    node_id: str
+    case_id: str
+    node_type: str
+    label: str
+    score: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: str = field(default_factory=utc_now_iso)
+
+
+@dataclass(slots=True)
+class GraphEdge:
+    edge_id: str
+    case_id: str
+    source_node_id: str
+    target_node_id: str
+    relation: str
+    confidence: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: str = field(default_factory=utc_now_iso)
+
+
+@dataclass(slots=True)
 class CaseReport:
     case_id: str
     generated_at: str
