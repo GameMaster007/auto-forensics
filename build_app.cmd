@@ -5,11 +5,13 @@
 :: ║  Builds:                                                            ║
 :: ║    1. Application icon  (assets/icon.ico, icon.png)                ║
 :: ║    2. Standalone EXE    (dist/AutoForensics/)                      ║
-:: ║    3. Windows installer (dist/installer/AutoForensics-*-Setup.exe) ║
+:: ║    3. Portable ZIP      (dist/installer/AutoForensics-*-Portable.zip) ║
+:: ║    4. Windows installer (dist/installer/AutoForensics-*-Setup.exe) ║
 :: ╚═══════════════════════════════════════════════════════════════════════╝
 setlocal EnableDelayedExpansion
 title Auto Forensics — Build
 cd /d "%~dp0"
+set VERSION=1.0.0
 
 echo.
 echo   Build started at %DATE% %TIME%
@@ -43,7 +45,7 @@ echo   [OK] Virtual environment activated
 :: ── Step 2: Install all build dependencies ─────────────────────────────
 echo   [..] Installing dependencies...
 python -m pip install -q --upgrade pip setuptools wheel
-python -m pip install -q -e ".[server,tray,build,dev]"
+python -m pip install -q -e ".[server,tray,desktop,build,dev]"
 if errorlevel 1 (
     echo   [!] Dependency install failed.
     goto :error
@@ -114,7 +116,7 @@ if "!ISCC!"=="" (
     echo.
     echo   [~] Inno Setup 6 not found — skipping installer.
     echo       Download: https://jrsoftware.org/isdl.php
-    goto :portable_only
+    goto :portable_build
 )
 
 echo   [..] Building Windows installer (Inno Setup)...
@@ -126,7 +128,34 @@ if errorlevel 1 (
 )
 echo   [OK] Installer created
 
-:: ── Step 9: Code signing (placeholder) ─────────────────────────────────
+:: ── Step 9: Portable package ───────────────────────────────────────────
+:portable_build
+echo   [..] Building portable package...
+if exist "dist\AutoForensics-Portable" rmdir /s /q "dist\AutoForensics-Portable" 2>nul
+mkdir "dist\AutoForensics-Portable" 2>nul
+if errorlevel 1 goto :error
+xcopy /e /i /y /q "dist\AutoForensics\*" "dist\AutoForensics-Portable\" >nul
+if errorlevel 1 goto :error
+type nul > "dist\AutoForensics-Portable\portable.mode"
+(
+    echo @echo off
+    echo setlocal
+    echo set "AUTO_FORENSICS_HOME=%%~dp0data"
+    echo set "AUTO_FORENSICS_APPDATA=%%~dp0data"
+    echo if not exist "%%~dp0data" mkdir "%%~dp0data"
+    echo start "" "%%~dp0AutoForensics.exe" --no-splash
+) > "dist\AutoForensics-Portable\start-portable.cmd"
+
+set PORTABLE_ZIP=dist\installer\AutoForensics-Portable-%VERSION%.zip
+if exist "%PORTABLE_ZIP%" del /q "%PORTABLE_ZIP%" 2>nul
+powershell -NoProfile -Command "Compress-Archive -Path 'dist\AutoForensics-Portable\*' -DestinationPath '%PORTABLE_ZIP%' -Force"
+if errorlevel 1 (
+    echo   [!] Portable ZIP build failed.
+    goto :error
+)
+echo   [OK] Portable package created
+
+:: ── Step 10: Code signing (placeholder) ────────────────────────────────
 :: Uncomment below if you have a code-signing certificate:
 ::
 :: set ST="C:\Program Files (x86)\Windows Kits\10\bin\x64\signtool.exe"
@@ -134,8 +163,6 @@ echo   [OK] Installer created
 :: %ST% sign /tr http://timestamp.digicert.com /td sha256 /fd sha256 %CERT% "dist\AutoForensics\AutoForensics.exe"
 :: %ST% sign /tr http://timestamp.digicert.com /td sha256 /fd sha256 %CERT% "dist\AutoForensics\auto-forensics.exe"
 :: for %%F in (dist\installer\AutoForensics-*-Setup.exe) do %ST% sign /tr ... %CERT% "%%F"
-
-:portable_only
 echo.
 echo   ══════════════════════════════════════════════════════════
 echo    BUILD COMPLETE
@@ -144,6 +171,9 @@ echo.
 echo    Portable app:
 echo      dist\AutoForensics\AutoForensics.exe    (GUI launcher)
 echo      dist\AutoForensics\auto-forensics.exe   (CLI)
+echo.
+echo    Portable ZIP:
+echo      dist\installer\AutoForensics-Portable-%VERSION%.zip
 echo.
 if "!ISCC!" NEQ "" (
     echo    Installer:

@@ -53,7 +53,7 @@ Secure-by-default controls implemented:
 cd "C:\Users\Benji\Documents\Auto Forensics"
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-pip install -e .[server,dev]
+pip install -e .[server,dev,desktop]
 ```
 
 ### Linux
@@ -62,7 +62,7 @@ pip install -e .[server,dev]
 cd /path/to/Auto\ Forensics
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[server,dev]"
+pip install -e ".[server,dev,desktop]"
 ```
 
 ## CLI Usage
@@ -158,22 +158,39 @@ Legacy one-shot runner is still available:
 auto-forensics run --case-id demo-case --input-dir ./examples/case1/artifacts --output-dir ./output/demo-case --disable-llama
 ```
 
-## API and Dashboard
+## Desktop App
 
-Start server:
+Standalone app:
+
+```bash
+auto-forensics-app
+```
+
+Portable app:
+
+```bash
+AutoForensics.exe
+```
+
+The portable bundle stores its data next to the app in a local `data/`
+folder.
+
+Legacy browser/tray launcher:
 
 ```bash
 auto-forensics serve --host 127.0.0.1 --port 8765
 auto-forensics start --host 127.0.0.1 --port 8765
+auto-forensics-launcher
 ```
 
-Open:
+Windows one-click launch:
+- double-click `AutoForensics.exe` for the standalone app
+- double-click `start-portable.cmd` inside the portable bundle for portable mode
+- double-click `start-auto-forensics.cmd` for the legacy browser/tray launcher
+
+If you use the browser launcher, open:
 - `http://127.0.0.1:8765/` (dashboard)
 - `http://127.0.0.1:8765/docs` (dev mode only)
-
-Windows one-click launch:
-- double-click `start-auto-forensics.cmd` in the project root
-- it creates `.venv` if missing, installs server dependencies if needed, then starts the app
 
 Dashboard highlights:
 - case list filtering (`q`, `status`, `limit`) and global case stats

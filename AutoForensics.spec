@@ -52,8 +52,10 @@ hiddenimports = [
     "PIL.Image",
     "PIL.ImageDraw",
     "tkinter",
+    "webview",
     # app modules
     "auto_forensics",
+    "auto_forensics.desktop",
     "auto_forensics.api",
     "auto_forensics.cli",
     "auto_forensics.launcher",
@@ -146,7 +148,7 @@ _manifest = str(ROOT / "assets" / "AutoForensics.manifest")
 # GUI launcher — AutoForensics.exe  (windowed, no console)
 # ─────────────────────────────────────────────────────────────────────────
 launcher_a = Analysis(
-    [str(SRC / "auto_forensics" / "launcher.py")],
+    [str(SRC / "auto_forensics" / "desktop.py")],
     pathex=[str(SRC)],
     binaries=[],
     datas=web_datas,

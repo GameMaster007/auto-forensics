@@ -41,8 +41,6 @@ Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 WizardResizable=yes
-WizardImageFile=compiler:WizModernImage-IS.bmp
-WizardSmallImageFile=compiler:WizModernSmallImage-IS.bmp
 DisableProgramGroupPage=no
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
@@ -51,7 +49,6 @@ VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppName} Installer
 VersionInfoProductName={#MyAppName}
 VersionInfoProductVersion={#MyAppVersion}
-AllowDowngrade=no
 ; Show estimated required disk space
 ExtraDiskSpaceRequired=10485760
 ; Close the app before upgrading

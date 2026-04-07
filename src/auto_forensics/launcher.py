@@ -92,6 +92,11 @@ _FROZEN = getattr(sys, "frozen", False)
 
 def _app_data_dir() -> Path:
     """Application data directory for logs / settings."""
+    override = os.environ.get("AUTO_FORENSICS_APPDATA")
+    if override:
+        d = Path(override).expanduser().resolve()
+        d.mkdir(parents=True, exist_ok=True)
+        return d
     if sys.platform == "win32":
         base = Path(os.environ.get("APPDATA", "~"))
     else:
@@ -498,15 +503,25 @@ class _ServerThread(threading.Thread):
             self._started.set()
             return
         try:
-            from auto_forensics.api import build_app
+            from auto_forensics.api import create_app
             from auto_forensics.config import AppConfig
             cfg = AppConfig.from_env()
-            app = build_app(cfg)
+            app = create_app(cfg)
+
+            # In frozen (PyInstaller) builds uvicorn's default
+            # logging config references its own formatter class
+            # via a dotted path that importlib cannot resolve,
+            # causing "Unable to configure formatter 'default'".
+            # Pass log_config=None so uvicorn skips
+            # dictConfig entirely — the launcher already
+            # configures the root logger with file + console
+            # handlers.
             ucfg = _uvicorn.Config(
                 app=app,
                 host=self.host,
                 port=self.port,
                 log_level="warning",
+                log_config=None,
                 access_log=False,
             )
             server = _uvicorn.Server(ucfg)

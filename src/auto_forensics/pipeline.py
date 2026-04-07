@@ -121,7 +121,8 @@ def _to_markdown(report: CaseReport) -> str:
 
 def _to_html(report: "CaseReport") -> str:
     import html as _html, json as _json
-    payload = _json.dumps(report.to_dict())
+    # Escape </script> to prevent XSS via script tag breakout.
+    payload = _json.dumps(report.to_dict()).replace("</script>", "<\\/script>")
     ec = _html.escape(report.case_id)
     ts = _html.escape(report.generated_at)
     tf = len(report.findings)

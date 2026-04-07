@@ -205,12 +205,23 @@ class ImageMounter:
         return None
 
     def _mount_vhd_windows(self) -> Path | None:
-        ps_cmd = (
+        # Use PowerShell -EncodedCommand to avoid command injection.
+        # Build the command arguments list separately from the script content.
+        ps_script = (
             f"Mount-VHD -Path '{self._image_path}' -NoDriveLetter -ReadOnly -PassThru"
             " | Get-Disk | Get-Partition | Get-Volume | Select-Object -ExpandProperty DriveLetter"
         )
+        # Encode the script in UTF-16LE (required for -EncodedCommand)
+        import base64
+        encoded_script = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
+
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            [
+                "powershell",
+                "-NoProfile",
+                "-EncodedCommand",
+                encoded_script,
+            ],
             capture_output=True, text=True, timeout=120, check=False,
         )
         if result.returncode != 0:
