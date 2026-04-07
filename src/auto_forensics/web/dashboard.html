@@ -1,81 +1,509 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Auto Forensics</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Auto Forensics Workspace</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
     <link rel="stylesheet" href="/assets/dashboard.css">
 </head>
 <body>
-    <nav class="topnav">
-        <div class="nav-brand">
-            <span class="nav-icon">⚡</span>
-            <span class="nav-title">Auto Forensics</span>
-        </div>
-        <div class="nav-right">
-            <span id="health-dot" class="health-dot"></span>
-            <span id="health-text" class="health-text">Connecting…</span>
-            <button id="refresh-btn" class="btn-icon" title="Refresh">↻</button>
-        </div>
-    </nav>
-
-    <main class="main">
-        <section class="stats-row">
-            <div class="stat-card">
-                <div class="stat-value" id="stat-total">—</div>
-                <div class="stat-label">Total Cases</div>
-            </div>
-            <div class="stat-card stat-card--success">
-                <div class="stat-value" id="stat-complete">—</div>
-                <div class="stat-label">Complete</div>
-            </div>
-            <div class="stat-card stat-card--warn">
-                <div class="stat-value" id="stat-analyzing">—</div>
-                <div class="stat-label">Analyzing</div>
-            </div>
-            <div class="stat-card stat-card--danger">
-                <div class="stat-value" id="stat-failed">—</div>
-                <div class="stat-label">Failed</div>
-            </div>
-            <div class="stat-card stat-card--accent">
-                <div class="stat-value" id="stat-ready">—</div>
-                <div class="stat-label">Ready</div>
-            </div>
-        </section>
-
-        <section class="panel">
-            <div class="panel-header">
-                <h2 class="panel-title">Cases</h2>
-                <div class="filter-row">
-                    <input type="search" id="search-input" class="search-input"
-                           placeholder="Search by case ID…" autocomplete="off">
-                    <select id="status-filter" class="select-input">
-                        <option value="">All statuses</option>
-                        <option value="created">Created</option>
-                        <option value="ready">Ready</option>
-                        <option value="ingesting">Ingesting</option>
-                        <option value="analyzing">Analyzing</option>
-                        <option value="complete">Complete</option>
-                        <option value="failed">Failed</option>
-                    </select>
+    <div class="shell">
+        <aside class="rail">
+            <div class="brand">
+                <div class="brand-mark">AF</div>
+                <div>
+                    <div class="brand-title">Auto Forensics</div>
+                    <div class="brand-subtitle">Investigation Workspace</div>
                 </div>
             </div>
-            <div id="cases-container">
-                <div class="placeholder">Loading cases…</div>
-            </div>
-        </section>
-    </main>
 
-    <aside id="detail-drawer" class="drawer drawer--hidden">
-        <div class="drawer-header">
-            <span id="drawer-title" class="drawer-title">—</span>
-            <button id="drawer-close" class="btn-icon">✕</button>
+            <nav class="rail-nav">
+                <button class="rail-link rail-link--active" data-page="dashboard">Dashboard</button>
+                <button class="rail-link" data-page="cases">Cases</button>
+                <button class="rail-link" data-page="workspace">Workspace</button>
+                <button class="rail-link" data-page="settings">Settings</button>
+            </nav>
+
+            <div class="rail-foot">
+                <div class="mini-stat">
+                    <span class="mini-stat__label">Current Case</span>
+                    <span class="mini-stat__value" id="rail-current-case">None</span>
+                </div>
+                <div class="mini-stat">
+                    <span class="mini-stat__label">Workspace Mode</span>
+                    <span class="mini-stat__value">Solo Analyst</span>
+                </div>
+            </div>
+
+            <section class="rail-panel">
+                <div class="rail-panel__head">
+                    <span>Recent Cases</span>
+                    <button class="btn btn--mini" id="rail-palette-btn" type="button">
+                        Search
+                    </button>
+                </div>
+                <div id="rail-recent-cases" class="rail-case-list">
+                    <div class="placeholder placeholder--small">Loading cases…</div>
+                </div>
+            </section>
+        </aside>
+
+        <div class="app">
+            <div class="app-chrome">
+                <div class="app-chrome__group">
+                    <div class="app-chip app-chip--brand">Auto Forensics</div>
+                    <div class="app-chip" id="shell-page-pill">Dashboard</div>
+                    <div class="app-chip" id="shell-case-pill">No active case</div>
+                    <div class="app-chip" id="shell-tab-pill">Overview</div>
+                </div>
+                <div class="app-chrome__group">
+                    <div class="app-chip" id="shell-status-pill">Desktop</div>
+                    <button class="btn btn--ghost btn--mini" id="sidebar-toggle-btn" type="button">Hide Sidebar</button>
+                    <button class="btn btn--ghost btn--mini" id="inspector-toggle-btn" type="button">Hide Inspector</button>
+                    <button class="btn btn--primary btn--mini" id="quick-command-btn" type="button">Command</button>
+                </div>
+            </div>
+
+            <header class="masthead">
+                <div>
+                    <div class="eyebrow" id="page-eyebrow">Operations</div>
+                    <h1 class="page-title" id="page-title">Dashboard</h1>
+                    <p class="page-subtitle" id="page-subtitle">
+                        Calm, collaborative digital forensics workspace for fast triage and shared context.
+                    </p>
+                </div>
+                <div class="masthead-actions">
+                    <button class="btn btn--ghost" id="command-palette-btn" type="button">Command Palette</button>
+                    <button class="btn btn--ghost" id="global-refresh-btn">Refresh</button>
+                    <button class="btn btn--primary" id="new-case-btn">New Case</button>
+                </div>
+            </header>
+
+            <main class="page page--active" id="page-dashboard">
+                <section class="hero-grid">
+                    <article class="hero-card hero-card--accent">
+                        <div class="hero-card__label">Total Cases</div>
+                        <div class="hero-card__value" id="stat-total-cases">0</div>
+                        <div class="hero-card__meta" id="stat-newest-updated">No activity yet</div>
+                    </article>
+                    <article class="hero-card">
+                        <div class="hero-card__label">Active Cases</div>
+                        <div class="hero-card__value" id="stat-active-cases">0</div>
+                        <div class="hero-card__meta">Ingesting or analyzing right now</div>
+                    </article>
+                    <article class="hero-card">
+                        <div class="hero-card__label">Failed Cases</div>
+                        <div class="hero-card__value" id="stat-failed-cases">0</div>
+                        <div class="hero-card__meta">Needs analyst attention</div>
+                    </article>
+                </section>
+
+                <section class="panel">
+                    <div class="panel-head">
+                        <div>
+                            <div class="panel-kicker">Recent Activity</div>
+                            <h2 class="panel-title">Latest Cases</h2>
+                        </div>
+                        <button class="btn btn--ghost" data-nav-target="cases">Open Cases</button>
+                    </div>
+                    <div id="recent-cases" class="case-list case-list--compact">
+                        <div class="placeholder">Loading recent cases…</div>
+                    </div>
+                </section>
+
+                <section class="double-grid">
+                    <article class="panel">
+                        <div class="panel-head">
+                            <div>
+                                <div class="panel-kicker">Investigation Feed</div>
+                                <h2 class="panel-title">Signals That Need Attention</h2>
+                            </div>
+                        </div>
+                        <div id="dashboard-activity" class="stack-list">
+                            <div class="placeholder">Loading activity…</div>
+                        </div>
+                    </article>
+
+                    <article class="panel">
+                        <div class="panel-head">
+                            <div>
+                                <div class="panel-kicker">Collaborative Flow</div>
+                                <h2 class="panel-title">What to do next</h2>
+                            </div>
+                        </div>
+                        <div class="stack-list">
+                            <article class="signal-card">
+                                <div class="signal-card__title">Open a case</div>
+                                <p class="signal-card__body">Jump into the latest investigation or create a new one.</p>
+                            </article>
+                            <article class="signal-card">
+                                <div class="signal-card__title">Run analysis</div>
+                                <p class="signal-card__body">Generate findings, timeline context, and risk signals.</p>
+                            </article>
+                            <article class="signal-card">
+                                <div class="signal-card__title">Share context</div>
+                                <p class="signal-card__body">Produce a brief for another analyst or stakeholder.</p>
+                            </article>
+                        </div>
+                    </article>
+                </section>
+            </main>
+
+            <main class="page" id="page-cases">
+                <section class="panel">
+                    <div class="panel-head">
+                        <div>
+                            <div class="panel-kicker">Case Registry</div>
+                            <h2 class="panel-title">Browse Cases</h2>
+                        </div>
+                    </div>
+                    <div class="toolbar">
+                        <input id="case-search-input" class="input" type="search"
+                               placeholder="Search case id or status">
+                        <select id="case-status-filter" class="select">
+                            <option value="">All statuses</option>
+                            <option value="created">Created</option>
+                            <option value="ready">Ready</option>
+                            <option value="ingesting">Ingesting</option>
+                            <option value="analyzing">Analyzing</option>
+                            <option value="complete">Complete</option>
+                            <option value="failed">Failed</option>
+                        </select>
+                    </div>
+                    <div id="cases-table" class="table-shell">
+                        <div class="placeholder">Loading cases…</div>
+                    </div>
+                </section>
+            </main>
+
+            <main class="page" id="page-workspace">
+                <section class="workspace-shell">
+                    <header class="workspace-header">
+                        <div>
+                            <div class="panel-kicker">Investigation Workspace</div>
+                            <h2 class="workspace-title" id="workspace-case-title">Select a case</h2>
+                            <p class="workspace-subtitle" id="workspace-case-subtitle">
+                                Open a case from the cases page to inspect evidence, notes, and agent output.
+                            </p>
+                        </div>
+                        <div class="workspace-actions">
+                            <button class="btn btn--ghost" id="workspace-refresh-btn">Refresh Workspace</button>
+                            <button class="btn btn--ghost" id="workspace-ingest-btn">Ingest Evidence</button>
+                            <button class="btn btn--ghost" id="workspace-analyze-btn">Analyze</button>
+                            <button class="btn btn--ghost" id="workspace-share-btn">Share Brief</button>
+                            <button class="btn btn--primary" id="workspace-agent-btn">Start Agent</button>
+                        </div>
+                    </header>
+
+                    <div class="workspace-meta" id="workspace-meta"></div>
+
+                    <div class="workspace-layout">
+                        <aside class="workspace-nav">
+                            <button class="workspace-tab workspace-tab--active" data-workspace-tab="overview">
+                                Overview
+                            </button>
+                            <button class="workspace-tab" data-workspace-tab="evidence">
+                                Evidence
+                            </button>
+                            <button class="workspace-tab" data-workspace-tab="timeline">
+                                Timeline
+                            </button>
+                            <button class="workspace-tab" data-workspace-tab="findings">
+                                Findings
+                            </button>
+                            <button class="workspace-tab" data-workspace-tab="iocs">
+                                IOCs
+                            </button>
+                            <button class="workspace-tab" data-workspace-tab="notebook">
+                                Notebook
+                            </button>
+                            <button class="workspace-tab" data-workspace-tab="agent">
+                                Agent
+                            </button>
+
+                            <section class="workspace-side-panel">
+                                <div class="workspace-side-panel__head">
+                                    <span>Saved Views</span>
+                                    <button class="btn btn--mini" id="save-view-btn">Save</button>
+                                </div>
+                                <div id="saved-views-list" class="chip-list">
+                                    <span class="placeholder placeholder--small">No saved views</span>
+                                </div>
+                            </section>
+                        </aside>
+
+                            <div class="workspace-main">
+                            <section class="workspace-section workspace-section--active" id="ws-overview">
+                                <div class="overview-grid" id="workspace-overview-cards"></div>
+
+                                <div class="double-grid">
+                                    <article class="panel">
+                                        <div class="panel-head">
+                                            <div>
+                                                <div class="panel-kicker">Investigation Threads</div>
+                                                <h3 class="panel-title">Correlated Activity</h3>
+                                            </div>
+                                        </div>
+                                        <div id="thread-list" class="stack-list">
+                                            <div class="placeholder">No threads yet</div>
+                                        </div>
+                                    </article>
+
+                                    <article class="panel">
+                                        <div class="panel-head">
+                                            <div>
+                                                <div class="panel-kicker">Relationship Graph</div>
+                                                <h3 class="panel-title">Connected Entities</h3>
+                                            </div>
+                                        </div>
+                                        <div id="graph-summary" class="stack-list">
+                                            <div class="placeholder">Graph data will appear after analysis.</div>
+                                        </div>
+                                    </article>
+                                </div>
+                            </section>
+
+                            <section class="workspace-section" id="ws-evidence">
+                                <div class="toolbar toolbar--dense">
+                                    <input id="artifact-search-input" class="input" type="search"
+                                           placeholder="Search evidence">
+                                    <select id="artifact-type-filter" class="select">
+                                        <option value="">All artifact types</option>
+                                    </select>
+                                </div>
+                                <div class="split-panel">
+                                    <div class="table-shell" id="artifact-table"></div>
+                                    <aside class="detail-panel" id="artifact-detail">
+                                        <div class="placeholder">Select an artifact to inspect derived context.</div>
+                                    </aside>
+                                </div>
+                            </section>
+
+                            <section class="workspace-section" id="ws-timeline">
+                                <div class="toolbar toolbar--dense">
+                                    <input id="timeline-search-input" class="input" type="search"
+                                           placeholder="Search timeline">
+                                    <input id="timeline-risk-filter" class="input input--tiny" type="number"
+                                           min="0" max="100" placeholder="Min risk">
+                                    <button class="btn btn--ghost" id="timeline-apply-btn">Apply</button>
+                                </div>
+                                <div class="split-panel">
+                                    <div class="table-shell" id="timeline-table"></div>
+                                    <aside class="detail-panel" id="timeline-detail">
+                                        <div class="placeholder">Select a timeline event to inspect details.</div>
+                                    </aside>
+                                </div>
+                            </section>
+
+                            <section class="workspace-section" id="ws-findings">
+                                <div id="finding-list" class="stack-list">
+                                    <div class="placeholder">No findings yet</div>
+                                </div>
+                            </section>
+
+                            <section class="workspace-section" id="ws-iocs">
+                                <div id="ioc-table" class="table-shell">
+                                    <div class="placeholder">No IOCs yet</div>
+                                </div>
+                            </section>
+
+                            <section class="workspace-section" id="ws-notebook">
+                                <article class="panel panel--tight">
+                                    <div class="panel-head">
+                                        <div>
+                                            <div class="panel-kicker">Analyst Notebook</div>
+                                            <h3 class="panel-title">Capture hypotheses and verdicts</h3>
+                                        </div>
+                                    </div>
+                                    <form id="notebook-form" class="notebook-form">
+                                        <select id="notebook-kind" class="select">
+                                            <option value="note">Note</option>
+                                            <option value="hypothesis">Hypothesis</option>
+                                            <option value="verdict">Verdict</option>
+                                            <option value="agent_summary">Agent Summary</option>
+                                        </select>
+                                        <input id="notebook-title" class="input" type="text"
+                                               placeholder="Entry title">
+                                        <textarea id="notebook-body" class="textarea"
+                                                  placeholder="Write the current hypothesis, rationale, or verdict"></textarea>
+                                        <div class="toolbar toolbar--end">
+                                            <button class="btn btn--primary" type="submit">Add Notebook Entry</button>
+                                        </div>
+                                    </form>
+                                </article>
+                                <div id="notebook-list" class="stack-list">
+                                    <div class="placeholder">Notebook entries will appear here.</div>
+                                </div>
+                            </section>
+
+                            <section class="workspace-section" id="ws-agent">
+                                <article class="panel panel--tight">
+                                    <div class="panel-head">
+                                        <div>
+                                            <div class="panel-kicker">Autonomous Investigation</div>
+                                            <h3 class="panel-title">Agent Sessions</h3>
+                                        </div>
+                                    </div>
+                                    <form id="agent-form" class="agent-form">
+                                        <textarea id="agent-goal" class="textarea textarea--short"
+                                                  placeholder="Investigate this case and prioritize the next analyst actions."></textarea>
+                                        <div class="toolbar toolbar--end">
+                                            <button class="btn btn--primary" type="submit">Start Session</button>
+                                        </div>
+                                    </form>
+                                </article>
+                                <div id="agent-session-list" class="stack-list">
+                                    <div class="placeholder">No agent sessions yet.</div>
+                                </div>
+                            </section>
+                            </div>
+
+                        <aside class="workspace-inspector">
+                            <section class="inspector-card inspector-card--hero">
+                                <div class="panel-kicker">Case Pulse</div>
+                                <h3 id="inspector-case-id">No case selected</h3>
+                                <div id="inspector-case-status" class="inspector-status">
+                                    <span class="placeholder placeholder--small">Open a case to inspect it.</span>
+                                </div>
+                                <div id="inspector-case-meta" class="inspector-metrics"></div>
+                            </section>
+
+                            <section class="inspector-card">
+                                <div class="panel-kicker">Next Actions</div>
+                                <div class="inspector-actions">
+                                    <button class="btn btn--ghost btn--mini" id="inspector-refresh-btn" type="button">Refresh</button>
+                                    <button class="btn btn--ghost btn--mini" id="inspector-ingest-btn" type="button">Ingest</button>
+                                    <button class="btn btn--ghost btn--mini" id="inspector-analyze-btn" type="button">Analyze</button>
+                                    <button class="btn btn--ghost btn--mini" id="inspector-share-btn" type="button">Share</button>
+                                </div>
+                            </section>
+
+                            <section class="inspector-card">
+                                <div class="panel-kicker">Case Context</div>
+                                <div id="inspector-summary" class="inspector-list">
+                                    <div class="placeholder placeholder--small">Summary appears after loading a case.</div>
+                                </div>
+                            </section>
+
+                            <section class="inspector-card">
+                                <div class="panel-kicker">Live Activity</div>
+                                <div id="inspector-activity" class="inspector-list">
+                                    <div class="placeholder placeholder--small">Activity feed appears here.</div>
+                                </div>
+                            </section>
+
+                            <section class="inspector-card">
+                                <div class="panel-kicker">Recommended Focus</div>
+                                <div id="inspector-next-step" class="inspector-list">
+                                    <div class="placeholder placeholder--small">Suggested next steps will appear here.</div>
+                                </div>
+                            </section>
+                        </aside>
+                    </div>
+                </section>
+            </main>
+
+            <main class="page" id="page-settings">
+                <section class="panel">
+                    <div class="panel-head">
+                        <div>
+                            <div class="panel-kicker">Runtime Settings</div>
+                            <h2 class="panel-title">Model and Enrichment Keys</h2>
+                        </div>
+                    </div>
+                    <form id="settings-form" class="settings-grid">
+                        <label class="field">
+                            <span class="field__label">OpenAI-Compatible Endpoint</span>
+                            <input id="settings-openai-endpoint" class="input" type="text">
+                        </label>
+                        <label class="field">
+                            <span class="field__label">OpenAI API Key</span>
+                            <input id="settings-openai-api-key" class="input" type="password">
+                        </label>
+                        <label class="field">
+                            <span class="field__label">LLM Model</span>
+                            <input id="settings-llama-model" class="input" type="text">
+                        </label>
+                        <label class="field">
+                            <span class="field__label">VirusTotal API Key</span>
+                            <input id="settings-virustotal-api-key" class="input" type="password">
+                        </label>
+                        <label class="field">
+                            <span class="field__label">AbuseIPDB API Key</span>
+                            <input id="settings-abuseipdb-api-key" class="input" type="password">
+                        </label>
+                        <label class="field field--wide">
+                            <span class="field__label">Data Directory</span>
+                            <input id="settings-data-dir" class="input" type="text" readonly>
+                        </label>
+                        <div class="toolbar toolbar--end field field--wide">
+                            <span id="settings-status" class="status-inline"></span>
+                            <button class="btn btn--primary" type="submit">Save Settings</button>
+                        </div>
+                    </form>
+                </section>
+            </main>
         </div>
-        <div id="drawer-body" class="drawer-body">
-            <div class="placeholder">Loading…</div>
+    </div>
+
+    <div class="modal-shell modal-shell--hidden" id="modal-shell">
+        <div class="modal modal--hidden" id="modal-new-case">
+            <div class="modal__head">
+                <h3>Create Case</h3>
+                <button class="modal__close" data-close-modal>&times;</button>
+            </div>
+            <form id="new-case-form" class="modal__body">
+                <label class="field">
+                    <span class="field__label">Case ID</span>
+                    <input id="new-case-id" class="input" type="text"
+                           placeholder="case-2026-001" required>
+                </label>
+                <div class="toolbar toolbar--end">
+                    <button class="btn btn--ghost" type="button" data-close-modal>Cancel</button>
+                    <button class="btn btn--primary" type="submit">Create</button>
+                </div>
+            </form>
         </div>
-    </aside>
-    <div id="overlay" class="overlay overlay--hidden"></div>
+
+        <div class="modal modal--hidden" id="modal-ingest">
+            <div class="modal__head">
+                <h3>Ingest Evidence</h3>
+                <button class="modal__close" data-close-modal>&times;</button>
+            </div>
+            <form id="ingest-form" class="modal__body">
+                <label class="field">
+                    <span class="field__label">Source Directory</span>
+                    <input id="ingest-source-dir" class="input" type="text"
+                           placeholder="C:\Evidence\Case01" required>
+                </label>
+                <div class="toolbar toolbar--end">
+                    <button class="btn btn--ghost" type="button" data-close-modal>Cancel</button>
+                    <button class="btn btn--primary" type="submit">Ingest</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="modal-shell modal-shell--hidden" id="command-shell">
+        <div class="command-palette" id="command-palette" role="dialog" aria-modal="true" aria-label="Command palette">
+            <div class="command-palette__head">
+                <div>
+                    <div class="panel-kicker">Command Palette</div>
+                    <h3>Search cases and actions</h3>
+                </div>
+                <button class="modal__close" data-close-command type="button">&times;</button>
+            </div>
+            <input id="command-input" class="input command-input" type="search"
+                   placeholder="Search cases, actions, or type a case id">
+            <div id="command-results" class="command-results"></div>
+            <div class="command-hint">Press Enter to run the first result. Esc closes the palette.</div>
+        </div>
+    </div>
 
     <script src="/assets/dashboard.js"></script>
 </body>

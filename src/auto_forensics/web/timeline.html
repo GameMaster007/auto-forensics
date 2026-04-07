@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Timeline Visualization - Auto Forensics</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/assets/dashboard.css">
+    <link rel="stylesheet" href="/assets/timeline.css">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+</head>
+<body>
+    <div class="shell">
+        <aside class="rail">
+            <div class="brand">
+                <div class="brand-mark">AF</div>
+                <div>
+                    <div class="brand-title">Auto Forensics</div>
+                    <div class="brand-subtitle">Timeline View</div>
+                </div>
+            </div>
+
+            <nav class="rail-nav">
+                <button class="rail-link" data-nav="dashboard">Back to Dashboard</button>
+                <button class="rail-link rail-link--active" data-page="timeline">Timeline</button>
+                <button class="rail-link" data-page="graph">Relationship Graph</button>
+            </nav>
+
+            <div class="rail-foot">
+                <div class="mini-stat">
+                    <span class="mini-stat__label">Current Case</span>
+                    <span class="mini-stat__value" id="rail-current-case">None</span>
+                </div>
+            </div>
+
+            <section class="rail-panel">
+                <div class="rail-panel__head">
+                    <span>Event Stats</span>
+                </div>
+                <div id="event-stats" class="rail-case-list">
+                    <div class="placeholder placeholder--small">Loading...</div>
+                </div>
+            </section>
+        </aside>
+
+        <div class="app">
+            <div class="app-chrome">
+                <div class="app-chrome__group">
+                    <div class="app-chip app-chip--brand">Timeline Visualization</div>
+                    <div class="app-chip" id="shell-case-pill">No active case</div>
+                </div>
+                <div class="app-chrome__group">
+                    <button class="btn btn--ghost btn--mini" id="reset-view-btn">Reset View</button>
+                    <button class="btn btn--ghost btn--mini" id="export-png-btn">Export PNG</button>
+                    <button class="btn btn--ghost btn--mini" id="export-svg-btn">Export SVG</button>
+                    <button class="btn btn--primary btn--mini" id="refresh-btn">Refresh</button>
+                </div>
+            </div>
+
+            <header class="masthead masthead--compact">
+                <div>
+                    <div class="eyebrow">Investigation</div>
+                    <h1 class="page-title">Evidence Timeline</h1>
+                    <p class="page-subtitle">
+                        Interactive visualization of case events with zoom, pan, and filtering capabilities.
+                    </p>
+                </div>
+            </header>
+
+            <main class="page page--active">
+                <section class="panel panel--timeline-controls">
+                    <div class="timeline-controls">
+                        <div class="control-group">
+                            <label class="control-label">Time Range</label>
+                            <div class="range-inputs">
+                                <input type="datetime-local" id="filter-after" class="input input--datetime">
+                                <span class="range-separator">to</span>
+                                <input type="datetime-local" id="filter-before" class="input input--datetime">
+                            </div>
+                        </div>
+                        <div class="control-group">
+                            <label class="control-label">Event Type</label>
+                            <select id="filter-event-type" class="select">
+                                <option value="">All Types</option>
+                            </select>
+                        </div>
+                        <div class="control-group">
+                            <label class="control-label">Min Risk</label>
+                            <input type="range" id="filter-risk" class="input input--range" min="0" max="10" step="0.1" value="0">
+                            <span id="risk-value" class="range-value">0.0</span>
+                        </div>
+                        <div class="control-group">
+                            <label class="control-label">MITRE Technique</label>
+                            <select id="filter-mitre" class="select">
+                                <option value="">All Techniques</option>
+                            </select>
+                        </div>
+                        <div class="control-group control-group--actions">
+                            <button class="btn btn--ghost" id="apply-filters-btn">Apply</button>
+                            <button class="btn btn--ghost" id="clear-filters-btn">Clear</button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="timeline-container">
+                    <div class="timeline-wrapper">
+                        <div id="timeline-chart" class="timeline-chart">
+                            <div class="placeholder">Loading timeline data...</div>
+                        </div>
+                        <div class="timeline-mini-map" id="timeline-minimap"></div>
+                    </div>
+                    <aside class="timeline-detail-panel" id="timeline-detail">
+                        <div class="placeholder">Select an event to view details</div>
+                    </aside>
+                </section>
+            </main>
+        </div>
+    </div>
+
+    <div class="modal-shell modal-shell--hidden" id="event-detail-modal">
+        <div class="modal" id="event-modal-content">
+            <div class="modal__head">
+                <h3>Event Details</h3>
+                <button class="modal__close" data-close-modal>&times;</button>
+            </div>
+            <div class="modal__body" id="event-modal-body">
+                <div class="placeholder">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/assets/timeline.js"></script>
+</body>
+</html>
