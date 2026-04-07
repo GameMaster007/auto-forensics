@@ -1,0 +1,233 @@
+/* Auto Forensics TUI - Catppuccin Mocha Theme */
+
+$rosewater: #f5e0dc;
+$flamingo: #f2cdcd;
+$pink: #f5c2e7;
+$mauve: #cba6f7;
+$red: #f38ba8;
+$maroon: #eba0ac;
+$peach: #fab387;
+$yellow: #f9e2af;
+$green: #a6e3a1;
+$teal: #94e2d5;
+$sky: #89dceb;
+$sapphire: #74c7ec;
+$blue: #89b4fa;
+$lavender: #b4befe;
+$text: #cdd6f4;
+$subtext1: #bac2de;
+$subtext0: #a6adc8;
+$overlay2: #9399b2;
+$overlay1: #7f849c;
+$overlay0: #6c7086;
+$surface2: #585b70;
+$surface1: #45475a;
+$surface0: #313244;
+$base: #1e1e2e;
+$mantle: #181825;
+$crust: #11111b;
+
+Screen {
+    background: $base;
+    color: $text;
+}
+
+CustomHeader {
+    dock: top;
+    height: 3;
+    background: $mantle;
+    color: $mauve;
+    content-align: center middle;
+    text-style: bold;
+    border-bottom: solid $surface0;
+}
+
+Footer {
+    dock: bottom;
+    height: 1;
+    background: $mantle;
+    color: $subtext0;
+    border-top: solid $surface0;
+}
+
+.screen-title {
+    text-style: bold;
+    text-align: center;
+    color: $mauve;
+    height: 3;
+}
+
+.section-title {
+    text-style: bold;
+    color: $pink;
+}
+
+Button.-primary {
+    background: $blue;
+    color: $crust;
+}
+
+Button.-success {
+    background: $green;
+    color: $crust;
+}
+
+Button.-error {
+    background: $red;
+    color: $crust;
+}
+
+DataTable {
+    border: solid $surface1;
+}
+
+DataTable:focus {
+    border: solid $mauve;
+}
+
+Tab.-active {
+    border-top: solid $mauve;
+    text-style: bold;
+}
+
+CaseCard:hover {
+    border: solid $mauve;
+}
+
+ProgressCard.state-running {
+    border: solid $sapphire;
+}
+
+StatsPanel {
+    border: solid $surface1;
+}
+
+FilterBar {
+    border-bottom: solid $surface0;
+}
+
+Log {
+    border: solid $surface1;
+}
+
+Tree:focus {
+    border: solid $mauve;
+}
+
+Input {
+    background: #313244;
+    color: #cdd6f4;
+    border: solid #45475a;
+    padding: 0 1;
+    height: 5;
+    width: 50;
+}
+
+Input:focus {
+    border: solid #cba6f7;
+}
+
+Input > .input--cursor {
+    background: #f5c2e7;
+}
+
+Button {
+    height: 3;
+    margin: 0 1;
+}
+
+Button > .button--label {
+    color: #1e1e2e;
+    text-style: bold;
+}
+
+Button.-primary {
+    background: #89b4fa;
+}
+
+Button.-primary:hover {
+    background: #b4befe;
+}
+
+Button.-success {
+    background: #a6e3a1;
+}
+
+Button.-success:hover {
+    background: #94e2d5;
+}
+
+Button.-default {
+    background: #45475a;
+    color: #cdd6f4;
+}
+
+Button.-default:hover {
+    background: #585b70;
+}
+
+Select {
+    background: #313244;
+    color: #cdd6f4;
+    border: solid #45475a;
+}
+
+Select:focus {
+    border: solid #cba6f7;
+}
+
+Password {
+    background: #313244;
+    color: #cdd6f4;
+    border: solid #45475a;
+}
+
+Switch {
+    background: #45475a;
+}
+
+Switch > .switch--on {
+    background: #a6e3a1;
+}
+
+TextArea {
+    background: #181825;
+    color: #cdd6f4;
+    border: solid #45475a;
+}
+
+ConfirmationModal Grid {
+    background: #313244;
+    border: solid #45475a;
+}
+
+/* Ensure widgets are visible */
+Static {
+    color: #cdd6f4;
+}
+
+Label {
+    color: #cdd6f4;
+}
+
+DataTable > .datatable--cursor {
+    background: #585b70;
+    color: #f5c2e7;
+}
+
+Tree > .tree--highlight {
+    color: #89b4fa;
+}
+
+/* Dialog styling */
+CaseCreatorDialog Grid {
+    background: #313244;
+}
+
+FileBrowserDialog Grid {
+    background: #313244;
+}
+
+ReportModal Grid {
+    background: #313244;
+}
