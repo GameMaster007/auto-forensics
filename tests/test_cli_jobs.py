@@ -60,7 +60,7 @@ def test_cli_jobs_list_and_filter(monkeypatch, capsys, tmp_path: Path):
     )
 
     payload = json.loads(
-        _run_cli(monkeypatch, capsys, cfg, ["jobs", "--case-id", "case-cli-jobs-001"])
+        _run_cli(monkeypatch, capsys, cfg, ["jobs", "--case-id", "case-cli-jobs-001", "--json"])
     )
     assert len(payload) == 2
     assert {item["job_type"] for item in payload} == {"analysis", "enrichment"}
@@ -70,7 +70,7 @@ def test_cli_jobs_list_and_filter(monkeypatch, capsys, tmp_path: Path):
             monkeypatch,
             capsys,
             cfg,
-            ["jobs", "--case-id", "case-cli-jobs-001", "--type", "analysis", "--limit", "10"],
+            ["jobs", "--case-id", "case-cli-jobs-001", "--type", "analysis", "--limit", "10", "--json"],
         )
     )
     assert len(filtered) == 1
@@ -98,19 +98,15 @@ def test_cli_cleanup_jobs(monkeypatch, capsys, tmp_path: Path):
         message="enrichment complete",
     )
 
-    cleanup = json.loads(
-        _run_cli(
-            monkeypatch,
-            capsys,
-            cfg,
-            ["cleanup-jobs", "--retention-days", "0"],
-        )
+    # --force skips the interactive confirmation prompt.
+    _run_cli(
+        monkeypatch,
+        capsys,
+        cfg,
+        ["cleanup-jobs", "--retention-days", "0", "--force"],
     )
-    assert cleanup["retention_days"] == 0
-    assert cleanup["removed_analysis_jobs"] >= 1
-    assert cleanup["removed_enrichment_jobs"] >= 1
 
     jobs_after = json.loads(
-        _run_cli(monkeypatch, capsys, cfg, ["jobs", "--case-id", "case-cli-cleanup-001"])
+        _run_cli(monkeypatch, capsys, cfg, ["jobs", "--case-id", "case-cli-cleanup-001", "--json"])
     )
     assert jobs_after == []

@@ -1,3 +1,6 @@
 [console_scripts]
 auto-forensics = auto_forensics.cli:main
 auto-forensics-api = auto_forensics.api:main
+auto-forensics-app = auto_forensics.desktop:main
+auto-forensics-launcher = auto_forensics.launcher:main
+auto-forensics-tui = auto_forensics.tui:main

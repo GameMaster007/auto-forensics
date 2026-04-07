@@ -41,60 +41,44 @@ PE_IMPORT_KEYWORDS = {
 
 ASCII_STRINGS_PATTERN = re.compile(rb"[ -~]{5,}")
 
+# Maximum bytes to load into memory for string extraction. Keeps RSS bounded for large binaries.
+_STRING_EXTRACT_CAP = 32 * 1024 * 1024  # 32 MB
 
-def _hash_file(path: Path) -> tuple[str, str]:
+
+def _streaming_analysis(path: Path, chunk_size: int = 1024 * 1024, string_cap: int = _STRING_EXTRACT_CAP) -> tuple[str, str, float, int, bytes]:
+    """Compute sha256, md5, entropy, total bytes, and extract raw strings in a single pass."""
     sha256 = hashlib.sha256()
     md5 = hashlib.md5()
-    with path.open("rb") as f:
-        while chunk := f.read(1024 * 1024):
-            sha256.update(chunk)
-            md5.update(chunk)
-    return sha256.hexdigest(), md5.hexdigest()
-
-
-def shannon_entropy(data: bytes) -> float:
-    if not data:
-        return 0.0
-    length = len(data)
-    buckets = [0] * 256
-    for b in data:
-        buckets[b] += 1
-    entropy = 0.0
-    for count in buckets:
-        if count == 0:
-            continue
-        p = count / length
-        entropy -= p * math.log2(p)
-    return round(entropy, 4)
-
-
-def _streaming_entropy(path: Path, chunk_size: int = 1024 * 1024) -> tuple[float, int]:
-    """Compute Shannon entropy by streaming the file in chunks. Returns (entropy, total_bytes)."""
     buckets = [0] * 256
     total = 0
+    raw_buffer = bytearray()
+    
     with path.open("rb") as f:
         while chunk := f.read(chunk_size):
             total += len(chunk)
+            sha256.update(chunk)
+            md5.update(chunk)
             for b in chunk:
                 buckets[b] += 1
+            if len(raw_buffer) < string_cap:
+                raw_buffer.extend(chunk[:string_cap - len(raw_buffer)])
+
     if total == 0:
-        return 0.0, 0
+        return sha256.hexdigest(), md5.hexdigest(), 0.0, 0, b""
+
     entropy = 0.0
     for count in buckets:
         if count == 0:
             continue
         p = count / total
         entropy -= p * math.log2(p)
-    return round(entropy, 4), total
+
+    return sha256.hexdigest(), md5.hexdigest(), round(entropy, 4), total, bytes(raw_buffer)
 
 
 def _extract_strings(raw: bytes, limit: int = 4000) -> list[str]:
     values = [m.group().decode("ascii", errors="ignore") for m in ASCII_STRINGS_PATTERN.finditer(raw)]
     return values[:limit]
-
-
-# Maximum bytes to load into memory for string extraction. Keeps RSS bounded for large binaries.
-_STRING_EXTRACT_CAP = 32 * 1024 * 1024  # 32 MB
 
 
 def _extract_pe_import_hints(path: Path) -> list[str]:
@@ -123,16 +107,8 @@ def _extract_pe_import_hints(path: Path) -> list[str]:
 
 
 def analyze_binary(path: Path) -> BinaryFeature:
-    sha256, md5 = _hash_file(path)
+    sha256, md5, entropy, size_bytes, raw = _streaming_analysis(path)
 
-    # Stream entropy to avoid loading multi-hundred-MB files into memory.
-    entropy, _ = _streaming_entropy(path)
-
-    # Only read up to _STRING_EXTRACT_CAP bytes for string extraction.
-    size_bytes = path.stat().st_size
-    read_cap = min(size_bytes, _STRING_EXTRACT_CAP)
-    with path.open("rb") as f:
-        raw = f.read(read_cap)
     strings = _extract_strings(raw)
     lc = [s.lower() for s in strings]
     hits = sorted({k for k in SUSPICIOUS_KEYWORDS if any(k in s for s in lc)})

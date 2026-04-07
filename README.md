@@ -53,7 +53,7 @@ Secure-by-default controls implemented:
 cd "C:\Users\Benji\Documents\Auto Forensics"
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-pip install -e .[server,dev]
+pip install -e .[server,dev,desktop]
 ```
 
 ### Linux
@@ -62,7 +62,7 @@ pip install -e .[server,dev]
 cd /path/to/Auto\ Forensics
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[server,dev]"
+pip install -e ".[server,dev,desktop]"
 ```
 
 ## CLI Usage
@@ -86,6 +86,66 @@ auto-forensics jobs --case-id case-2026-001 --type enrichment --limit 50
 auto-forensics cleanup-jobs --retention-days 14
 ```
 
+### File Scanning
+
+Scan individual files or directories without creating a case:
+
+```bash
+auto-forensics scan --path suspicious.exe
+auto-forensics scan --path suspicious.exe --json
+auto-forensics scan-dir --path ./evidence --json
+auto-forensics scan-dir --path ./evidence --no-recursive
+```
+
+### Case Conclusions
+
+Generate automated forensic conclusions and risk verdicts from case data:
+
+```bash
+auto-forensics conclusions --case-id case-2026-001
+auto-forensics conclusions --case-id case-2026-001 --json
+```
+
+### Timeline Filtering
+
+```bash
+auto-forensics timeline-filter --case-id case-2026-001 --min-risk 50
+auto-forensics timeline-filter --case-id case-2026-001 --after 2026-01-01 --before 2026-02-01
+auto-forensics timeline-filter --case-id case-2026-001 --event-type logon --keyword admin
+```
+
+### IOC Listing and Export
+
+```bash
+auto-forensics iocs --case-id case-2026-001
+auto-forensics iocs --case-id case-2026-001 --type ip
+auto-forensics iocs --case-id case-2026-001 --export csv > iocs.csv
+auto-forensics iocs --case-id case-2026-001 --export json > iocs.json
+```
+
+### Audit Trail
+
+```bash
+auto-forensics audit
+auto-forensics audit --case-id case-2026-001
+auto-forensics audit --limit 50 --json
+```
+
+### File Hashing
+
+```bash
+auto-forensics hash --path file.exe --algo all
+auto-forensics hash --path file.exe --algo sha256
+auto-forensics hash --path file.exe --json
+```
+
+### Configuration and Version
+
+```bash
+auto-forensics config
+auto-forensics version
+```
+
 List cases:
 
 ```bash
@@ -98,17 +158,45 @@ Legacy one-shot runner is still available:
 auto-forensics run --case-id demo-case --input-dir ./examples/case1/artifacts --output-dir ./output/demo-case --disable-llama
 ```
 
-## API and Dashboard
+## Desktop App
 
-Start server:
+Standalone app:
+
+```bash
+auto-forensics-app
+```
+
+Portable app:
+
+```bash
+AutoForensics.exe
+```
+
+The portable bundle stores its data next to the app in a local `data/`
+folder.
+
+Legacy browser/tray launcher:
 
 ```bash
 auto-forensics serve --host 127.0.0.1 --port 8765
+auto-forensics start --host 127.0.0.1 --port 8765
+auto-forensics-launcher
 ```
 
-Open:
+Windows one-click launch:
+- double-click `AutoForensics.exe` for the standalone app
+- double-click `start-portable.cmd` inside the portable bundle for portable mode
+- double-click `start-auto-forensics.cmd` for the legacy browser/tray launcher
+
+If you use the browser launcher, open:
 - `http://127.0.0.1:8765/` (dashboard)
 - `http://127.0.0.1:8765/docs` (dev mode only)
+
+Dashboard highlights:
+- case list filtering (`q`, `status`, `limit`) and global case stats
+- live analysis + IOC enrichment status bars
+- timeline filtering, case search, analyst notes, and report viewer
+- archive export/import controls for signed case bundles
 
 Live analysis status:
 - `POST /api/cases/{case_id}/analyze/async` starts background analysis

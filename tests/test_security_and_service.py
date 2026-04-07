@@ -2,11 +2,57 @@ from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor as _TestPool
 from pathlib import Path
 
+import pytest
+
 from auto_forensics.config import AppConfig
-from auto_forensics.security import SecurityError, SecurityPolicy, confine_path, validate_case_id
+from auto_forensics.security import (
+    SecurityError,
+    SecurityPolicy,
+    confine_path,
+    validate_case_id,
+    walk_case_directory,
+)
 from auto_forensics.service import AutoForensicsService
+
+
+def _make_cfg(tmp_path: Path) -> AppConfig:
+    data_dir = tmp_path / "data"
+    return AppConfig(
+        data_dir=data_dir,
+        cases_dir=data_dir / "cases",
+        db_path=data_dir / "app.db",
+        host="127.0.0.1",
+        port=8765,
+        production=False,
+        api_key_hash=None,
+        allowed_origins=[],
+        trusted_hosts=["127.0.0.1", "localhost"],
+        allowed_ingest_roots=[tmp_path.resolve()],
+        rate_limit_per_minute=240,
+        llama_endpoint="http://localhost:11434",
+        llama_model="llama3.1:8b",
+        security_policy=SecurityPolicy(max_file_size_bytes=5_000_000, max_total_files=1000, max_text_bytes=1_000_000),
+    )
+
+
+def _write_minimal_source(source: Path) -> None:
+    source.mkdir(exist_ok=True)
+    (source / "events.json").write_text(
+        json.dumps(
+            [
+                {
+                    "timestamp": "2026-02-17T13:12:00Z",
+                    "event_type": "process_start",
+                    "description": "sample process",
+                    "source": "unit-test",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_validate_case_id_rejects_invalid_chars():
@@ -28,6 +74,28 @@ def test_confine_path_rejects_escape(tmp_path: Path):
         assert False, "Expected SecurityError"
     except SecurityError:
         pass
+
+
+def test_walk_case_directory_skips_symlinked_directories(tmp_path: Path):
+    source = tmp_path / "source"
+    source.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "events.json").write_text("[]", encoding="utf-8")
+    link = source / "linked"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except (NotImplementedError, OSError):
+        pytest.skip("Symlinks not supported on this platform")
+
+    policy = SecurityPolicy(
+        max_file_size_bytes=5_000_000,
+        max_total_files=1000,
+        max_text_bytes=1_000_000,
+        follow_symlinks=False,
+    )
+    walked = list(walk_case_directory(source, policy))
+    assert walked == []
 
 
 def test_case_lifecycle_end_to_end(tmp_path: Path):
@@ -284,3 +352,188 @@ def test_job_history_filter_and_cleanup(tmp_path: Path):
     assert cleanup["removed_analysis_jobs"] >= 1
     assert cleanup["removed_enrichment_jobs"] >= 1
     assert service.case_job_history("case-jobs-001") == []
+
+
+def test_case_listing_filters_and_stats_service(tmp_path: Path):
+    data_dir = tmp_path / "data"
+    cfg = AppConfig(
+        data_dir=data_dir,
+        cases_dir=data_dir / "cases",
+        db_path=data_dir / "app.db",
+        host="127.0.0.1",
+        port=8765,
+        production=False,
+        api_key_hash=None,
+        allowed_origins=[],
+        trusted_hosts=["127.0.0.1", "localhost"],
+        allowed_ingest_roots=[tmp_path.resolve()],
+        rate_limit_per_minute=240,
+        llama_endpoint="http://localhost:11434",
+        llama_model="llama3.1:8b",
+        security_policy=SecurityPolicy(max_file_size_bytes=5_000_000, max_total_files=1000, max_text_bytes=1_000_000),
+        job_retention_days=30,
+    )
+    service = AutoForensicsService(cfg)
+    service.create_case("case-list-alpha")
+    service.create_case("case-list-beta")
+    service.create_case("case-list-gamma")
+    service.db.set_case_status("case-list-beta", "failed", "sample error")
+    service.db.set_case_status("case-list-gamma", "analyzing")
+
+    limited = service.list_cases(limit=2)
+    assert len(limited) == 2
+
+    failed_only = service.list_cases(status="failed")
+    assert len(failed_only) == 1
+    assert failed_only[0]["case_id"] == "case-list-beta"
+
+    search = service.list_cases(query="sample error")
+    assert len(search) == 1
+    assert search[0]["case_id"] == "case-list-beta"
+
+    try:
+        service.list_cases(status="invalid")
+        assert False, "Expected SecurityError"
+    except SecurityError:
+        pass
+
+    stats = service.case_stats()
+    assert stats["total_cases"] == 3
+    assert stats["by_status"]["failed"] == 1
+    assert stats["by_status"]["analyzing"] == 1
+    assert stats["active_cases"] == 1
+    assert stats["failed_cases"] == 1
+    assert isinstance(stats["newest_updated_at"], str)
+
+
+def test_async_job_immediate_status_is_queued(tmp_path: Path):
+    service = AutoForensicsService(_make_cfg(tmp_path))
+    service.create_case("case-imm-001")
+    _write_minimal_source(tmp_path / "source-imm")
+    service.ingest_case("case-imm-001", tmp_path / "source-imm")
+
+    kickoff = service.analyze_case_async("case-imm-001", enable_llama=False)
+    assert kickoff["accepted"] is True
+
+    # Check status immediately — before the job can possibly complete.
+    status = service.get_case_status("case-imm-001")
+    assert status["state"] in {"queued", "running"}, (
+        f"Expected 'queued' or 'running' immediately after submission, got {status['state']!r}"
+    )
+
+    # Wait for job to finish so the executor is clean before teardown.
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if service.get_case_status("case-imm-001")["state"] in {"complete", "failed"}:
+            break
+        time.sleep(0.1)
+
+
+def test_async_duplicate_job_rejected(tmp_path: Path):
+    service = AutoForensicsService(_make_cfg(tmp_path))
+    service.create_case("case-dup-001")
+    _write_minimal_source(tmp_path / "source-dup")
+    service.ingest_case("case-dup-001", tmp_path / "source-dup")
+
+    results: list[dict] = []
+    with _TestPool(max_workers=2) as pool:
+        f1 = pool.submit(service.analyze_case_async, "case-dup-001", False)
+        f2 = pool.submit(service.analyze_case_async, "case-dup-001", False)
+        results = [f1.result(), f2.result()]
+
+    accepted = [r for r in results if r["accepted"] is True]
+    rejected = [r for r in results if r["accepted"] is False]
+    assert len(accepted) == 1, f"Expected exactly 1 accepted, got {len(accepted)}"
+    assert len(rejected) == 1, f"Expected exactly 1 rejected, got {len(rejected)}"
+
+    # Wait for the accepted job to finish before teardown.
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if service.get_case_status("case-dup-001")["state"] in {"complete", "failed"}:
+            break
+        time.sleep(0.1)
+
+
+def test_service_recovers_interrupted_jobs_on_startup(tmp_path: Path):
+    cfg = _make_cfg(tmp_path)
+    service = AutoForensicsService(cfg)
+    service.create_case("case-recover-001")
+
+    service.db.upsert_analysis_job(
+        job_id="job-analysis-001",
+        case_id="case-recover-001",
+        job_type="analysis",
+        state="running",
+        progress=45,
+        message="analysis in progress",
+    )
+    service.db.upsert_analysis_job(
+        job_id="job-enrich-001",
+        case_id="case-recover-001",
+        job_type="enrichment",
+        state="queued",
+        progress=0,
+        message="enrichment queued",
+    )
+    service.db.create_agent_session(
+        case_id="case-recover-001",
+        goal="Investigate suspicious activity",
+        status="running",
+        model_config={"enable_llama": False},
+        summary="",
+    )
+    service.db.create_agent_session(
+        case_id="case-recover-001",
+        goal="Follow-up review",
+        status="queued",
+        model_config={"enable_llama": False},
+        summary="",
+    )
+
+    recovered = AutoForensicsService(cfg)
+    recovered.startup()
+
+    analysis_job = recovered.db.get_case_latest_job(
+        "case-recover-001",
+        job_type="analysis",
+    )
+    assert analysis_job is not None
+    assert analysis_job["state"] == "failed"
+    assert "restart" in str(analysis_job["error"]).lower()
+
+    enrichment_job = recovered.db.get_case_latest_job(
+        "case-recover-001",
+        job_type="enrichment",
+    )
+    assert enrichment_job is not None
+    assert enrichment_job["state"] == "failed"
+    assert "restart" in str(enrichment_job["error"]).lower()
+
+    sessions = recovered.db.list_agent_sessions("case-recover-001")
+    assert sessions
+    assert all(session["status"] == "failed" for session in sessions)
+
+    case = recovered.db.get_case("case-recover-001")
+    assert case is not None
+    assert case["status"] == "failed"
+
+
+def test_ingest_case_skips_symlinked_directories(tmp_path: Path):
+    service = AutoForensicsService(_make_cfg(tmp_path))
+    service.create_case("case-symlink-001")
+
+    source = tmp_path / "source-symlink"
+    source.mkdir()
+    outside = tmp_path / "outside-symlink"
+    outside.mkdir()
+    (outside / "events.json").write_text("[]", encoding="utf-8")
+    link = source / "linked"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except (NotImplementedError, OSError):
+        pytest.skip("Symlinks not supported on this platform")
+
+    result = service.ingest_case("case-symlink-001", source)
+    assert result["ingested_files"] == 0
+    overview = service.case_overview("case-symlink-001")
+    assert overview["artifacts"] == []

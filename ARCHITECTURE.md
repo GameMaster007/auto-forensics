@@ -27,10 +27,21 @@
   - optional external plugin auto-loading from configured directories
 - `auto_forensics/service.py`:
   - application service layer orchestrating case lifecycle
+  - standalone file and directory scanning
+  - heuristic conclusions engine (MITRE tactic correlation, risk verdicts)
+  - timeline filtering by date, risk score, event type, and keyword
 - `auto_forensics/api.py`:
   - FastAPI interface and secure dashboard serving
 - `auto_forensics/cli.py`:
   - operations entrypoint for Windows/Linux terminal workflows
+  - 30+ subcommands: case lifecycle, scanning, analysis, notes, audit, hashing, and more
+  - `solve` command: launches the autonomous agent with optional overrides
+- `auto_forensics/agent.py`:
+  - **Autonomous AI agent** — zero user-input forensic investigation
+  - Auto-discovers the `Case` folder in the tool's own directory
+  - Runs the full pipeline (init → ingest → analyse → conclusions → report) automatically
+  - Writes `agent_report.md` and `agent_report.html` into the case folder
+  - Launched automatically by `start-auto-forensics.cmd` when a Case folder is present
 
 ## Data Flow
 
@@ -40,6 +51,9 @@
 4. Persist findings/timeline (`db.py`)
 5. Render reports (`case_report.json`, `case_report.md`)
 6. Query overview/report (`overview`, `report`, API endpoints)
+7. Generate conclusions (`conclusions` command)
+8. Scan files/directories (`scan`, `scan-dir` commands)
+9. View audit trail (`audit` command)
 
 ## Security Highlights
 

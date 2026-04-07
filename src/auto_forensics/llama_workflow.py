@@ -122,7 +122,7 @@ class LlamaWorkflow:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         req = urllib.request.Request(
-            f"{self.endpoint}/v1/chat/completions",
+            f"{self.endpoint.rstrip('/')}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
             headers=headers,
             method="POST",

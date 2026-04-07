@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from .models import ArtifactEvent
-from .security import SecurityError, read_limited_text
+from .security import SecurityError, read_limited_text, walk_case_directory, SecurityPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -1041,6 +1041,153 @@ class MemoryDumpArtifactParser:
         return load_memory_artifacts(path)
 
 
+# ---------------------------------------------------------------------------
+# Browser history parser (Chrome/Edge/Firefox SQLite databases)
+# ---------------------------------------------------------------------------
+
+_CHROME_EPOCH_OFFSET_US = 11_644_473_600_000_000  # microseconds between 1601-01-01 and 1970-01-01
+
+
+def _chrome_epoch_to_iso(chrome_ts: int) -> str | None:
+    """Convert Chrome's microseconds-since-1601 timestamp to ISO-8601 UTC."""
+    if not chrome_ts:
+        return None
+    try:
+        unix_us = int(chrome_ts) - _CHROME_EPOCH_OFFSET_US
+        unix_s = unix_us / 1_000_000
+        return datetime.fromtimestamp(unix_s, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    except (ValueError, OSError, OverflowError):
+        return None
+
+
+def _parse_chromium_history(con: Any, source: str) -> list[ArtifactEvent]:
+    """Parse Chrome/Edge history from an open read-only SQLite connection."""
+    out: list[ArtifactEvent] = []
+    try:
+        cursor = con.execute(
+            "SELECT url, title, visit_count, last_visit_time FROM urls ORDER BY last_visit_time DESC LIMIT 5000"
+        )
+    except Exception as exc:
+        logger.debug("Chromium urls table query failed (%s): %s", source, exc)
+        return out
+    for row in cursor:
+        url = str(row[0] or "")
+        title = str(row[1] or "")
+        visit_count = int(row[2] or 0)
+        ts = _chrome_epoch_to_iso(row[3])
+        out.append(
+            ArtifactEvent(
+                artifact_id=_gen_artifact_id("browser"),
+                timestamp=ts,
+                event_type="web_visit",
+                description=f"Web visit: {url}" + (f" ({title})" if title else ""),
+                source=source,
+                metadata={
+                    "url": url,
+                    "title": title,
+                    "visit_count": visit_count,
+                    "browser": "chrome_edge",
+                    "attack_tactic": "collection",
+                    "attack_technique_id": "T1217",
+                    "attack_sub_technique": "",
+                },
+            )
+        )
+    return out
+
+
+def _parse_firefox_history(con: Any, source: str) -> list[ArtifactEvent]:
+    """Parse Firefox history from an open read-only SQLite connection."""
+    out: list[ArtifactEvent] = []
+    try:
+        cursor = con.execute(
+            "SELECT url, title, visit_count, last_visit_date FROM moz_places"
+            " ORDER BY last_visit_date DESC LIMIT 5000"
+        )
+    except Exception as exc:
+        logger.debug("Firefox moz_places query failed (%s): %s", source, exc)
+        return out
+    for row in cursor:
+        url = str(row[0] or "")
+        title = str(row[1] or "")
+        visit_count = int(row[2] or 0)
+        # Firefox stores microseconds since Unix epoch
+        ts: str | None = None
+        if row[3]:
+            try:
+                ts = datetime.fromtimestamp(
+                    int(row[3]) / 1_000_000, tz=timezone.utc
+                ).isoformat().replace("+00:00", "Z")
+            except (ValueError, OSError, OverflowError):
+                ts = None
+        out.append(
+            ArtifactEvent(
+                artifact_id=_gen_artifact_id("browser"),
+                timestamp=ts,
+                event_type="web_visit",
+                description=f"Web visit: {url}" + (f" ({title})" if title else ""),
+                source=source,
+                metadata={
+                    "url": url,
+                    "title": title,
+                    "visit_count": visit_count,
+                    "browser": "firefox",
+                    "attack_tactic": "collection",
+                    "attack_technique_id": "T1217",
+                    "attack_sub_technique": "",
+                },
+            )
+        )
+    return out
+
+
+def load_browser_history_artifacts(path: Path) -> list[ArtifactEvent]:
+    """Open a browser history SQLite database read-only and parse visit records."""
+    try:
+        import sqlite3
+    except ImportError:
+        return []
+
+    uri = f"file:{path.as_posix()}?mode=ro&immutable=1"
+    try:
+        con = sqlite3.connect(uri, uri=True, check_same_thread=False)
+    except Exception as exc:
+        logger.warning("Could not open browser history %s: %s", path, exc)
+        return []
+
+    try:
+        # Detect schema: Chrome/Edge has an 'urls' table, Firefox has 'moz_places'.
+        tables_cur = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )
+        tables = {row[0] for row in tables_cur}
+
+        if "urls" in tables:
+            return _parse_chromium_history(con, source=path.name)
+        if "moz_places" in tables:
+            return _parse_firefox_history(con, source=path.name)
+        logger.debug("Unknown browser history schema in %s (tables: %s)", path, tables)
+        return []
+    except Exception as exc:
+        logger.warning("Error parsing browser history %s: %s", path, exc)
+        return []
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+
+
+class BrowserHistoryArtifactParser:
+    name = "browser-history-artifact-parser"
+    supported_suffixes = (".sqlite", ".db")
+    supported_names = ("History",)
+
+    def parse(self, path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> list[ArtifactEvent]:
+        del max_text_bytes
+        return load_browser_history_artifacts(path)
+
+
 def discover_artifacts(
     input_dir: Path,
     max_text_bytes: int = 4 * 1024 * 1024,
@@ -1055,9 +1202,16 @@ def discover_artifacts(
         parser_registry = ArtifactParserRegistry()
     parser_registry.register_defaults()
 
-    for path in sorted(input_dir.rglob("*")):
-        if not path.is_file():
-            continue
+    policy = SecurityPolicy(max_text_bytes=max_text_bytes)
+
+    def is_parsable(p: Path) -> bool:
+        suffix = p.suffix.lower()
+        if suffix in binary_suffixes:
+            return True
+        return parser_registry.parser_for_suffix(suffix) is not None or \
+               parser_registry.parser_for_name(p.name) is not None
+
+    for path in walk_case_directory(input_dir, policy, filter_func=is_parsable):
         suffix = path.suffix.lower()
         if suffix in binary_suffixes:
             binaries.append(path)

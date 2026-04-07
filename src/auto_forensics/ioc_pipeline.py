@@ -66,6 +66,32 @@ def _is_valid_ipv4(value: str) -> bool:
         return False
 
 
+def _is_public_ipv4(value: str) -> bool:
+    """Return True only for globally-routable (non-RFC1918 / non-loopback) IPv4 addresses.
+
+    Private / reserved ranges filtered out:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - 127.0.0.0/8  (loopback)
+      - 169.254.0.0/16  (link-local)
+      - 0.0.0.0/8  (unspecified)
+      - 255.255.255.255  (broadcast)
+    """
+    try:
+        addr = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return not (
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_unspecified
+        or addr.is_reserved
+        or addr.is_multicast
+    )
+
+
 def _extract_from_text(text: str) -> dict[str, set[str]]:
     # Guard against massive strings that would make regex scanning very slow.
     if len(text) > _MAX_IOC_TEXT_BYTES:
@@ -79,7 +105,7 @@ def _extract_from_text(text: str) -> dict[str, set[str]]:
             urls.add(cleaned)
 
     hashes = {x.lower() for x in HASH_RE.findall(text)}
-    ips = {x for x in IP_RE.findall(text) if _is_valid_ipv4(x)}
+    ips = {x for x in IP_RE.findall(text) if _is_public_ipv4(x)}
 
     domains: set[str] = set()
     for raw_domain in DOMAIN_RE.findall(text):
