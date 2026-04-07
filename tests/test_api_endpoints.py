@@ -236,3 +236,43 @@ def test_api_export_import_and_dashboard_assets(tmp_path: Path):
     # Path traversal and unknown extensions are rejected.
     assert client.get("/assets/../api.py").status_code == 404
     assert client.get("/assets/secret.exe").status_code == 404
+
+
+def test_api_share_brief_and_events(tmp_path: Path):
+    TestClient = _test_client_class()
+
+    cfg = _config(tmp_path)
+    app = create_app(cfg)
+    client = TestClient(app)
+
+    case_id = "case-share-001"
+    _create_case_with_artifacts(client, tmp_path, case_id)
+
+    analyzed = client.post(
+        f"/api/cases/{case_id}/analyze",
+        json={"enable_llama": False},
+    )
+    assert analyzed.status_code == 200
+
+    shared = client.get(f"/api/cases/{case_id}/share/brief")
+    assert shared.status_code == 200
+    share_payload = shared.json()
+    assert share_payload["case_id"] == case_id
+    assert "/?case=" in share_payload["share_url"]
+    assert "Open workspace:" in share_payload["share_text"]
+    assert "share_clicked" in share_payload["metrics"]
+
+    tracked = client.post(
+        f"/api/cases/{case_id}/share/events",
+        json={"event": "share_copied", "channel": "clipboard"},
+    )
+    assert tracked.status_code == 200
+    tracked_payload = tracked.json()
+    assert tracked_payload["event"] == "share_copied"
+    assert tracked_payload["tracked"] is True
+
+    overview = client.get(f"/api/cases/{case_id}")
+    assert overview.status_code == 200
+    actions = [item.get("action") for item in overview.json().get("audit_log", [])]
+    assert "share_clicked" in actions
+    assert "share_copied" in actions

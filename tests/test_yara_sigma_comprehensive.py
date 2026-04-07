@@ -32,7 +32,7 @@ rule TestRule {
     assert findings[0].title == "YARA match: TestRule"
     assert "sample.bin" in findings[0].evidence[0]
     assert len(hints) == 1
-    assert hints[0].event_type == "yara_detection"
+    assert hints[0].event_type == "yara_match"
 
 def test_yara_malformed_rule_skipped(tmp_path: Path):
     try:

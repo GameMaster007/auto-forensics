@@ -5,8 +5,16 @@ import time
 from concurrent.futures import ThreadPoolExecutor as _TestPool
 from pathlib import Path
 
+import pytest
+
 from auto_forensics.config import AppConfig
-from auto_forensics.security import SecurityError, SecurityPolicy, confine_path, validate_case_id
+from auto_forensics.security import (
+    SecurityError,
+    SecurityPolicy,
+    confine_path,
+    validate_case_id,
+    walk_case_directory,
+)
 from auto_forensics.service import AutoForensicsService
 
 
@@ -66,6 +74,28 @@ def test_confine_path_rejects_escape(tmp_path: Path):
         assert False, "Expected SecurityError"
     except SecurityError:
         pass
+
+
+def test_walk_case_directory_skips_symlinked_directories(tmp_path: Path):
+    source = tmp_path / "source"
+    source.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "events.json").write_text("[]", encoding="utf-8")
+    link = source / "linked"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except (NotImplementedError, OSError):
+        pytest.skip("Symlinks not supported on this platform")
+
+    policy = SecurityPolicy(
+        max_file_size_bytes=5_000_000,
+        max_total_files=1000,
+        max_text_bytes=1_000_000,
+        follow_symlinks=False,
+    )
+    walked = list(walk_case_directory(source, policy))
+    assert walked == []
 
 
 def test_case_lifecycle_end_to_end(tmp_path: Path):
@@ -422,3 +452,88 @@ def test_async_duplicate_job_rejected(tmp_path: Path):
         if service.get_case_status("case-dup-001")["state"] in {"complete", "failed"}:
             break
         time.sleep(0.1)
+
+
+def test_service_recovers_interrupted_jobs_on_startup(tmp_path: Path):
+    cfg = _make_cfg(tmp_path)
+    service = AutoForensicsService(cfg)
+    service.create_case("case-recover-001")
+
+    service.db.upsert_analysis_job(
+        job_id="job-analysis-001",
+        case_id="case-recover-001",
+        job_type="analysis",
+        state="running",
+        progress=45,
+        message="analysis in progress",
+    )
+    service.db.upsert_analysis_job(
+        job_id="job-enrich-001",
+        case_id="case-recover-001",
+        job_type="enrichment",
+        state="queued",
+        progress=0,
+        message="enrichment queued",
+    )
+    service.db.create_agent_session(
+        case_id="case-recover-001",
+        goal="Investigate suspicious activity",
+        status="running",
+        model_config={"enable_llama": False},
+        summary="",
+    )
+    service.db.create_agent_session(
+        case_id="case-recover-001",
+        goal="Follow-up review",
+        status="queued",
+        model_config={"enable_llama": False},
+        summary="",
+    )
+
+    recovered = AutoForensicsService(cfg)
+    recovered.startup()
+
+    analysis_job = recovered.db.get_case_latest_job(
+        "case-recover-001",
+        job_type="analysis",
+    )
+    assert analysis_job is not None
+    assert analysis_job["state"] == "failed"
+    assert "restart" in str(analysis_job["error"]).lower()
+
+    enrichment_job = recovered.db.get_case_latest_job(
+        "case-recover-001",
+        job_type="enrichment",
+    )
+    assert enrichment_job is not None
+    assert enrichment_job["state"] == "failed"
+    assert "restart" in str(enrichment_job["error"]).lower()
+
+    sessions = recovered.db.list_agent_sessions("case-recover-001")
+    assert sessions
+    assert all(session["status"] == "failed" for session in sessions)
+
+    case = recovered.db.get_case("case-recover-001")
+    assert case is not None
+    assert case["status"] == "failed"
+
+
+def test_ingest_case_skips_symlinked_directories(tmp_path: Path):
+    service = AutoForensicsService(_make_cfg(tmp_path))
+    service.create_case("case-symlink-001")
+
+    source = tmp_path / "source-symlink"
+    source.mkdir()
+    outside = tmp_path / "outside-symlink"
+    outside.mkdir()
+    (outside / "events.json").write_text("[]", encoding="utf-8")
+    link = source / "linked"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except (NotImplementedError, OSError):
+        pytest.skip("Symlinks not supported on this platform")
+
+    result = service.ingest_case("case-symlink-001", source)
+    assert result["ingested_files"] == 0
+    overview = service.case_overview("case-symlink-001")
+    assert overview["artifacts"] == []

@@ -32,7 +32,9 @@ def test_health_check(client):
     resp = client.get("/api/health")
     print(f"DEBUG: {resp.status_code} {resp.text}")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert "db" in data  # Health check now includes DB connectivity status
 
 def test_404_error_standardized(client):
     resp = client.get("/api/nonexistent")
