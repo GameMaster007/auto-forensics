@@ -287,6 +287,7 @@ def test_replay_config_repeats_paths_and_does_not_store_the_api_key(tmp_path: Pa
     stix.write_text("{}", encoding="utf-8")
     secret = "sk-test-should-not-be-stored"
     monkeypatch.setenv("AUTO_FORENSICS_OPENAI_API_KEY", secret)
+    monkeypatch.delenv("AUTO_FORENSICS_OPENAI_ENDPOINT", raising=False)
     manifest = {
         "case_id": "replay-me",
         "model": {
@@ -304,6 +305,9 @@ def test_replay_config_repeats_paths_and_does_not_store_the_api_key(tmp_path: Pa
     }
     config = config_from_manifest(manifest, tmp_path, tmp_path / "out")
     assert config.openai_compatible_endpoint == "http://127.0.0.1:9/v1"
+    assert config.openai_api_key is None
+    monkeypatch.setenv("AUTO_FORENSICS_OPENAI_ENDPOINT", "http://127.0.0.1:9/v1")
+    config = config_from_manifest(manifest, tmp_path, tmp_path / "out")
     assert config.openai_api_key == secret
     assert config.rules_dir == rules
     assert config.sigma_rules_dir == sigma

@@ -74,8 +74,10 @@ def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict
 def config_from_manifest(manifest: dict[str, Any], input_dir: Path, output_dir: Path) -> PipelineConfig:
     """Build the pipeline config a manifest can repeat.
 
-    Rule and STIX paths are taken from the manifest. An API key is read
-    from the environment at replay time and is never stored.
+    Rule and STIX paths are taken from the manifest. The API key is
+    read from the environment only when the manifest endpoint is the
+    endpoint already configured there. A manifest cannot redirect that
+    key to another host. The key is never stored.
     """
     model = manifest.get("model") if isinstance(manifest.get("model"), dict) else {}
     paths = manifest.get("paths") if isinstance(manifest.get("paths"), dict) else {}
@@ -88,7 +90,15 @@ def config_from_manifest(manifest: dict[str, Any], input_dir: Path, output_dir: 
         llama_endpoint = str(endpoint)
     if provider == "openai_compatible" and endpoint:
         openai_endpoint = str(endpoint)
-    api_key = os.environ.get("AUTO_FORENSICS_OPENAI_API_KEY") if provider == "openai_compatible" else None
+    configured_endpoint = os.environ.get("AUTO_FORENSICS_OPENAI_ENDPOINT")
+    api_key = None
+    if (
+        provider == "openai_compatible"
+        and openai_endpoint
+        and configured_endpoint
+        and openai_endpoint == configured_endpoint
+    ):
+        api_key = os.environ.get("AUTO_FORENSICS_OPENAI_API_KEY")
     return PipelineConfig(
         case_id=str(manifest.get("case_id") or "replay"),
         input_dir=input_dir,
