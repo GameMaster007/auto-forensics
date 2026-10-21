@@ -75,9 +75,9 @@ class Finding:
     ``review_status`` is ``unverified`` until an analyst accepts or
     rejects the draft. This version stores the status and does not
     yet provide the review command.
-    ``verification`` is the verifier verdict for this finding:
-    ``supported`` when the cited row contained the claim, otherwise
-    empty because rejected findings are left out of the report.
+    ``verification`` is the verifier label kept on a finding that
+    stays in the report: ``supported``, ``score-based``, or
+    ``needs review``. Rejected findings are left out.
     """
 
     finding_id: str

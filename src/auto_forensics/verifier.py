@@ -54,7 +54,9 @@ REASON_HASH = "cited file hash does not match"
 REASON_UNREADABLE = "cited row could not be read"
 REASON_NO_CLAIM = "no grounded claim sentence"
 REASON_DETECTOR = "detector label; cited file hash matches"
+REASON_SCORE = "score-based; cited file hash matches"
 REASON_JUDGE = "judge rejected the claim"
+REASON_NEEDS_REVIEW = "cited row is over the judge cap; rules supported it"
 
 
 class ClaimJudge(Protocol):
@@ -132,7 +134,10 @@ def verify_findings(
         verdict = _verify_one(finding, input_dir, judge)
         verdicts.append(verdict)
         if verdict.verdict == "supported":
-            finding.verification = "supported"
+            finding.verification = "score-based" if verdict.reason == REASON_SCORE else "supported"
+            kept.append(finding)
+        elif verdict.verdict == "needs review":
+            finding.verification = "needs review"
             kept.append(finding)
     return kept, verdicts
 
@@ -149,8 +154,10 @@ def _verify_one(finding: Finding, input_dir: Path, judge: ClaimJudge | None) -> 
     cited = "\n".join(texts)
     lines = claim_lines(finding)
     if not lines:
-        if finding.origin == "detector" and texts:
+        if texts and finding.origin == "detector":
             return _verdict(finding, "supported", REASON_DETECTOR, "rules", first)
+        if texts and finding.origin in {"heuristic", "llm"}:
+            return _verdict(finding, "supported", REASON_SCORE, "rules", first)
         return _verdict(finding, "rejected", REASON_NO_CLAIM, "rules", first)
 
     if any(_norm(line) not in _norm(cited) for line in lines):
@@ -158,14 +165,19 @@ def _verify_one(finding: Finding, input_dir: Path, judge: ClaimJudge | None) -> 
 
     if judge is not None:
         used_judge = False
+        needs_review = False
         for line in lines:
             decision = judge.judge(line, cited)
             if decision is None:
                 used_judge = False
                 break
             used_judge = True
-            if decision != "supported":
+            if decision == "rejected":
                 return _verdict(finding, "rejected", REASON_JUDGE, judge.name, first)
+            if decision == "needs_review":
+                needs_review = True
+        if used_judge and needs_review:
+            return _verdict(finding, "needs review", REASON_NEEDS_REVIEW, judge.name, first)
         if used_judge:
             return _verdict(finding, "supported", REASON_SUPPORTED, judge.name, first)
     return _verdict(finding, "supported", REASON_SUPPORTED, "rules", first)

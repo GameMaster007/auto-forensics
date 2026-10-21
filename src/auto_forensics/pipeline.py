@@ -242,7 +242,7 @@ def _to_html(report: CaseReport) -> str:
         `<td>${{esc(item.tactic)}}</td>` +
         `<td>${{esc(item.technique_id || "")}}</td>` +
         `<td>${{esc(item.confidence)}}</td>` +
-        `<td>${{esc(item.review_status || "unverified")}}</td>` +
+        `<td>${{esc(item.review_status || "unverified")}}${{item.verification ? " · " + esc(item.verification) : ""}}</td>` +
         `<td>${{esc(citeLabel(item))}}</td>` +
         `</tr>`
       ).join("");

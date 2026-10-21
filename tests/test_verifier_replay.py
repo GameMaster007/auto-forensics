@@ -11,11 +11,19 @@ import pytest
 from auto_forensics.artifacts import discover_artifacts, load_json_artifacts
 from auto_forensics.citations import citation_from_event
 from auto_forensics.cli import main
+from auto_forensics.llama_workflow import (
+    EVIDENCE_OPEN,
+    JUDGE_CITED_CAP,
+    LlamaWorkflow,
+    MockLlamaWorkflow,
+    build_support_prompt,
+    heuristic_fallback,
+)
 from auto_forensics.manifest import canonical_report_sha256
-from auto_forensics.models import Citation, Finding
-from auto_forensics.pipeline import PipelineConfig, run_case
+from auto_forensics.models import BinaryFeature, Citation, Finding
+from auto_forensics.pipeline import PipelineConfig, _to_markdown, run_case
 from auto_forensics.replay import config_from_manifest
-from auto_forensics.verifier import MockClaimJudge, locate_source, verify_findings
+from auto_forensics.verifier import MockClaimJudge, claim_lines, locate_source, verify_findings
 
 
 def _run(source: Path, output: Path) -> dict:
@@ -335,3 +343,107 @@ def test_replay_config_repeats_paths_and_does_not_store_the_api_key(tmp_path: Pa
     assert body["paths"]["rules_dir"] == str(rules)
     assert body["paths"]["sigma_rules_dir"] == str(sigma)
     assert body["paths"]["attack_stix_path"] == str(stix)
+
+
+def test_judge_sees_the_same_cited_row_the_rules_accepted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    claim = "marker-after-the-old-512-cap"
+    cited = ("x" * 600) + claim
+    prompt = build_support_prompt(claim, cited)
+    assert EVIDENCE_OPEN in prompt
+    assert "...[truncated]" not in prompt
+    assert prompt.index(claim) > 512
+
+    workflow = LlamaWorkflow(endpoint="http://127.0.0.1:9", model="test")
+    seen: dict[str, str] = {}
+
+    def capture(prompt_text: str) -> dict[str, str]:
+        seen["prompt"] = prompt_text
+        if claim not in prompt_text:
+            return {"verdict": "rejected"}
+        return {"verdict": "supported"}
+
+    monkeypatch.setattr(workflow, "_call", capture)
+    assert workflow.judge_claim(claim, cited) == "supported"
+    assert claim in seen["prompt"]
+
+    def refuse(prompt_text: str) -> dict[str, str]:
+        del prompt_text
+        raise AssertionError("an over-cap row must not be sent to the model")
+
+    monkeypatch.setattr(workflow, "_call", refuse)
+    assert workflow.judge_claim(claim, "y" * (JUDGE_CITED_CAP + 1)) == "needs_review"
+
+    source = tmp_path / "evidence"
+    source.mkdir()
+    payload = b"MZ " + cited.encode("utf-8")
+    path = source / "row.bin"
+    path.write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest()
+    finding = Finding(
+        finding_id="fdg-long",
+        title="Long row",
+        severity="low",
+        confidence=0.4,
+        tactic="execution",
+        evidence=[claim],
+        citations=[Citation(artifact_id="bin-long", source_file="row.bin", sha256=digest, offset=0)],
+        origin="llm",
+    )
+
+    class OverCap:
+        name = "llm"
+
+        def judge(self, claim_text: str, cited_text: str) -> str:
+            del claim_text, cited_text
+            return "needs_review"
+
+    kept, verdicts = verify_findings([finding], source, judge=OverCap())
+    assert [item.finding_id for item in kept] == ["fdg-long"]
+    assert kept[0].verification == "needs review"
+    assert verdicts[0].verdict == "needs review"
+    assert "rejected" not in verdicts[0].reason
+
+
+def test_score_only_draft_is_kept_and_labeled(tmp_path: Path):
+    source = tmp_path / "evidence"
+    source.mkdir()
+    payload = b"MZ" + b"\x00" * 32
+    path = source / "small.bin"
+    path.write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest()
+    binary = BinaryFeature(
+        path=str(path),
+        size_bytes=len(payload),
+        sha256=digest,
+        md5="0" * 32,
+        entropy=7.4,
+        string_hits=[],
+        import_hints=["VirtualAlloc"],
+        suspicious_score=2.5,
+        rationale=["High entropy (7.4) indicates packing or encryption.", "Small executable size can indicate loader/dropper behavior."],
+    )
+    drafted, _hints = heuristic_fallback(binary)
+    assert claim_lines(drafted[0]) == []
+    mock_findings, _mock_hints = MockLlamaWorkflow().analyze_binary(binary, [])
+    assert claim_lines(mock_findings[0]) == []
+
+    kept, verdicts = verify_findings(drafted + mock_findings, source)
+    labels = {item.finding_id: item.verification for item in kept}
+    assert drafted[0].finding_id in labels
+    assert mock_findings[0].finding_id in labels
+    assert set(labels.values()) == {"score-based"}
+    assert {item.verdict for item in verdicts} == {"supported"}
+    assert all(item.reason == "score-based; cited file hash matches" for item in verdicts)
+
+    from auto_forensics.models import CaseReport
+
+    report = CaseReport(
+        case_id="score",
+        generated_at="2026-01-01T00:00:00Z",
+        binary_features=[],
+        findings=kept,
+        timeline=[],
+        summary={"verification": [item.to_dict() for item in verdicts]},
+    )
+    markdown = _to_markdown(report)
+    assert "Verification: score-based" in markdown

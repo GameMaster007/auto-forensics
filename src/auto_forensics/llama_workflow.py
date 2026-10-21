@@ -39,6 +39,10 @@ _INJECTION_PATTERN = re.compile(
 )
 
 _MAX_PROMPT_FIELD_LEN = 512  # truncate individual evidence strings to limit token size
+# The support check must see the cited row the rules accepted.
+# Typical rows are a few kilobytes. Anything past this cap is not
+# sent as a truncated snippet; the verdict is needs-review.
+JUDGE_CITED_CAP = 256 * 1024
 
 # Fence around untrusted evidence. The payload is escaped so it cannot
 # contain either marker.
@@ -117,6 +121,22 @@ def prompt_template_text() -> str:
     """Return the fixed instruction text, with no evidence in it."""
     tasks = json.dumps(_TASKS, sort_keys=True)
     return f"{ANALYSIS_INSTRUCTIONS}\n{tasks}"
+
+
+def build_support_prompt(claim: str, cited_text: str) -> str:
+    """Fence the claim and the full cited row for the support check.
+
+    Draft prompts still truncate fields at 512 characters. This prompt
+    does not. The fence markers are stripped from the payload so the
+    cited row cannot close the block. The row is not shortened.
+    """
+    payload = {"cited_row": cited_text, "claim": claim}
+    text = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True)
+    text = text.replace(EVIDENCE_CLOSE, "EVIDENCE_DATA>")
+    text = text.replace(EVIDENCE_OPEN, "<<<EVIDENCE_DATA_")
+    quoted = f"{EVIDENCE_OPEN}\n{text}\n{EVIDENCE_CLOSE}"
+    schema = _TASKS["support_check"]
+    return f"{ANALYSIS_INSTRUCTIONS}\n\nTask: support_check\n{schema}\n\n{quoted}"
 
 
 def build_llm_prompt(task: str, payload: dict[str, Any]) -> str:
@@ -341,10 +361,14 @@ class LlamaWorkflow:
     def judge_claim(self, claim: str, cited_text: str) -> str | None:
         """Ask the model whether ``cited_text`` supports ``claim``.
 
-        The cited row is placed in the evidence fence. ``None`` means
-        the endpoint did not return a usable verdict.
+        The cited row is placed in the evidence fence in full, up to
+        ``JUDGE_CITED_CAP``. A longer row is not truncated and is not
+        sent: the result is ``needs_review``, never ``rejected``.
+        ``None`` means the endpoint did not return a usable verdict.
         """
-        out = self._call(build_llm_prompt("support_check", {"claim": claim, "cited_row": cited_text}))
+        if len(cited_text) > JUDGE_CITED_CAP:
+            return "needs_review"
+        out = self._call(build_support_prompt(claim, cited_text))
         if not isinstance(out, dict):
             return None
         verdict = str(out.get("verdict") or "").lower()
