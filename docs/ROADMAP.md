@@ -17,7 +17,7 @@ run and the misses have been counted.
 | 3. Run manifest and replay. | `auto-forensics replay run_manifest.json` re-runs the case and compares input hashes and the canonical report hash. `generated_at` is omitted from that hash. Seed is 0. Temperature is 0 for a live model and null for the mock. |
 | 4. Verifier. Re-fetch each cited row and check that it supports the claim. | The pipeline re-reads the cited file, checks the hash, and keeps a claim only when each claim sentence appears in that row. A mock or live judge can reject a claim the rules accepted. It cannot put a rejected claim back. Verdicts are in the report and the manifest. This pass is a tool on the `pipeline` worker, not a second worker. |
 | 5. Local model through Ollama, offline. | `--llm ollama` calls a local endpoint at temperature 0. The demo and the tests use `--llm mock` and do not need a model or an API key. |
-| 6. Analyst accept or reject, logged on the finding. | `review_status` is stored and defaults to `unverified`. There is no command or control that changes it. |
+| 6. Analyst accept or reject, logged on the finding. | `auto-forensics review` accepts, rejects, or annotates one finding. The custody log stores actor and time. Replay applies that log. A rejected finding is not verified. The default remains `unverified`. |
 | 7. Import pcaplens findings. | Not started. |
 
 ## Phase 2: more than one worker

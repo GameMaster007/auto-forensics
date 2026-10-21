@@ -94,10 +94,23 @@ def _build_summary(
             for f in top
         ],
         "timeline_events": len(timeline),
+        **_analyst_summary(findings),
     }
     if model_summary:
         base["llama_summary"] = model_summary
     return base
+
+
+def _analyst_summary(findings: list[Finding]) -> dict[str, Any]:
+    """Counts an analyst accept as verified. A reject is not verified."""
+    accepted = [item.finding_id for item in findings if item.review_status == "accepted"]
+    rejected = sum(1 for item in findings if item.review_status == "rejected")
+    return {
+        "analyst_accepted": len(accepted),
+        "analyst_rejected": rejected,
+        "analyst_unverified": len(findings) - len(accepted) - rejected,
+        "verified_finding_ids": accepted,
+    }
 
 
 def _to_markdown(report: CaseReport) -> str:
@@ -128,7 +141,11 @@ def _to_markdown(report: CaseReport) -> str:
         if item.recommendation:
             lines.append(f"  - Recommendation: {item.recommendation}")
         lines.append(f"  - Status: {_review_label(item)}")
-        if item.verification:
+        if item.review_note:
+            lines.append(f"  - Analyst note: {item.review_note}")
+        if item.review_status == "rejected":
+            lines.append("  - Verification: not verified")
+        elif item.verification:
             lines.append(f"  - Verification: {item.verification}")
         if item.citations:
             for citation in item.citations:
@@ -140,11 +157,15 @@ def _to_markdown(report: CaseReport) -> str:
     verdicts = report.summary.get("verification") or []
     if not verdicts:
         lines.append("- No verdicts recorded.")
+    rejected_ids = {item.finding_id for item in report.findings if item.review_status == "rejected"}
     for item in verdicts:
         if isinstance(item, dict):
+            suffix = ""
+            if item.get("finding_id") in rejected_ids:
+                suffix = " (analyst-rejected, not verified)"
             lines.append(
                 f"- {item.get('verdict')}: `{item.get('finding_id')}` "
-                f"({item.get('judge')}) {item.get('reason')}"
+                f"({item.get('judge')}) {item.get('reason')}{suffix}"
             )
     lines.append("")
     lines.append("## IOCs")
@@ -243,13 +264,23 @@ def _to_html(report: CaseReport) -> str:
         `<td>${{esc(item.tactic)}}</td>` +
         `<td>${{esc(item.technique_id || "")}}</td>` +
         `<td>${{esc(item.confidence)}}</td>` +
-        `<td>${{esc(item.review_status || "unverified")}}${{item.verification ? " · " + esc(item.verification) : ""}}</td>` +
+        `<td>${{esc(reviewLabel(item))}}</td>` +
         `<td>${{esc(citeLabel(item))}}</td>` +
         `</tr>`
       ).join("");
       document.getElementById("findings").innerHTML =
         `<thead><tr><th>Severity</th><th>Title</th><th>Tactic</th><th>Technique</th><th>Confidence</th><th>Review</th><th>Citation</th></tr></thead>` +
         `<tbody>${{rows || "<tr><td colspan='7'>No findings.</td></tr>"}}</tbody>`;
+    }}
+
+    function reviewLabel(item) {{
+      const status = item.review_status || "unverified";
+      let label = "analyst-unverified";
+      if (status === "accepted") label = "analyst-accepted";
+      if (status === "rejected") return "analyst-rejected · not verified";
+      if (item.verification) label += " · " + item.verification;
+      if (item.review_actor) label += " by " + item.review_actor;
+      return label;
     }}
 
     function citeLabel(item) {{
@@ -313,7 +344,18 @@ def resolve_llm_provider(config: PipelineConfig) -> str:
 
 def _review_label(item: Finding) -> str:
     who = "LLM-generated" if item.origin == "llm" else item.origin
-    return f"worker {item.worker}; {who}, analyst-{item.review_status}"
+    if item.review_status == "accepted":
+        decision = "analyst-accepted"
+    elif item.review_status == "rejected":
+        decision = "analyst-rejected"
+    else:
+        decision = "analyst-unverified"
+    label = f"worker {item.worker}; {who}, {decision}"
+    if item.review_actor:
+        label += f" by {item.review_actor}"
+    if item.review_at:
+        label += f" at {item.review_at}"
+    return label
 
 
 def _format_citation(citation: Citation) -> str:
@@ -573,3 +615,37 @@ def run_case(config: PipelineConfig) -> CaseReport:
     )
     write_run_manifest(config.output_dir / "run_manifest.json", manifest)
     return report
+
+
+def rewrite_published_report(
+    report: CaseReport,
+    output_dir: Path,
+    *,
+    review_log: str | None = None,
+    review_count: int = 0,
+) -> str:
+    """Rewrite the report files and the manifest hash after a review.
+
+    ``generated_at`` stays the time of the original run. The review
+    time is stored on the finding. STIX ids are random, so that bundle
+    is left as the pipeline wrote it.
+    """
+    report.summary.update(_analyst_summary(report.findings))
+    payload = report.to_dict()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "case_report.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    (output_dir / "case_report.md").write_text(_to_markdown(report), encoding="utf-8")
+    (output_dir / "case_report.html").write_text(_to_html(report), encoding="utf-8")
+    write_pdf_report(report, output_dir / "case_report.pdf")
+    digest = canonical_report_sha256(payload)
+    manifest_path = output_dir / "run_manifest.json"
+    if manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        output = manifest.get("output") if isinstance(manifest.get("output"), dict) else {}
+        output["sha256"] = digest
+        manifest["output"] = output
+        manifest["finding_count"] = len(report.findings)
+        if review_log:
+            manifest["analyst_reviews"] = {"log": review_log, "entries": review_count}
+        write_run_manifest(manifest_path, manifest)
+    return digest

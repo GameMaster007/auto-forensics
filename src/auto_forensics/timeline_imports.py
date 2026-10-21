@@ -61,7 +61,7 @@ _TACTICS = {
 }
 _TECHNIQUE = re.compile(r"t\d{4}(?:\.\d{3})?", re.IGNORECASE)
 _CLOCK = re.compile(
-    r"^(?P<date>\d{4}-\d{2}-\d{2})[ T](?P<time>\d{2}:\d{2}:\d{2})(?P<fraction>\.\d{1,6})?"
+    r"^(?P<date>\d{4}-\d{2}-\d{2})[ T](?P<time>\d{2}:\d{2}:\d{2})(?P<fraction>\.\d+)?"
     r"(?:\s*(?P<zone>Z|UTC|GMT|[+-]\d{2}:?\d{2}))?$",
     re.IGNORECASE,
 )
@@ -462,30 +462,30 @@ def _clock_for_timeline(value: Any) -> str | None:
     """Return a timestamp ``parse_iso`` accepts, or None.
 
     l2tcsv dates are ``MM/DD/YYYY`` and zones are names such as ``UTC``.
-    Hayabusa writes a space before the offset. Those forms sort after
-    every real timestamp unless they are rewritten as ISO 8601.
+    Hayabusa writes a space before the offset, and ``--iso-8601`` can
+    emit seven fractional digits plus ``Z``. Those forms sort after
+    every real timestamp on Python 3.10 unless they are rewritten as
+    ISO 8601 with at most six fractional digits.
     """
     text = _text(value)
     if not text:
         return None
+    match = _CLOCK.match(text)
+    if match is not None:
+        fraction_digits = (match.group("fraction") or "")[1:7]
+        fraction = "." + fraction_digits.ljust(6, "0") if fraction_digits else ""
+        zone = (match.group("zone") or "UTC").upper()
+        if zone in {"Z", "UTC", "GMT"}:
+            offset = "+00:00"
+        else:
+            digits = zone[1:].replace(":", "")
+            offset = f"{zone[0]}{digits[:2]}:{digits[2:4]}"
+        normalized = f"{match.group('date')}T{match.group('time')}{fraction}{offset}"
+        if parse_iso(normalized) is not None:
+            return normalized
     if parse_iso(text) is not None:
         return text
-    match = _CLOCK.match(text)
-    if match is None:
-        return None
-    fraction = match.group("fraction") or ""
-    if fraction:
-        fraction = "." + fraction[1:].ljust(6, "0")[:6]
-    zone = (match.group("zone") or "UTC").upper()
-    if zone in {"Z", "UTC", "GMT"}:
-        offset = "+00:00"
-    else:
-        digits = zone[1:].replace(":", "")
-        offset = f"{zone[0]}{digits[:2]}:{digits[2:4]}"
-    normalized = f"{match.group('date')}T{match.group('time')}{fraction}{offset}"
-    if parse_iso(normalized) is None:
-        return None
-    return normalized
+    return None
 
 
 def _severity(level: str) -> str:

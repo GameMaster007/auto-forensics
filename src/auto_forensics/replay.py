@@ -15,6 +15,7 @@ from typing import Any
 
 from .manifest import hash_input_tree
 from .pipeline import PipelineConfig, run_case
+from .reviews import ANALYST_REVIEW_LOG, ReviewError, apply_review_log
 
 
 def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict[str, Any]:
@@ -22,6 +23,8 @@ def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict
 
     The replay writes into ``output_dir``, or into a ``replay`` directory
     next to the manifest. It does not overwrite the manifest it read.
+    Analyst decisions in ``analyst_reviews.jsonl`` beside that manifest
+    are applied again before the report hash is compared.
     """
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     recorded_inputs = {
@@ -49,9 +52,14 @@ def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict
     prompt_match = False
     seed_match = False
     actual_sha = ""
+    review_error = ""
     if input_dir is not None and input_dir.is_dir():
         report = run_case(config_from_manifest(manifest, input_dir, destination))
         del report
+        try:
+            apply_review_log(destination, manifest_path.parent / ANALYST_REVIEW_LOG)
+        except ReviewError as exc:
+            review_error = str(exc)
         replayed = json.loads((destination / "run_manifest.json").read_text(encoding="utf-8"))
         actual_sha = str(replayed.get("output", {}).get("sha256") or "")
         output_match = bool(actual_sha) and actual_sha == expected_sha
@@ -68,6 +76,7 @@ def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict
         "actual_sha256": actual_sha,
         "input_differences": input_differences,
         "replay_output_dir": str(destination),
+        "review_error": review_error,
     }
 
 

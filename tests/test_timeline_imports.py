@@ -95,6 +95,42 @@ def test_imported_timestamps_parse_and_sort_before_untimed_rows():
     assert parse_iso(ordered[0].timestamp) < parse_iso(plaso[0].timestamp)
 
 
+def test_hayabusa_iso8601_seven_digit_fraction_sorts(tmp_path: Path):
+    path = tmp_path / "hayabusa.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "Timestamp": "2016-08-19T08:06:57.6581234Z",
+                        "Channel": "Sysmon",
+                        "EventID": 1,
+                        "Level": "high",
+                        "RuleTitle": "Seven digit clock",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "Timestamp": "2016-08-19T09:00:00Z",
+                        "Channel": "Sysmon",
+                        "EventID": 1,
+                        "Level": "low",
+                        "RuleTitle": "Later clock",
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    events = load_json_artifacts(path)
+    assert events[0].timestamp == "2016-08-19T08:06:57.658123+00:00"
+    assert events[1].timestamp == "2016-08-19T09:00:00+00:00"
+    assert all(parse_iso(event.timestamp) is not None for event in events)
+    ordered = normalize_timeline(events, [], [])
+    assert [event.description for event in ordered] == ["Seven digit clock", "Later clock"]
+
+
 def test_l2tcsv_iso_dates_parse_and_the_zero_date_stays_untimed(tmp_path: Path):
     header = (
         "date,time,timezone,MACB,source,sourcetype,type,user,host,short,desc,"
