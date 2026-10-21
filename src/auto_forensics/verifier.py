@@ -1,0 +1,277 @@
+"""Re-read each cited row and decide whether it supports the claim.
+
+The citation check only proves the pointer was ingested. This pass
+opens the file again, checks the hash, and reads the cited row or
+byte window. A claim sentence has to appear in that text. A judge may
+reject a claim the rules accepted. It cannot restore a claim the rules
+rejected.
+
+Reasons are fixed phrases. The cited text is not copied into the
+verdict, so an instruction hidden in the evidence does not become
+part of the record.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Protocol
+
+from .models import Citation, Finding
+from .security import sha256_file
+
+MAX_VERIFY_BYTES = 8 * 1024 * 1024
+_OFFSET_WINDOW = 8192
+
+_METADATA_PREFIXES = (
+    "suspicious_score=",
+    "sha256=",
+    "source=",
+    "artifact_id=",
+    "event_type=",
+    "file=",
+    "rule_file=",
+    "tags=",
+    "rule=",
+    "matched_events=",
+)
+_BOILERPLATE = {
+    "LLM-generated draft. Analyst verification required.",
+}
+
+REASON_SUPPORTED = "cited row contains every claim sentence"
+REASON_UNSUPPORTED = "cited row does not contain a claim sentence"
+REASON_HASH = "cited file hash does not match"
+REASON_UNREADABLE = "cited row could not be read"
+REASON_NO_CLAIM = "no grounded claim sentence"
+REASON_DETECTOR = "detector label; cited file hash matches"
+REASON_JUDGE = "judge rejected the claim"
+
+
+class ClaimJudge(Protocol):
+    """Optional second opinion. ``cited_text`` is quoted data."""
+
+    name: str
+
+    def judge(self, claim: str, cited_text: str) -> str | None:
+        """Return ``supported``, ``rejected``, or ``None`` if no opinion."""
+
+
+@dataclass(slots=True)
+class ClaimVerdict:
+    """One verifier decision for one finding."""
+
+    finding_id: str
+    verdict: str
+    reason: str
+    judge: str
+    artifact_id: str
+    source_file: str
+
+    def to_dict(self) -> dict[str, str]:
+        return asdict(self)
+
+
+class MockClaimJudge:
+    """Offline judge. It checks the same substring the rules use.
+
+    It does not read the cited text as instructions. A phrase such as
+    "ignore previous instructions" does not change the decision.
+    """
+
+    name = "mock"
+
+    def judge(self, claim: str, cited_text: str) -> str:
+        if _norm(claim) in _norm(cited_text):
+            return "supported"
+        return "rejected"
+
+
+def resolve_verifier_mode(provider: str, explicit: str | None) -> str:
+    """Pick rules, mock, or llm from the run's provider."""
+    if explicit in {"rules", "mock", "llm"}:
+        return explicit
+    if provider == "mock":
+        return "mock"
+    if provider in {"ollama", "openai_compatible"}:
+        return "llm"
+    return "rules"
+
+
+def verifier_limit_name(mode: str) -> str:
+    """Value stored in ``limits.verifier``."""
+    if mode == "mock":
+        return "rules+mock"
+    if mode == "llm":
+        return "rules+llm"
+    return "rules"
+
+
+def verify_findings(
+    findings: list[Finding],
+    input_dir: Path,
+    judge: ClaimJudge | None = None,
+) -> tuple[list[Finding], list[ClaimVerdict]]:
+    """Return supported findings and a verdict for every finding.
+
+    Unsupported findings are omitted from the kept list. Their verdicts
+    stay in the second list.
+    """
+    kept: list[Finding] = []
+    verdicts: list[ClaimVerdict] = []
+    for finding in findings:
+        verdict = _verify_one(finding, input_dir, judge)
+        verdicts.append(verdict)
+        if verdict.verdict == "supported":
+            finding.verification = "supported"
+            kept.append(finding)
+    return kept, verdicts
+
+
+def _verify_one(finding: Finding, input_dir: Path, judge: ClaimJudge | None) -> ClaimVerdict:
+    texts: list[str] = []
+    first = finding.citations[0] if finding.citations else None
+    for citation in finding.citations:
+        text, error = read_cited_text(input_dir, citation)
+        if error:
+            return _verdict(finding, "rejected", error, "rules", citation)
+        texts.append(text or "")
+
+    cited = "\n".join(texts)
+    lines = claim_lines(finding)
+    if not lines:
+        if finding.origin == "detector" and texts:
+            return _verdict(finding, "supported", REASON_DETECTOR, "rules", first)
+        return _verdict(finding, "rejected", REASON_NO_CLAIM, "rules", first)
+
+    if any(_norm(line) not in _norm(cited) for line in lines):
+        return _verdict(finding, "rejected", REASON_UNSUPPORTED, "rules", first)
+
+    if judge is not None:
+        used_judge = False
+        for line in lines:
+            decision = judge.judge(line, cited)
+            if decision is None:
+                used_judge = False
+                break
+            used_judge = True
+            if decision != "supported":
+                return _verdict(finding, "rejected", REASON_JUDGE, judge.name, first)
+        if used_judge:
+            return _verdict(finding, "supported", REASON_SUPPORTED, judge.name, first)
+    return _verdict(finding, "supported", REASON_SUPPORTED, "rules", first)
+
+
+def claim_lines(finding: Finding) -> list[str]:
+    """Evidence lines that assert something about the cited row.
+
+    Scores, hashes, and the fixed draft notice are not claims. The
+    title is a label, not a sentence that has to appear in the row.
+    """
+    lines: list[str] = []
+    for raw in finding.evidence:
+        text = raw.strip()
+        if not text or text in _BOILERPLATE:
+            continue
+        if any(text.startswith(prefix) for prefix in _METADATA_PREFIXES):
+            continue
+        lines.append(text)
+    return lines
+
+
+def read_cited_text(input_dir: Path, citation: Citation) -> tuple[str | None, str]:
+    """Re-hash the cited file and return the cited row or byte window."""
+    path = locate_source(input_dir, citation.source_file)
+    if path is None:
+        return None, REASON_UNREADABLE
+    if sha256_file(path).lower() != citation.sha256.lower():
+        return None, REASON_HASH
+    if path.stat().st_size > MAX_VERIFY_BYTES and citation.row is not None:
+        return None, REASON_UNREADABLE
+    if citation.row is not None:
+        text = _read_row(path, citation.row)
+        if text is None:
+            return None, REASON_UNREADABLE
+        return text, ""
+    start = citation.offset if citation.offset is not None else 0
+    if start < 0:
+        return None, REASON_UNREADABLE
+    with path.open("rb") as handle:
+        if start:
+            handle.seek(start)
+        window = handle.read(_OFFSET_WINDOW if start else min(path.stat().st_size, MAX_VERIFY_BYTES))
+    if start and not window and start >= path.stat().st_size:
+        return None, REASON_UNREADABLE
+    return window.decode("utf-8", errors="replace"), ""
+
+
+def locate_source(input_dir: Path, source_file: str) -> Path | None:
+    """Find ``source_file`` under ``input_dir``.
+
+    A relative path is tried first. A bare file name is accepted when
+    exactly one file under the directory has that name.
+    """
+    root = input_dir.resolve()
+    rel = Path(source_file)
+    if rel.is_absolute() or ".." in rel.parts or not source_file:
+        return None
+    direct = (root / rel).resolve()
+    if direct.is_file() and not direct.is_symlink() and direct.is_relative_to(root):
+        return direct
+    matches = [
+        path
+        for path in sorted(root.rglob("*"))
+        if path.name == rel.name
+        and path.is_file()
+        and not path.is_symlink()
+        and path.is_relative_to(root)
+        and len(path.relative_to(root).parts) <= 20
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _read_row(path: Path, row: int) -> str | None:
+    if row < 1:
+        return None
+    if path.suffix.lower() == ".json":
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            raw = None
+        if isinstance(raw, list):
+            records = [item for item in raw if isinstance(item, dict)]
+            if row <= len(records):
+                return json.dumps(records[row - 1], sort_keys=True, ensure_ascii=True)
+        elif isinstance(raw, dict) and row == 1:
+            return json.dumps(raw, sort_keys=True, ensure_ascii=True)
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    if row <= len(lines):
+        return lines[row - 1]
+    return None
+
+
+def _verdict(
+    finding: Finding,
+    verdict: str,
+    reason: str,
+    judge: str,
+    citation: Citation | None,
+) -> ClaimVerdict:
+    return ClaimVerdict(
+        finding_id=finding.finding_id,
+        verdict=verdict,
+        reason=reason,
+        judge=judge,
+        artifact_id=citation.artifact_id if citation else "",
+        source_file=citation.source_file if citation else "",
+    )
+
+
+def _norm(value: str) -> str:
+    return " ".join(value.lower().split())

@@ -16,6 +16,7 @@ from auto_forensics.llama_workflow import (
     MockLlamaWorkflow,
     build_llm_prompt,
 )
+from auto_forensics.manifest import canonical_report_sha256
 from auto_forensics.models import BinaryFeature, Citation, Finding, TimelineEvent
 from auto_forensics.pipeline import PipelineConfig, run_case
 
@@ -168,11 +169,11 @@ def test_offline_mock_run_writes_a_manifest_and_only_cited_findings(tmp_path: Pa
     assert manifest["model"]["provider"] == "mock"
     assert manifest["model"]["offline"] is True
     assert manifest["model"]["temperature"] is None
-    assert manifest["model"]["seed"] is None
+    assert manifest["model"]["seed"] == 0
     assert manifest["model"]["prompt_sent"] is False
-    assert manifest["limits"]["verifier"] == "not-run"
-    assert manifest["limits"]["replay"] == "not-run"
-    assert manifest["output"]["sha256"] == hashlib.sha256(report_bytes).hexdigest()
+    assert manifest["limits"]["verifier"] == "rules+mock"
+    assert manifest["limits"]["replay"] == "available"
+    assert manifest["output"]["sha256"] == canonical_report_sha256(json.loads(report_bytes))
     listed = {item["path"]: item["sha256"] for item in manifest["input_files"]}
     assert listed["payload.bin"] == hashlib.sha256(payload).hexdigest()
     assert "events.json" in listed

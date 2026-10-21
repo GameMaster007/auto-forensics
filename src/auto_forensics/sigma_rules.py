@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import logging
-import uuid
 from pathlib import Path
 from typing import Any
 
+from .ids import stable_id
 from .models import Finding, TimelineEvent
 from .security import SecurityError, confine_path
 
@@ -93,7 +93,7 @@ def evaluate_sigma_rules(timeline: list[TimelineEvent], rules_dir: Path | None) 
         confidence = min(0.95, 0.55 + min(0.35, matched * 0.05))
         findings.append(
             Finding(
-                finding_id=f"sigma-{uuid.uuid4().hex[:12]}",
+                finding_id=stable_id("sigma", title, str(rule_path)),
                 title=f"Sigma rule match: {title}",
                 severity=level if level in {"critical", "high", "medium", "low"} else "medium",
                 confidence=confidence,

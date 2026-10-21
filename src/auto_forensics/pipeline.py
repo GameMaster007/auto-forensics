@@ -23,7 +23,13 @@ from .citations import (
 from .event_detectors import findings_from_artifact_events
 from .ioc_pipeline import extract_iocs
 from .llama_workflow import LlamaWorkflow, MockLlamaWorkflow, heuristic_fallback, prompt_template_text
-from .manifest import build_run_manifest, hash_input_tree, prompt_template_sha256, write_run_manifest
+from .manifest import (
+    build_run_manifest,
+    canonical_report_sha256,
+    hash_input_tree,
+    prompt_template_sha256,
+    write_run_manifest,
+)
 from .models import ArtifactEvent, BinaryFeature, CaseReport, Citation, Finding, TimelineEvent, utc_now_iso
 from .pdf_report import write_pdf_report
 from .plugins import PluginRegistry
@@ -32,6 +38,7 @@ from .sigma_rules import evaluate_sigma_rules
 from .stix_export import build_stix_bundle
 from .timeline import normalize_timeline
 from .tools import ToolRegistry
+from .verifier import MockClaimJudge, resolve_verifier_mode, verifier_limit_name, verify_findings
 from .workers import PIPELINE_WORKER
 from .yara_detector import scan_paths_with_yara
 
@@ -52,6 +59,8 @@ class PipelineConfig:
     openai_compatible_endpoint: str | None = None
     openai_api_key: str | None = None
     llm_provider: str | None = None
+    seed: int = 0
+    verifier_judge: str | None = None
 
 
 def _severity_rank(value: str) -> int:
@@ -118,11 +127,24 @@ def _to_markdown(report: CaseReport) -> str:
         if item.recommendation:
             lines.append(f"  - Recommendation: {item.recommendation}")
         lines.append(f"  - Status: {_review_label(item)}")
+        if item.verification:
+            lines.append(f"  - Verification: {item.verification}")
         if item.citations:
             for citation in item.citations:
                 lines.append(f"  - Citation: {_format_citation(citation)}")
         else:
             lines.append("  - Citation: none")
+    lines.append("")
+    lines.append("## Verifier")
+    verdicts = report.summary.get("verification") or []
+    if not verdicts:
+        lines.append("- No verdicts recorded.")
+    for item in verdicts:
+        if isinstance(item, dict):
+            lines.append(
+                f"- {item.get('verdict')}: `{item.get('finding_id')}` "
+                f"({item.get('judge')}) {item.get('reason')}"
+            )
     lines.append("")
     lines.append("## IOCs")
     if not report.iocs:
@@ -321,6 +343,26 @@ def _evidence_catalog(
     return catalog_from_citations(pointers)
 
 
+class _LlamaJudge:
+    """Adapter so the verifier can call a live model without importing it."""
+
+    name = "llm"
+
+    def __init__(self, workflow: LlamaWorkflow) -> None:
+        self._workflow = workflow
+
+    def judge(self, claim: str, cited_text: str) -> str | None:
+        return self._workflow.judge_claim(claim, cited_text)
+
+
+def _claim_judge(mode: str, workflow: LlamaWorkflow | MockLlamaWorkflow | None) -> MockClaimJudge | _LlamaJudge | None:
+    if mode == "mock":
+        return MockClaimJudge()
+    if mode == "llm" and isinstance(workflow, LlamaWorkflow):
+        return _LlamaJudge(workflow)
+    return None
+
+
 def run_case(config: PipelineConfig) -> CaseReport:
     """Parse a directory, draft findings, drop uncited drafts, and write a manifest.
 
@@ -343,9 +385,10 @@ def run_case(config: PipelineConfig) -> CaseReport:
             config.llama_model,
             provider="openai_compatible",
             api_key=config.openai_api_key,
+            seed=config.seed,
         )
     elif provider == "ollama":
-        workflow = LlamaWorkflow(config.llama_endpoint, config.llama_model)
+        workflow = LlamaWorkflow(config.llama_endpoint, config.llama_model, seed=config.seed)
 
     def parse_artifacts() -> tuple[list[ArtifactEvent], list[Path]]:
         return discover_artifacts(
@@ -439,6 +482,17 @@ def run_case(config: PipelineConfig) -> CaseReport:
     findings.extend(tools.call("builtin_detectors", artifacts, binary_features, timeline))
     findings.extend(tools.call("sigma_rules", timeline))
     findings, dropped_uncited = drop_uncited(findings, catalog)
+    judge_mode = resolve_verifier_mode(provider, config.verifier_judge)
+    judge = _claim_judge(judge_mode, workflow)
+
+    def verify_claims() -> tuple[list[Finding], list[Any]]:
+        return verify_findings(findings, config.input_dir, judge)
+
+    tools.allow("verify_findings", verify_claims)
+    findings, verdicts = tools.call("verify_findings")
+    verdicts = sorted(verdicts, key=lambda item: item.finding_id)
+    dropped_unsupported = sum(1 for item in verdicts if item.verdict == "rejected")
+    findings = sorted(findings, key=lambda item: item.finding_id)
     store.add_findings(PIPELINE_WORKER, findings)
     findings = store.findings()
 
@@ -457,6 +511,8 @@ def run_case(config: PipelineConfig) -> CaseReport:
 
     summary = _build_summary(findings, timeline, iocs_count=len(iocs), model_summary=model_summary)
     summary["dropped_uncited"] = dropped_uncited
+    summary["dropped_unsupported"] = dropped_unsupported
+    summary["verification"] = [item.to_dict() for item in verdicts]
     summary["llm_provider"] = provider
     report = CaseReport(
         case_id=config.case_id,
@@ -492,16 +548,23 @@ def run_case(config: PipelineConfig) -> CaseReport:
         case_id=config.case_id,
         started_at=started_at,
         finished_at=utc_now_iso(),
+        input_dir=str(config.input_dir.resolve()),
         input_files=hash_input_tree(config.input_dir),
         provider=provider,
         model_name=model_name,
+        endpoint=config.llama_endpoint if provider == "ollama" else config.openai_compatible_endpoint,
+        seed=config.seed,
         prompt_sent=provider in {"ollama", "openai_compatible"},
         prompt_template_sha256_value=prompt_template_sha256(prompt_template_text()),
         finding_count=len(findings),
         dropped_uncited=dropped_uncited,
-        report_path=report_path,
+        dropped_unsupported=dropped_unsupported,
+        report_name=report_path.name,
+        report_sha256=canonical_report_sha256(report.to_dict()),
         workers=store.workers(),
         tool_calls=[call.to_dict() for call in store.tool_calls()],
+        verifier=verifier_limit_name(judge_mode),
+        verification=[item.to_dict() for item in verdicts],
     )
     write_run_manifest(config.output_dir / "run_manifest.json", manifest)
     return report

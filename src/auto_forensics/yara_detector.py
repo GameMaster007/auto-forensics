@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import logging
-import uuid
 from pathlib import Path
 from typing import Any
 
 from .citations import file_citation
+from .ids import stable_id
 from .models import Finding, TimelineEvent
 from .security import SecurityError, confine_path
 
@@ -92,7 +92,7 @@ def scan_paths_with_yara(
                 rule_name = str(getattr(match, "rule", "yara_rule"))
                 findings.append(
                     Finding(
-                        finding_id=f"yara-{uuid.uuid4().hex[:12]}",
+                        finding_id=stable_id("yara", rule_name, str(sample), ",".join(tags)),
                         title=f"YARA match: {rule_name}",
                         severity=severity,
                         confidence=0.85,

@@ -7,6 +7,7 @@ from pathlib import Path
 from .api import main as api_main
 from .config import AppConfig
 from .pipeline import PipelineConfig, run_case
+from .replay import replay_manifest
 from .security import SecurityError
 from .service import AutoForensicsService
 
@@ -68,6 +69,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable model workflow and rely on heuristic findings.",
     )
     _add_llm_argument(run)
+
+    replay = sub.add_parser("replay", help="Re-run a manifest and compare input and report hashes.")
+    replay.add_argument("manifest", type=Path, help="Path to run_manifest.json.")
+    replay.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Directory for the replayed report. Defaults to a replay directory beside the manifest.",
+    )
 
     export_case = sub.add_parser("export", help="Export case as signed zip archive.")
     export_case.add_argument("--case-id", required=True, help="Case identifier.")
@@ -223,6 +233,13 @@ def main() -> None:
             )
             report_obj = run_case(cfg)
             print(json.dumps(report_obj.to_dict(), indent=2))
+            return
+
+        if args.command == "replay":
+            result = replay_manifest(args.manifest, output_dir=args.output_dir)
+            print(json.dumps(result, indent=2))
+            if not result["match"]:
+                raise SystemExit(1)
             return
     except SecurityError as exc:
         raise SystemExit(f"Security validation failed: {exc}") from exc

@@ -33,8 +33,20 @@ and states what the tool will not claim.
 - Author metadata is Benjamin Christy. The `pyproject.toml` licence
   field already said MIT. A `LICENSE` file is now in the tree.
 
+### Added after the first foundation commit
+
+- Verifier pass. It re-reads each cited file, checks the hash, and
+  drops a claim whose sentences are not in that row. Verdicts are
+  stored on the report and the manifest. `--llm mock` uses the offline
+  judge. A live model can judge as well, and a failed call leaves the
+  rule result in place.
+- `auto-forensics replay run_manifest.json`. The canonical report hash
+  omits `generated_at`. Live model calls send seed 0.
+- Finding and artifact ids that the pipeline writes are derived from
+  the record, so a second run of the same input can match.
+
 ### Not in this version
 
-- Replay, a verifier, analyst accept/reject, Plaso/Hayabusa/Chainsaw
-  import, and a multi-worker orchestrator.
+- Analyst accept/reject, Plaso/Hayabusa/Chainsaw import, and a
+  multi-worker orchestrator. The verifier is a pipeline stage.
 - A published precision or recall figure.
