@@ -77,7 +77,10 @@ class Finding:
     yet provide the review command.
     ``verification`` is the verifier label kept on a finding that
     stays in the report: ``supported``, ``score-based``, or
-    ``needs review``. Rejected findings are left out.
+    ``needs review``. Score-based is a mock or heuristic draft with
+    no claim sentence and a matching file hash. A live model draft
+    with no claim sentence is needs review. Rejected findings are
+    left out.
     """
 
     finding_id: str

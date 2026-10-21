@@ -225,7 +225,10 @@ Leave it unset for the demo.
 
 - The verifier checks that each claim sentence occurs in the cited
   row. A planted sentence that is not in the row is dropped. A false
-  sentence that repeats the row is kept.
+  sentence that repeats the row is kept. A mock or heuristic draft
+  with no claim sentence is kept and labeled score-based when the
+  file hash matches. A live model draft with no claim sentence stays
+  in the report as needs review.
 - Sigma keyword matches are dropped, because they do not cite a row.
 - YARA matches cite the file at offset 0 when rules and `yara-python`
   are installed. A YARA finding with no claim sentence is kept when

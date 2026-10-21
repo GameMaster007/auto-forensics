@@ -447,3 +447,59 @@ def test_score_only_draft_is_kept_and_labeled(tmp_path: Path):
     )
     markdown = _to_markdown(report)
     assert "Verification: score-based" in markdown
+
+
+def test_live_llm_draft_without_a_sentence_needs_review(tmp_path: Path):
+    source = tmp_path / "evidence"
+    source.mkdir()
+    payload = b"MZ" + b"\x00" * 32
+    path = source / "small.bin"
+    path.write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest()
+    binary = BinaryFeature(
+        path=str(path),
+        size_bytes=len(payload),
+        sha256=digest,
+        md5="0" * 32,
+        entropy=7.4,
+        string_hits=[],
+        import_hints=["VirtualAlloc"],
+        suspicious_score=2.5,
+        rationale=["High entropy (7.4) indicates packing or encryption."],
+    )
+    heuristic, _hints = heuristic_fallback(binary)
+    mock_findings, _mock_hints = MockLlamaWorkflow().analyze_binary(binary, [])
+    assert claim_lines(heuristic[0]) == []
+    assert claim_lines(mock_findings[0]) == []
+
+    kept_offline, offline_verdicts = verify_findings(heuristic + mock_findings, source)
+    assert {item.verification for item in kept_offline} == {"score-based"}
+    assert {item.verdict for item in offline_verdicts} == {"supported"}
+    assert {item.reason for item in offline_verdicts} == {"score-based; cited file hash matches"}
+
+    live = Finding(
+        finding_id="fdg-live-empty",
+        title="The finance host was already wiped",
+        severity="high",
+        confidence=0.9,
+        tactic="impact",
+        evidence=[
+            f"suspicious_score={binary.suspicious_score}",
+            f"sha256={binary.sha256}",
+            "LLM-generated draft. Analyst verification required.",
+        ],
+        citations=[heuristic[0].citations[0]],
+        origin="llm",
+    )
+    assert claim_lines(live) == []
+    kept, verdicts = verify_findings([live, heuristic[0]], source, live_llm=True)
+    by_id = {item.finding_id: item for item in kept}
+    assert by_id[live.finding_id].verification == "needs review"
+    assert by_id[heuristic[0].finding_id].verification == "score-based"
+    live_verdict = next(item for item in verdicts if item.finding_id == live.finding_id)
+    assert live_verdict.verdict == "needs review"
+    assert live_verdict.reason == "live draft has no verified sentence"
+    assert "wiped" not in live_verdict.reason
+    heuristic_verdict = next(item for item in verdicts if item.finding_id == heuristic[0].finding_id)
+    assert heuristic_verdict.verdict == "supported"
+    assert heuristic_verdict.reason == "score-based; cited file hash matches"

@@ -484,9 +484,10 @@ def run_case(config: PipelineConfig) -> CaseReport:
     findings, dropped_uncited = drop_uncited(findings, catalog)
     judge_mode = resolve_verifier_mode(provider, config.verifier_judge)
     judge = _claim_judge(judge_mode, workflow)
+    live_llm = provider in {"ollama", "openai_compatible"}
 
     def verify_claims() -> tuple[list[Finding], list[Any]]:
-        return verify_findings(findings, config.input_dir, judge)
+        return verify_findings(findings, config.input_dir, judge, live_llm=live_llm)
 
     tools.allow("verify_findings", verify_claims)
     findings, verdicts = tools.call("verify_findings")

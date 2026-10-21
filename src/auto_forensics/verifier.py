@@ -2,9 +2,12 @@
 
 The citation check only proves the pointer was ingested. This pass
 opens the file again, checks the hash, and reads the cited row or
-byte window. A claim sentence has to appear in that text. A judge may
-reject a claim the rules accepted. It cannot restore a claim the rules
-rejected.
+byte window. A claim sentence has to appear in that text. A mock or heuristic
+draft with no claim sentence is kept when the file hash matches and
+labeled score-based. A live model draft with no claim sentence stays
+in the report as needs review. It is not labeled supported. A judge
+may reject a claim the rules accepted. It cannot restore a claim the
+rules rejected.
 
 Reasons are fixed phrases. The cited text is not copied into the
 verdict, so an instruction hidden in the evidence does not become
@@ -55,6 +58,7 @@ REASON_UNREADABLE = "cited row could not be read"
 REASON_NO_CLAIM = "no grounded claim sentence"
 REASON_DETECTOR = "detector label; cited file hash matches"
 REASON_SCORE = "score-based; cited file hash matches"
+REASON_LIVE_DRAFT = "live draft has no verified sentence"
 REASON_JUDGE = "judge rejected the claim"
 REASON_NEEDS_REVIEW = "cited row is over the judge cap; rules supported it"
 
@@ -122,16 +126,20 @@ def verify_findings(
     findings: list[Finding],
     input_dir: Path,
     judge: ClaimJudge | None = None,
+    *,
+    live_llm: bool = False,
 ) -> tuple[list[Finding], list[ClaimVerdict]]:
     """Return supported findings and a verdict for every finding.
 
     Unsupported findings are omitted from the kept list. Their verdicts
-    stay in the second list.
+    stay in the second list. ``live_llm`` is true only when the drafts
+    came from a live model. Mock and heuristic score-only drafts stay
+    score-based either way.
     """
     kept: list[Finding] = []
     verdicts: list[ClaimVerdict] = []
     for finding in findings:
-        verdict = _verify_one(finding, input_dir, judge)
+        verdict = _verify_one(finding, input_dir, judge, live_llm=live_llm)
         verdicts.append(verdict)
         if verdict.verdict == "supported":
             finding.verification = "score-based" if verdict.reason == REASON_SCORE else "supported"
@@ -142,7 +150,13 @@ def verify_findings(
     return kept, verdicts
 
 
-def _verify_one(finding: Finding, input_dir: Path, judge: ClaimJudge | None) -> ClaimVerdict:
+def _verify_one(
+    finding: Finding,
+    input_dir: Path,
+    judge: ClaimJudge | None,
+    *,
+    live_llm: bool,
+) -> ClaimVerdict:
     texts: list[str] = []
     first = finding.citations[0] if finding.citations else None
     for citation in finding.citations:
@@ -156,8 +170,12 @@ def _verify_one(finding: Finding, input_dir: Path, judge: ClaimJudge | None) -> 
     if not lines:
         if texts and finding.origin == "detector":
             return _verdict(finding, "supported", REASON_DETECTOR, "rules", first)
-        if texts and finding.origin in {"heuristic", "llm"}:
+        if texts and finding.origin == "heuristic":
             return _verdict(finding, "supported", REASON_SCORE, "rules", first)
+        if texts and finding.origin == "llm" and not live_llm:
+            return _verdict(finding, "supported", REASON_SCORE, "rules", first)
+        if texts and finding.origin == "llm":
+            return _verdict(finding, "needs review", REASON_LIVE_DRAFT, "rules", first)
         return _verdict(finding, "rejected", REASON_NO_CLAIM, "rules", first)
 
     if any(_norm(line) not in _norm(cited) for line in lines):
@@ -187,7 +205,8 @@ def claim_lines(finding: Finding) -> list[str]:
     """Evidence lines that assert something about the cited row.
 
     Scores, hashes, and the fixed draft notice are not claims. The
-    title is a label, not a sentence that has to appear in the row.
+    title is not checked as a sentence. A live model draft whose
+    evidence contains only those prefixes has no verified sentence.
     """
     lines: list[str] = []
     for raw in finding.evidence:
