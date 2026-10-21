@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Protocol
 
-from .models import IOC, IOCEnrichment, Finding, TimelineEvent
+from .models import IOC, Finding, IOCEnrichment, TimelineEvent
 
 
 class DatabaseBackend(Protocol):

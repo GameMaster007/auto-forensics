@@ -9,9 +9,10 @@ Describe what this PR changes and why.
 - [ ] Test-only change
 
 ## Validation
-- [ ] I ran tests locally (`pytest -q`)
+- [ ] I ran tests locally (`python -m pytest -q`)
+- [ ] I ran `ruff check src tests`
 - [ ] I added/updated tests for behavior changes
-- [ ] I updated docs (README/WIKI/ARCHITECTURE) if needed
+- [ ] I updated docs (README, ROADMAP, ARCHITECTURE) if the citation rule, the manifest, or the worker boundary changed
 
 ## Checklist
 - [ ] Linked issue (if applicable)

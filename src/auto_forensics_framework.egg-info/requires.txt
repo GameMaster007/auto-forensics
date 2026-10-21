@@ -5,6 +5,7 @@ psycopg[binary]>=3.2.9
 
 [dev]
 pytest<9.0.0,>=8.0.0
+ruff<1.0.0,>=0.6.9
 
 [evtx]
 python-evtx>=0.8.1

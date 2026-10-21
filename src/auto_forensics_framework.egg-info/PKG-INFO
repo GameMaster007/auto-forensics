@@ -1,11 +1,14 @@
 Metadata-Version: 2.4
 Name: auto-forensics-framework
 Version: 0.1.0
-Summary: Automated malware-oriented binary analysis and incident timeline generation.
-Author: Auto Forensics Team
+Summary: Cited triage drafts for digital forensics. The analyst verifies every claim.
+Author: Benjamin Christy
 License: MIT
+Project-URL: Homepage, https://github.com/GameMaster007/auto-forensics
+Project-URL: Issues, https://github.com/GameMaster007/auto-forensics/issues
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
+License-File: LICENSE
 Provides-Extra: pe
 Requires-Dist: pefile>=2023.2.7; extra == "pe"
 Provides-Extra: evtx
@@ -30,254 +33,280 @@ Requires-Dist: fastapi<1.0.0,>=0.110.0; extra == "server"
 Requires-Dist: uvicorn<1.0.0,>=0.30.0; extra == "server"
 Provides-Extra: dev
 Requires-Dist: pytest<9.0.0,>=8.0.0; extra == "dev"
+Requires-Dist: ruff<1.0.0,>=0.6.9; extra == "dev"
+Dynamic: license-file
 
-# Auto Forensics Framework
+# auto-forensics
 
-Automated malware-oriented binary analysis and incident timeline generation with:
-- case management (persistent SQLite backend)
-- secure evidence ingestion workflow
-- Llama-assisted malware triage
-- API + web dashboard
-- cross-platform operation for Windows and Linux
+[![CI](https://github.com/GameMaster007/auto-forensics/actions/workflows/ci.yml/badge.svg)](https://github.com/GameMaster007/auto-forensics/actions/workflows/ci.yml)
 
-## Capabilities
+**AI drafts, the analyst verifies, everything is cited.**
 
-- Case lifecycle:
-  - create cases
-  - ingest evidence directories
-  - analyze and produce findings/timeline
-  - persist artifacts/findings/timeline in a database
-- Malware analysis:
-  - SHA256/MD5, entropy scoring, suspicious string detection
-  - optional PE import signal extraction (`pefile`)
-  - plugin-based binary analyzer extension point
-- AI workflow:
-  - Ollama-compatible endpoint for Llama findings, timeline hints, and case summaries
-  - secure heuristic fallback if model output is unavailable
-- Reporting:
-  - `case_report.json`
-  - `case_report.md`
-  - `case_report.html`
-  - `case_report.pdf` (when `reportlab` is available)
-  - `attack_navigator_layer.json`
-  - `case_stix_bundle.json`
-- API + dashboard:
-  - FastAPI backend
-  - browser-based case operations console
+auto-forensics is a local triage draft for people learning digital
+forensics and for a junior analyst who has to explain a case. It reads
+a directory of evidence, drafts findings, and keeps a finding only when
+it points at an artifact from that directory: the artifact id, the
+source file, a row or a byte offset, and the SHA-256. A finding
+without that pointer is dropped. The draft is labelled
+`analyst-unverified` until a person accepts or rejects it. That review
+step is stored as a field and is not implemented yet.
 
-## Security Design
+Maintained by [Benjamin Christy](https://github.com/GameMaster007).
 
-Secure-by-default controls implemented:
-- strict `case_id` validation
-- path confinement checks to prevent directory escape
-- bounded text-file reads and artifact size limits
-- symlink handling policy for ingestion
-- parameterized SQL usage
-- strict CORS default (disabled unless configured)
-- trusted host middleware
-- optional API key auth (`X-API-Key`) with constant-time hash comparison
-- security response headers and restrictive CSP
+This is not a claim that a model does forensics. Plaso, Hayabusa, and
+Chainsaw remain the right tools for parsing. This repository does not
+image disks, collect endpoints, or train its own model. Importing
+those tools' output is on the [roadmap](docs/ROADMAP.md) and is not in
+this version.
+
+## Why it is worth studying
+
+A DFIR or SOC lab spends most of its time on the gap between a log line
+and a sentence in a report. Students are asked to show which row they
+relied on. A model that writes a confident paragraph without that row
+teaches the wrong habit. The code in this repository is small enough
+to defend in a viva:
+
+- parsers record the file hash and the row they read
+- the model sees evidence only as quoted data, not as instructions
+- a finding survives only when its citation matches a hash from this run
+- the run writes a manifest of inputs, the tool log, and the report hash
 
 ## Install
 
-### Windows
-
-```powershell
-cd "C:\Users\Benji\Documents\Auto Forensics"
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -e .[server,dev]
-```
-
-### Linux
+Python 3.10 or newer. The core install has no third-party packages.
+Optional extras cover PE files, EVTX, packet captures, YARA, Sigma,
+SQLAlchemy, and the API server.
 
 ```bash
-cd /path/to/Auto\ Forensics
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[server,dev]"
+python -m pip install -e ".[dev]"
 ```
 
-## CLI Usage
-
-Initialize and run a full managed case workflow:
-
-```bash
-auto-forensics init --case-id case-2026-001
-auto-forensics ingest --case-id case-2026-001 --source-dir ./examples/case1/artifacts
-auto-forensics analyze --case-id case-2026-001 --disable-llama
-auto-forensics overview --case-id case-2026-001
-auto-forensics report --case-id case-2026-001 --format md
-auto-forensics export --case-id case-2026-001 --dest ./case-2026-001.zip
-auto-forensics import --archive ./case-2026-001.zip
-```
-
-List cases:
-
-```bash
-auto-forensics list
-```
-
-Legacy one-shot runner is still available:
-
-```bash
-auto-forensics run --case-id demo-case --input-dir ./examples/case1/artifacts --output-dir ./output/demo-case --disable-llama
-```
-
-## API and Dashboard
-
-Start server:
-
-```bash
-auto-forensics serve --host 127.0.0.1 --port 8765
-```
-
-Open:
-- `http://127.0.0.1:8765/` (dashboard)
-- `http://127.0.0.1:8765/docs` (dev mode only)
-
-Live analysis status:
-- `POST /api/cases/{case_id}/analyze/async` starts background analysis
-- `GET /api/cases/{case_id}/status` returns current status
-- `GET /api/cases/{case_id}/status?stream=true` streams status updates as SSE
-- `GET /api/cases/{case_id}/notes` / `POST /api/cases/{case_id}/notes` for analyst collaboration notes
-- `POST /api/cases/{case_id}/export` exports a signed case archive
-- `POST /api/cases/import` imports a signed case archive
-
-Operational logs:
-- evidence hash entries are appended during ingestion for chain-of-custody support
-- audit trail entries are recorded for case create/ingest/analyze/note actions
-
-Set production mode and API key:
-
-### Windows PowerShell
+Windows PowerShell:
 
 ```powershell
-$env:AUTO_FORENSICS_ENV="prod"
-$env:AUTO_FORENSICS_API_KEY="replace-with-strong-random-secret"
-$env:AUTO_FORENSICS_TRUSTED_HOSTS="127.0.0.1,localhost"
-$env:AUTO_FORENSICS_ALLOWED_INGEST_ROOTS="C:\Evidence,C:\Cases"
-$env:AUTO_FORENSICS_RATE_LIMIT_PER_MINUTE="240"
-$env:AUTO_FORENSICS_OPENAI_ENDPOINT="https://api.openai.com"
-$env:AUTO_FORENSICS_OPENAI_API_KEY="replace-with-api-key"
-auto-forensics serve
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
 ```
 
-### Linux
+The command `auto-forensics` is installed by that editable install.
+
+## Quickstart
+
+The fixture in `examples/case1` is synthetic. The names, the host, and
+the address `203.0.113.19` are made up. Do not replace it with a real
+case.
 
 ```bash
-export AUTO_FORENSICS_ENV=prod
-export AUTO_FORENSICS_API_KEY='replace-with-strong-random-secret'
-export AUTO_FORENSICS_TRUSTED_HOSTS='127.0.0.1,localhost'
-export AUTO_FORENSICS_ALLOWED_INGEST_ROOTS='/mnt/evidence,/srv/cases'
-export AUTO_FORENSICS_RATE_LIMIT_PER_MINUTE='240'
-export AUTO_FORENSICS_OPENAI_ENDPOINT='https://api.openai.com'
-export AUTO_FORENSICS_OPENAI_API_KEY='replace-with-api-key'
-auto-forensics serve
+auto-forensics run \
+  --case-id demo-synthetic \
+  --input-dir examples/case1/artifacts \
+  --output-dir output/demo-synthetic \
+  --llm mock
 ```
 
-## Artifact Formats
+`--llm mock` does not call a network and does not need an API key. It
+writes `case_report.md` and `run_manifest.json` under the output
+directory.
 
-Supported input types:
-- `.json` list/object event files
-- `.csv` event tables
-- `.txt` / `.log` line-based notes/events
-- `.evtx` Windows Event Logs (requires optional `python-evtx`)
-- `.pcap` / `.pcapng` packet captures (requires optional `dpkt`)
-- `.pf` Windows Prefetch files (PECmd subprocess preferred, filename fallback)
-- Registry hives: `SOFTWARE`, `SYSTEM`, `SAM`, `SECURITY`, `NTUSER.DAT`, `USRCLASS.DAT` (requires optional `python-registry`)
-- `$MFT` / `.mft` NTFS MFT artifacts (analyzeMFT subprocess preferred)
-- memory dumps: `.raw`, `.dmp`, `.mem` (Volatility3 subprocess plugins when available)
-- binaries: `.exe`, `.dll`, `.sys`, `.bin`
+`--llm off` uses the same citation rule with a score-based heuristic
+and no draft wording from the mock. `--llm ollama` calls a local
+Ollama-compatible endpoint at temperature 0. If that endpoint is down,
+the binary draft falls back to the heuristic. Do not point it at a
+hosted model with real case data unless you are allowed to.
 
-Text formats support:
-- `timestamp|event_type|description`
-- free-text lines (stored as analyst notes)
+The managed case commands (`init`, `ingest`, `analyze`) copy evidence
+into a case directory and refuse a source outside
+`AUTO_FORENSICS_ALLOWED_INGEST_ROOTS`. That list defaults to your home
+directory, so a clone outside your home will be rejected until you set
+it. `run` reads the directory you pass and does not use that list.
 
-YARA support:
-- drop custom `.yar` / `.yara` rules into `AUTO_FORENSICS_RULES_DIR` (default: `<AUTO_FORENSICS_HOME>/rules`)
-- all ingested files are scanned when rules and `yara-python` are available
+```bash
+export AUTO_FORENSICS_HOME="$PWD/.auto_forensics"
+export AUTO_FORENSICS_ALLOWED_INGEST_ROOTS="$PWD"
+auto-forensics init --case-id demo-synthetic
+auto-forensics ingest --case-id demo-synthetic --source-dir examples/case1/artifacts
+auto-forensics analyze --case-id demo-synthetic --llm mock
+```
 
-Sigma support:
-- drop Sigma `.yml` / `.yaml` rules into `AUTO_FORENSICS_SIGMA_RULES_DIR` (default: `<AUTO_FORENSICS_HOME>/rules/sigma`)
-- timeline events are evaluated against keyword detections when `pyyaml` is installed
+## Example output
 
-## Data Location
+This is the findings section from `auto-forensics run --llm mock` on
+`examples/case1/artifacts`. The clock inside a full report changes
+between runs, so the report hash in the manifest changes with it.
+The citations below are hashes of the files in the repository.
 
-Default application data root:
-- Windows: `C:\Users\<User>\.auto_forensics`
-- Linux: `/home/<user>/.auto_forensics`
+```text
+## Findings
+- [MEDIUM] Draft triage: binary risk signal needs analyst review (0.39)
+  - Evidence: suspicious_score=1.75; LLM-generated draft. Analyst verification required.
+  - Recommendation: Open the cited file and confirm the claim before acting on it.
+  - Status: worker pipeline; LLM-generated, analyst-unverified
+  - Citation: `bin-e5961e7b20c14b3a` `sample_loader.bin` offset 0 `e5961e7b20c14b3a89f9a553bd77a199cb8750689692f6b0299be934aca9705b`
+- [MEDIUM] Sysmon process execution signal (0.72)
+  - Evidence: unknown executable launched from temp directory; source=sysmon
+  - Recommendation: Open the cited artifact and confirm the signal before acting.
+  - Status: worker pipeline; detector, analyst-unverified
+  - Citation: `evt-1001` `events.json` row 1 `7091b7a90f5e452f1d81f9ed211a2526d7d46fcd33451c28d44b3fe4370273c8`
+```
 
-Override with:
-- `AUTO_FORENSICS_HOME=/custom/path`
+The binary citation is offset 0. That means "this file". The pipeline
+does not yet point at the matching string inside the file. The JSON
+event citation is record 1 of `events.json`.
 
-Database URL override:
-- `AUTO_FORENSICS_DATABASE_URL=sqlite:///C:/cases/auto_forensics.db`
-- PostgreSQL example: `AUTO_FORENSICS_DATABASE_URL=postgresql+psycopg://user:password@host:5432/auto_forensics`
+The manifest for that run lists one worker, `pipeline`, and the tools
+it was allowed to call: `parse_artifacts`, `analyze_binaries`,
+`yara_scan`, `event_detectors`, `draft_findings`, `builtin_detectors`,
+`sigma_rules`, and `summarize_case`. `limits.verifier`,
+`limits.replay`, and `limits.orchestrator` are `not-run`.
+
+## Architecture
+
+```mermaid
+flowchart TD
+  evidence["Evidence directory"]
+  pipeline["pipeline worker, the only worker today"]
+  tools["Allow-listed tool registry"]
+  store["In-run case store"]
+  cite["Drop findings with no citation from this run"]
+  report["JSON and Markdown report"]
+  manifest["run_manifest.json, including the tool log"]
+
+  evidence --> pipeline
+  pipeline --> tools
+  tools --> store
+  store --> cite
+  cite --> report
+  cite --> manifest
+
+  orch["Orchestrator, planned"]
+  other["Further workers, planned"]
+  backed["CaseStore on the case database, planned"]
+
+  orch -.-> pipeline
+  orch -.-> other
+  other -.-> tools
+  other -.-> backed
+```
+
+Solid boxes are what a run does now. Dashed boxes are planned and are
+not called.
+
+Today one worker, named `pipeline`, runs inside `run_case`. It may
+call only the tools registered for that run. Each call is appended to
+`MemoryCaseStore` and copied into the manifest. A name that is not on
+the list is refused and still logged. Findings are submitted with
+`add_findings`, which sets `Finding.worker`. A model cannot pick that
+name.
+
+`PluginRegistry` loads parsers and detectors. It is not the tool
+allow-list. `DatabaseBackend` is the SQLite or SQLAlchemy case
+database used by `init` and `analyze`. `run_case` does not open it.
+The service writes the finished report into that database afterwards.
+A later `CaseStore` on top of `DatabaseBackend` is how more than one
+worker would share a durable case. That adapter is not written.
+
+More detail is in `ARCHITECTURE.md` and `docs/ROADMAP.md`.
+
+## What a citation is
+
+| Field | Meaning |
+| --- | --- |
+| `artifact_id` | Id from the record, or a stable id derived from the file hash |
+| `source_file` | File the parser read |
+| `row` | 1-based record index for JSON, or 1-based file line for CSV and text |
+| `offset` | Byte offset. Binary findings use 0, meaning the whole file |
+| `sha256` | Hash of the source file |
+
+The check confirms that this run ingested that id and hash. It does
+not open the row again and decide whether the sentence is true.
+
+## Offline model and Ollama
+
+| `--llm` | Behaviour |
+| --- | --- |
+| `mock` | Fixed draft wording. No socket. Used by the demo and the tests. |
+| `off` | Heuristic score only, still cited. |
+| `ollama` | Local endpoint, temperature 0. `--llama-endpoint` defaults to `http://localhost:11434`. |
+
+`--disable-llama` is the older spelling of `--llm off`.
+
+An OpenAI-compatible endpoint is used only when
+`AUTO_FORENSICS_OPENAI_ENDPOINT` is set and you did not pass `--llm`.
+Leave it unset for the demo.
+
+## Limitations
+
+- The citation check does not re-read the row. A planted false sentence
+  that still names a real row would be kept. The verifier that should
+  reject it is not built.
+- Sigma keyword matches are dropped, because they do not cite a row.
+- YARA matches cite the file at offset 0 when rules and `yara-python`
+  are installed.
+- There is no accept or reject command. Every finding is
+  `analyst-unverified`.
+- The manifest does not replay a run. Seed is always null. Report
+  hashes include the time the report was written.
+- The mock is not a model. It drafts one sentence when a binary's
+  score is above zero.
+- Parsers here are a teaching subset: JSON, CSV, text, and a few
+  optional formats. They are not Plaso, Hayabusa, or Chainsaw.
+- Only the `pipeline` worker runs. The interfaces for more workers are
+  in the tree so they can be added later. Nothing schedules them.
+- No precision, recall, or timing figure is published. None has been
+  measured for this release.
+
+## Ethics and legal use
+
+Use this tool on evidence you are allowed to examine. The sample case
+is fiction. Running it against a system, an account, or a person's
+files without authority can be a criminal offence, including under the
+Computer Misuse Act 1990 in the United Kingdom. This repository is not
+legal advice, and a draft finding is not an expert conclusion.
+
+Do not upload a real case to a hosted model. Prefer `--llm mock` or a
+local Ollama process. Do not commit case data, tokens, or `.env` files.
 
 ## Development
 
-Run tests:
-
 ```bash
-pytest -q
+ruff check src tests
+python -m pytest -q
 ```
 
-Cross-platform CI matrix is included at `.github/workflows/ci.yml` for Windows and Linux.
+Continuous integration runs ruff, the test suite on Python 3.10, 3.11,
+and 3.12, and a gitleaks scan.
 
-## Project Layout
+## Layout
 
 ```text
 src/auto_forensics/
-  api.py
-  artifacts.py
-  binary_analysis.py
-  case_manager.py
-  cli.py
-  config.py
-  db.py
-  llama_workflow.py
-  models.py
-  pipeline.py
-  plugins.py
-  security.py
-  service.py
-  timeline.py
-  web/
-    dashboard.html
-    dashboard.css
-    dashboard.js
+  cli.py            command line
+  pipeline.py       the pipeline worker
+  citations.py      drop findings that do not match this run
+  tools.py          allow-listed tool calls
+  case_store.py     in-run store shared by workers
+  workers.py        worker interface, no orchestrator
+  manifest.py       run_manifest.json
+  llama_workflow.py quoted prompts, Ollama, and the mock
+  service.py        case database lifecycle
+examples/case1/     synthetic fixture
+docs/ROADMAP.md
 tests/
-examples/case1/artifacts/
 ```
 
-Architecture details: `ARCHITECTURE.md`.
+## Licence
 
-## Plugin SDK
+MIT. See `LICENSE`. The project metadata already named MIT before this
+file was added. There was no other licence in the tree.
 
-Drop plugin files into `AUTO_FORENSICS_PLUGIN_DIRS` (comma-separated paths, default `<AUTO_FORENSICS_HOME>/plugins`).
+## Further reading
 
-Each plugin file should expose a `register(registry)` function:
-
-```python
-from pathlib import Path
-from auto_forensics.models import ArtifactEvent
-
-
-class SysmonTextParser:
-    name = "sysmon-text-parser"
-    supported_suffixes = (".sysmon",)
-    supported_names = ()
-
-    def parse(self, path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> list[ArtifactEvent]:
-        # return ArtifactEvent objects
-        return []
-
-
-def register(registry):
-    registry.artifact_parsers.register(SysmonTextParser())
-```
-
-Plugins can register custom artifact parsers, binary analyzers, detectors, enrichers, and reporters.
-
-Built-in detector plugins ship for Sysmon, Windows Defender, Zeek, and Suricata-style telemetry patterns.
+- [Contributing](CONTRIBUTING.md)
+- [Security](SECURITY.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
+- [Changelog](CHANGELOG.md)
+- [Roadmap](docs/ROADMAP.md)

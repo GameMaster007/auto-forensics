@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .migrations import LATEST_SCHEMA_VERSION, MIGRATION_STEPS
-from .models import IOC, IOCEnrichment, Finding, TimelineEvent, utc_now_iso
+from .models import IOC, Finding, IOCEnrichment, TimelineEvent, citations_as_json, decode_finding_row, utc_now_iso
 
 
 class SQLAlchemyDatabase:
@@ -79,6 +79,10 @@ class SQLAlchemyDatabase:
             sa.Column("evidence_json", sa.Text, nullable=False),
             sa.Column("recommendation", sa.Text, nullable=False),
             sa.Column("created_at", sa.Text, nullable=False),
+            sa.Column("citations_json", sa.Text, nullable=False, server_default=sa.text("'[]'")),
+            sa.Column("origin", sa.String(32), nullable=False, server_default=sa.text("'detector'")),
+            sa.Column("review_status", sa.String(32), nullable=False, server_default=sa.text("'unverified'")),
+            sa.Column("worker", sa.String(64), nullable=False, server_default=sa.text("'pipeline'")),
         )
 
         self.timeline = sa.Table(
@@ -317,6 +321,10 @@ class SQLAlchemyDatabase:
                             "evidence_json": json.dumps(f.evidence),
                             "recommendation": f.recommendation,
                             "created_at": now,
+                            "citations_json": citations_as_json(f.citations),
+                            "origin": f.origin,
+                            "review_status": f.review_status,
+                            "worker": f.worker,
                         }
                         for f in findings
                     ],
@@ -373,18 +381,17 @@ class SQLAlchemyDatabase:
                 self.findings.c.evidence_json,
                 self.findings.c.recommendation,
                 self.findings.c.created_at,
+                self.findings.c.citations_json,
+                self.findings.c.origin,
+                self.findings.c.review_status,
+                self.findings.c.worker,
             )
             .where(self.findings.c.case_id == case_id)
             .order_by(self.findings.c.created_at.desc())
         )
         with self.engine.begin() as con:
             rows = self._rows(con.execute(stmt))
-        out: list[dict[str, Any]] = []
-        for row in rows:
-            item = dict(row)
-            item["evidence"] = json.loads(item.pop("evidence_json"))
-            out.append(item)
-        return out
+        return [decode_finding_row(row) for row in rows]
 
     def get_timeline(self, case_id: str) -> list[dict[str, Any]]:
         stmt = (
@@ -811,6 +818,10 @@ class SQLAlchemyDatabase:
                 self.findings.c.evidence_json,
                 self.findings.c.recommendation,
                 self.findings.c.created_at,
+                self.findings.c.citations_json,
+                self.findings.c.origin,
+                self.findings.c.review_status,
+                self.findings.c.worker,
             )
             .where(
                 self.findings.c.case_id == case_id,
@@ -876,11 +887,7 @@ class SQLAlchemyDatabase:
             timeline_rows = self._rows(con.execute(timeline_stmt))
             ioc_rows = self._rows(con.execute(ioc_stmt))
 
-        finding_out: list[dict[str, Any]] = []
-        for row in finding_rows:
-            item = dict(row)
-            item["evidence"] = json.loads(item.pop("evidence_json"))
-            finding_out.append(item)
+        finding_out = [decode_finding_row(row) for row in finding_rows]
 
         timeline_out: list[dict[str, Any]] = []
         for row in timeline_rows:

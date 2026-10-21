@@ -1,20 +1,20 @@
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor
 import hashlib
 import json
 import shutil
-import threading
-import zipfile
 import tempfile
+import threading
 import uuid
+import zipfile
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 from .case_manager import CaseManager
 from .config import AppConfig
-from .db_backend import DatabaseBackend
 from .db import Database
+from .db_backend import DatabaseBackend
 from .db_sqlalchemy import SQLAlchemyDatabase
 from .ioc_enrichment import EnrichmentConfig, enabled_providers, enrich_ioc
 from .models import IOC, IOCEnrichment
@@ -24,6 +24,12 @@ from .security import SecurityError, sha256_file, validate_case_id
 
 
 class AutoForensicsService:
+    """Case lifecycle: create, ingest, analyse, and report.
+
+    Analysis keeps a finding only when the pipeline can cite an
+    ingested artifact. ``review_status`` stays ``unverified`` until a
+    later change records an analyst decision.
+    """
     def __init__(self, config: AppConfig):
         self.config = config
         self.config.ensure_dirs()
@@ -604,7 +610,9 @@ class AutoForensicsService:
         case_id: str,
         enable_llama: bool = True,
         progress_callback: Any | None = None,
+        llm_provider: str | None = None,
     ) -> dict[str, Any]:
+        """Run the pipeline for one case and return paths to the report and manifest."""
         case = self.require_case(case_id)
         evidence_dir = Path(case["evidence_dir"])
         output_dir = Path(case["output_dir"])
@@ -633,6 +641,7 @@ class AutoForensicsService:
                     openai_compatible_endpoint=self.config.openai_compatible_endpoint,
                     openai_api_key=self.config.openai_api_key,
                     plugin_registry=plugin_registry,
+                    llm_provider=llm_provider,
                 )
             )
             if callable(progress_callback):
@@ -643,10 +652,9 @@ class AutoForensicsService:
                 progress_callback("running", 85, "Running IOC enrichment")
             report.enrichments = self._enrich_iocs_with_cache(report.iocs)
             report.summary["ioc_enrichment_count"] = len(report.enrichments)
-            (output_dir / "case_report.json").write_text(
-                json.dumps(report.to_dict(), indent=2),
-                encoding="utf-8",
-            )
+            # case_report.json stays as run_case wrote it. That is the
+            # file the manifest hashed. Enrichment is in the database
+            # and in the return value of this method.
             self.db.set_case_status(case_id, "complete", None)
             self.db.append_audit_log(
                 action="case_analyzed",
@@ -679,6 +687,7 @@ class AutoForensicsService:
             "output_pdf": str(output_dir / "case_report.pdf"),
             "output_attack_navigator": str(output_dir / "attack_navigator_layer.json"),
             "output_stix": str(output_dir / "case_stix_bundle.json"),
+            "output_manifest": str(output_dir / "run_manifest.json"),
         }
 
     def case_overview(self, case_id: str) -> dict[str, Any]:

@@ -5,8 +5,7 @@ import ipaddress
 import re
 from typing import Any
 
-from .models import BinaryFeature, Finding, IOC, TimelineEvent
-
+from .models import IOC, BinaryFeature, Finding, TimelineEvent
 
 URL_RE = re.compile(r"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+", re.IGNORECASE)
 DOMAIN_RE = re.compile(r"\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}\b")

@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "auto-forensics-framework"
 version = "0.1.0"
-description = "Automated malware-oriented binary analysis and incident timeline generation."
+description = "Cited triage drafts for digital forensics. The analyst verifies every claim."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "Auto Forensics Team" }]
+authors = [{ name = "Benjamin Christy" }]
 dependencies = []
 
 [project.optional-dependencies]
@@ -23,11 +23,23 @@ memory = ["volatility3>=2.8.0"]
 pdf = ["reportlab>=4.2.2"]
 db = ["sqlalchemy>=2.0.36", "psycopg[binary]>=3.2.9"]
 server = ["fastapi>=0.110.0,<1.0.0", "uvicorn>=0.30.0,<1.0.0"]
-dev = ["pytest>=8.0.0,<9.0.0"]
+dev = ["pytest>=8.0.0,<9.0.0", "ruff>=0.6.9,<1.0.0"]
+
+[project.urls]
+Homepage = "https://github.com/GameMaster007/auto-forensics"
+Issues = "https://github.com/GameMaster007/auto-forensics/issues"
 
 [project.scripts]
 auto-forensics = "auto_forensics.cli:main"
 auto-forensics-api = "auto_forensics.api:main"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E9", "F", "I"]
 
 [tool.setuptools]
 package-dir = { "" = "src" }

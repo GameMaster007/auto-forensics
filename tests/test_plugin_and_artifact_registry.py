@@ -3,9 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from auto_forensics.artifacts import discover_artifacts
-from auto_forensics.artifacts import beaconing_events_from_flows
-from auto_forensics.artifacts import parse_evtx_xml_record
+from auto_forensics.artifacts import beaconing_events_from_flows, discover_artifacts, parse_evtx_xml_record
 from auto_forensics.models import ArtifactEvent
 from auto_forensics.plugins import ArtifactParserRegistry, PluginRegistry
 

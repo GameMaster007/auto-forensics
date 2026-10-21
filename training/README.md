@@ -1,5 +1,7 @@
 # Local LLM Fine-Tuning for Auto Forensics
 
+The JSONL files in `training/data/` are synthetic prompts generated from the scripts in this folder. They are not case evidence, and they are not required to install or run the tool. The offline demo uses `--llm mock` and does not train a model.
+
 This folder contains a full local workflow to fine-tune an instruction model for the JSON prompts used by:
 
 - `src/auto_forensics/llama_workflow.py`

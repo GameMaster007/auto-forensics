@@ -8,6 +8,8 @@ body:
     attributes:
       value: |
         Thanks for filing a bug. Please provide enough detail to reproduce it.
+        Do not attach real evidence, packet captures, disk images, tokens, or `.env` files.
+        A synthetic fixture is enough.
   - type: textarea
     id: summary
     attributes:

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import Finding, TimelineEvent
-from .security import confine_path, SecurityError
+from .security import SecurityError, confine_path
 
 logger = logging.getLogger(__name__)
 

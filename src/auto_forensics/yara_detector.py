@@ -5,8 +5,9 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .citations import file_citation
 from .models import Finding, TimelineEvent
-from .security import confine_path, SecurityError
+from .security import SecurityError, confine_path
 
 logger = logging.getLogger(__name__)
 
@@ -97,11 +98,14 @@ def scan_paths_with_yara(
                         confidence=0.85,
                         tactic=tactic,
                         evidence=[f"file={sample}", f"rule_file={rule_file}", f"tags={','.join(tags)}"],
-                        recommendation="Validate rule context, isolate host if malicious indicators are confirmed.",
+                        recommendation="Open the cited file and confirm the YARA match before isolating a host.",
                         technique_id=technique,
                         sub_technique=sub_technique,
                         confidence_low=0.7,
                         confidence_high=0.95,
+                        citations=[file_citation(sample)],
+                        origin="detector",
+                        review_status="unverified",
                     )
                 )
                 hints.append(

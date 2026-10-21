@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 
+from .citations import citation_from_event
 from .models import ArtifactEvent, Finding
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,7 @@ def findings_from_artifact_events(artifacts: list[ArtifactEvent], limit: int = 5
         description = item.description if item.description else default_desc
         technique_id = str(item.metadata.get("attack_technique_id") or technique_id)
         tactic_final = str(item.metadata.get("attack_tactic") or tactic)
+        pointer = citation_from_event(item)
         finding = Finding(
             finding_id=f"evt-{uuid.uuid4().hex[:12]}",
             title=f"Event {event_id}: {item.event_type}",
@@ -91,6 +93,9 @@ def findings_from_artifact_events(artifacts: list[ArtifactEvent], limit: int = 5
             sub_technique=str(item.metadata.get("attack_sub_technique") or ""),
             confidence_low=0.55,
             confidence_high=0.85,
+            citations=[pointer] if pointer is not None else [],
+            origin="detector",
+            review_status="unverified",
         )
         findings.append(finding)
         if len(findings) >= limit:
