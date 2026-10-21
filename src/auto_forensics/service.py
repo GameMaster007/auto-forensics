@@ -27,8 +27,9 @@ class AutoForensicsService:
     """Case lifecycle: create, ingest, analyse, and report.
 
     Analysis keeps a finding only when the pipeline can cite an
-    ingested artifact. ``review_status`` stays ``unverified`` until a
-    later change records an analyst decision.
+    ingested artifact. ``review_status`` stays ``unverified`` until
+    ``auto-forensics review`` records an analyst decision on a run
+    directory.
     """
     def __init__(self, config: AppConfig):
         self.config = config

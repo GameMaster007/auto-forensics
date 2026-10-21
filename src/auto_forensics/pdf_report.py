@@ -92,6 +92,12 @@ def write_pdf_report(report: CaseReport, output_path: Path) -> bool:
             line(f"    Tactic: {finding.tactic}  Technique: {finding.technique_id or 'N/A'}")
         if finding.recommendation:
             line(f"    Recommendation: {finding.recommendation}")
+        if finding.review_status == "rejected":
+            line("    Review: analyst-rejected · not verified")
+        elif finding.review_status == "accepted":
+            line(f"    Review: analyst-accepted by {finding.review_actor}")
+        else:
+            line("    Review: analyst-unverified")
 
     line("")
     # --- IOC section ---

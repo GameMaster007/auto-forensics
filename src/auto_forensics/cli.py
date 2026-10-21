@@ -8,6 +8,7 @@ from .api import main as api_main
 from .config import AppConfig
 from .pipeline import PipelineConfig, run_case
 from .replay import replay_manifest
+from .reviews import ReviewError, record_review
 from .security import SecurityError
 from .service import AutoForensicsService
 
@@ -69,6 +70,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable model workflow and rely on heuristic findings.",
     )
     _add_llm_argument(run)
+
+    review = sub.add_parser("review", help="Accept, reject, or annotate one finding in a run directory.")
+    review.add_argument("--output-dir", required=True, type=Path, help="Directory that contains case_report.json.")
+    review.add_argument("--finding-id", required=True, help="Finding id from the report.")
+    review.add_argument("--decision", required=True, choices=["accept", "reject", "annotate"])
+    review.add_argument("--actor", required=True, help="Name recorded in the custody log.")
+    review.add_argument("--note", default="", help="Annotation. Required for annotate.")
+    review.add_argument(
+        "--override",
+        action="store_true",
+        help="Record a new accept or reject after one is already stored. The earlier line stays in the log.",
+    )
 
     replay = sub.add_parser("replay", help="Re-run a manifest and compare input and report hashes.")
     replay.add_argument("manifest", type=Path, help="Path to run_manifest.json.")
@@ -235,12 +248,26 @@ def main() -> None:
             print(json.dumps(report_obj.to_dict(), indent=2))
             return
 
+        if args.command == "review":
+            entry = record_review(
+                args.output_dir,
+                finding_id=args.finding_id,
+                decision=args.decision,
+                actor=args.actor,
+                note=args.note,
+                override=args.override,
+            )
+            print(json.dumps(entry, indent=2))
+            return
+
         if args.command == "replay":
             result = replay_manifest(args.manifest, output_dir=args.output_dir)
             print(json.dumps(result, indent=2))
             if not result["match"]:
                 raise SystemExit(1)
             return
+    except ReviewError as exc:
+        raise SystemExit(f"Review refused: {exc}") from exc
     except SecurityError as exc:
         raise SystemExit(f"Security validation failed: {exc}") from exc
 
