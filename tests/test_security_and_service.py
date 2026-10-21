@@ -148,15 +148,14 @@ def test_async_analysis_status_transitions(tmp_path: Path):
     deadline = time.time() + 15
     state = "queued"
     while time.time() < deadline:
-        status = service.get_case_status("case-async-001")
-        state = status["state"]
+        overview = service.case_overview("case-async-001")
+        job = overview.get("latest_job") or {}
+        state = str(job.get("state") or "")
         if state in {"complete", "failed"}:
             break
         time.sleep(0.1)
 
     assert state == "complete"
-    overview = service.case_overview("case-async-001")
-    assert overview["latest_job"] is not None
     assert overview["latest_job"]["state"] == "complete"
 
     enrich_kickoff = service.enrich_case_iocs_async("case-async-001")
@@ -166,15 +165,14 @@ def test_async_analysis_status_transitions(tmp_path: Path):
     deadline = time.time() + 15
     enrich_state = "queued"
     while time.time() < deadline:
-        status = service.get_case_enrichment_status("case-async-001")
-        enrich_state = status["state"]
+        overview = service.case_overview("case-async-001")
+        job = overview.get("latest_enrichment_job") or {}
+        enrich_state = str(job.get("state") or "")
         if enrich_state in {"complete", "failed"}:
             break
         time.sleep(0.1)
 
     assert enrich_state == "complete"
-    overview = service.case_overview("case-async-001")
-    assert overview["latest_enrichment_job"] is not None
     assert overview["latest_enrichment_job"]["state"] == "complete"
 
 
