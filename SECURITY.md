@@ -12,7 +12,7 @@ original host.
 | A path outside the evidence directory is ingested, or a symlink escapes the case. | Case IDs are restricted to a short character set. Ingest checks an allow-list of roots (`AUTO_FORENSICS_ALLOWED_INGEST_ROOTS`, defaulting to the home directory). Symlinks are skipped. Text reads are size-capped. |
 | A huge or very numerous tree exhausts disk or memory. | Ingest stops at a file-count and file-size cap. The manifest hashes at most 10,000 files and stops walking deeper than 20 path parts. |
 | Evidence text tells the model to ignore its instructions. | Model prompts put evidence in one JSON block between `<<<EVIDENCE_DATA` and `EVIDENCE_DATA>>>`. The markers are stripped from the payload so the block cannot be closed early. A short list of injection phrases is redacted before the block is built. The offline mock does not copy evidence text into the finding. |
-| The model invents a citation. | A finding is kept only when `artifact_id` and `sha256` match an artifact this run hashed. The stored row and path come from that catalog, not from the model. |
+| The model invents a citation, or a sentence that names a real row but is not in it. | A finding is kept only when `artifact_id` and `sha256` match an artifact this run hashed. The verifier then re-opens that file, checks the hash, and drops the finding unless each claim sentence appears in the cited row. A mock or heuristic draft with no claim sentence is kept and labeled score-based when the hash matches. A live model draft with no claim sentence is kept as needs review, not as supported. A judge can reject a claim the rules accepted. It cannot restore one the rules rejected. Verdict reasons do not copy the cited text. |
 | The model names itself as a different worker. | `MemoryCaseStore.add_findings` sets `Finding.worker` from the worker argument. |
 | A worker calls a tool that was not allow-listed. | `ToolRegistry.call` refuses the name, logs `denied`, and raises. The pipeline only allow-lists its own stages. This is not a sandbox. Code that imports a function directly still runs. |
 | Optional parsers start another program (`python-evtx` is in-process; Volatility, and some prefetch or MFT helpers, may be subprocesses). | Those programs receive paths from the evidence tree. They are outside this process's allow-list. Do not point them at evidence you do not trust on a machine that holds other cases. |
@@ -21,10 +21,12 @@ original host.
 
 ## What is not defended yet
 
-- The verifier does not re-read a cited row and judge the sentence.
-- Replay is not implemented. Report hashes include timestamps, so two
-  runs of the same input do not match.
-- `review_status` cannot be set to accepted or rejected.
+- The verifier checks that claim sentences occur in the cited row. It
+  does not decide whether the sentence is a fair conclusion from that
+  row. A true sentence that does not quote the row is dropped. A false
+  sentence that happens to repeat the row is kept.
+- `review_status` cannot be set to accepted or rejected by an analyst.
+  `verification: supported` is the verifier, not an analyst decision.
 - The tool log is not a full audit of every function call in the
   process. It records the allow-listed stages the pipeline worker
   invoked.

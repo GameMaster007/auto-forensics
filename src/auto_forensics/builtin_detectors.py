@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import uuid
-
 from .citations import citation_from_event
+from .ids import stable_id
 from .models import ArtifactEvent, BinaryFeature, Citation, Finding, TimelineEvent
 
 
@@ -15,7 +14,13 @@ def _finding(
     citation: Citation | None = None,
 ) -> Finding:
     return Finding(
-        finding_id=f"plg-{uuid.uuid4().hex[:12]}",
+        finding_id=stable_id(
+            "plg",
+            title,
+            evidence,
+            citation.artifact_id if citation is not None else "",
+            citation.sha256 if citation is not None else "",
+        ),
         title=title,
         severity=severity,
         confidence=0.72,

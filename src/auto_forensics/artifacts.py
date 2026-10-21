@@ -9,12 +9,12 @@ import socket  # used for inet_ntop in network parsing
 import statistics
 import subprocess
 import tempfile
-import uuid
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .ids import stable_id
 from .models import ArtifactEvent
 from .security import SecurityError, read_limited_text, sha256_file, stays_in_tree
 
@@ -92,17 +92,26 @@ VOLATILITY_PLUGINS: tuple[str, ...] = (
 )
 
 
-def _gen_artifact_id(prefix: str) -> str:
-    return f"{prefix}-{uuid.uuid4().hex[:12]}"
+def _gen_artifact_id(prefix: str, *parts: object) -> str:
+    """Stable id so a replay of the same file sees the same artifact."""
+    return stable_id(prefix, *parts) if parts else stable_id(prefix, prefix)
 
 
 def _make_event(
-    row: dict[str, Any], source: str, fallback_type: str = "artifact_event"
+    row: dict[str, Any],
+    source: str,
+    fallback_type: str = "artifact_event",
+    identity: str = "",
 ) -> ArtifactEvent:
     timestamp = row.get("timestamp")
     event_type = str(row.get("event_type") or fallback_type)
     description = str(row.get("description") or row.get("message") or "no description")
-    artifact_id = str(row.get("artifact_id") or _gen_artifact_id("evt"))
+    raw_id = row.get("artifact_id")
+    artifact_id = (
+        str(raw_id)
+        if raw_id
+        else _gen_artifact_id("evt", source, identity, event_type, description)
+    )
     metadata = {
         k: v
         for k, v in row.items()
@@ -132,7 +141,7 @@ def load_json_artifacts(path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> li
             continue
         record += 1
         source = str(item.get("source") or path.name)
-        event = _make_event(item, source=source)
+        event = _make_event(item, source=source, identity=f"{path.name}:{record}")
         _stamp_provenance(event, path.name, digest, row=record)
         out.append(event)
     return out
@@ -152,7 +161,7 @@ def load_csv_artifacts(path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> lis
     reader = csv.DictReader(lines)
     # Line 1 is the header. The first data record is file line 2.
     for line_number, row in enumerate(reader, start=2):
-        event = _make_event(row, source=path.name)
+        event = _make_event(row, source=path.name, identity=f"{path.name}:{line_number}")
         _stamp_provenance(event, path.name, digest, row=line_number)
         out.append(event)
     return out
@@ -175,7 +184,7 @@ def load_txt_artifacts(path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> lis
         parts = [x.strip() for x in text.split("|", 2)]
         if len(parts) == 3:
             event = ArtifactEvent(
-                artifact_id=_gen_artifact_id("evt"),
+                artifact_id=_gen_artifact_id("evt", path.name, line_number, text),
                 timestamp=parts[0] or None,
                 event_type=parts[1] or "text_event",
                 description=parts[2] or "no description",
@@ -184,7 +193,7 @@ def load_txt_artifacts(path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> lis
             )
         else:
             event = ArtifactEvent(
-                artifact_id=_gen_artifact_id("note"),
+                artifact_id=_gen_artifact_id("note", path.name, line_number, text),
                 timestamp=None,
                 event_type="text_note",
                 description=text,
@@ -303,7 +312,7 @@ def parse_evtx_xml_record(xml_text: str, source: str) -> ArtifactEvent | None:
     metadata.update(payload)
 
     return ArtifactEvent(
-        artifact_id=_gen_artifact_id("evtx"),
+        artifact_id=_gen_artifact_id("evtx", source, event_id, timestamp, description),
         timestamp=timestamp,
         event_type=event_type,
         description=description,
@@ -424,7 +433,7 @@ def beaconing_events_from_flows(
         score = round(max(0.0, min(10.0, (1.0 - coeff_var) * 10.0)), 2)
         out.append(
             ArtifactEvent(
-                artifact_id=_gen_artifact_id("pcap"),
+                artifact_id=_gen_artifact_id("pcap", source, dst_ip, dst_port, proto, ordered[0]),
                 timestamp=_to_iso_utc(ordered[0]),
                 event_type="c2_beacon_suspected",
                 description=(
@@ -511,7 +520,7 @@ def load_pcap_artifacts(path: Path) -> list[ArtifactEvent]:
                         continue
                     out.append(
                         ArtifactEvent(
-                            artifact_id=_gen_artifact_id("pcap"),
+                            artifact_id=_gen_artifact_id("pcap", "dns", name, ts),
                             timestamp=_to_iso_utc(float(ts)),
                             event_type="dns_query",
                             description=f"DNS query for {name}",
@@ -537,7 +546,7 @@ def load_pcap_artifacts(path: Path) -> list[ArtifactEvent]:
                 path_part = str(req.uri)
                 out.append(
                     ArtifactEvent(
-                        artifact_id=_gen_artifact_id("pcap"),
+                        artifact_id=_gen_artifact_id("pcap", "http", host, path_part, ts),
                         timestamp=_to_iso_utc(float(ts)),
                         event_type="http_request",
                         description=f"HTTP {req.method} {path_part}",
@@ -557,7 +566,7 @@ def load_pcap_artifacts(path: Path) -> list[ArtifactEvent]:
             if sni:
                 out.append(
                     ArtifactEvent(
-                        artifact_id=_gen_artifact_id("pcap"),
+                        artifact_id=_gen_artifact_id("pcap", "tls", sni, ts),
                         timestamp=_to_iso_utc(float(ts)),
                         event_type="tls_client_hello",
                         description=f"TLS client hello with SNI {sni}",
@@ -611,7 +620,7 @@ def _prefetch_event(
     if metadata:
         merged_metadata.update(metadata)
     return ArtifactEvent(
-        artifact_id=_gen_artifact_id("prefetch"),
+        artifact_id=_gen_artifact_id("prefetch", source, executable, timestamp, run_count),
         timestamp=timestamp,
         event_type="prefetch_execution_observed",
         description=details,
@@ -753,7 +762,7 @@ def load_registry_artifacts(path: Path) -> list[ArtifactEvent]:
                 timestamp = None
             out.append(
                 ArtifactEvent(
-                    artifact_id=_gen_artifact_id("reg"),
+                    artifact_id=_gen_artifact_id("reg", hive_name, key_path, value.name(), command),
                     timestamp=timestamp,
                     event_type=event_type,
                     description=f"Registry persistence value {value.name()} -> {command}",
@@ -792,7 +801,7 @@ def load_registry_artifacts(path: Path) -> list[ArtifactEvent]:
                     timestamp = None
                 out.append(
                     ArtifactEvent(
-                        artifact_id=_gen_artifact_id("reg"),
+                        artifact_id=_gen_artifact_id("reg", hive_name, service_key.name(), image_path),
                         timestamp=timestamp,
                         event_type="registry_service_entry",
                         description=f"Service entry {service_key.name()} image path {image_path}",
@@ -844,7 +853,7 @@ def _mft_event_from_row(path: Path, row: dict[str, Any]) -> ArtifactEvent | None
         description = f"MFT deletion evidence for {full_path}"
 
     return ArtifactEvent(
-        artifact_id=_gen_artifact_id("mft"),
+        artifact_id=_gen_artifact_id("mft", path.name, full_path, inode),
         timestamp=timestamp,
         event_type="mft_file_record",
         description=description,
@@ -904,7 +913,7 @@ def load_mft_artifacts(path: Path) -> list[ArtifactEvent]:
         return out
     return [
         ArtifactEvent(
-            artifact_id=_gen_artifact_id("mft"),
+            artifact_id=_gen_artifact_id("mft", path.name, "fallback"),
             timestamp=_timestamp_from_stat(path),
             event_type="mft_artifact_ingested",
             description=f"MFT artifact detected: {path.name}",
@@ -937,7 +946,7 @@ def load_memory_artifacts(path: Path) -> list[ArtifactEvent]:
     if not tool:
         return [
             ArtifactEvent(
-                artifact_id=_gen_artifact_id("mem"),
+                artifact_id=_gen_artifact_id("mem", path.name, "fallback"),
                 timestamp=_timestamp_from_stat(path),
                 event_type="memory_artifact_ingested",
                 description=f"Memory image detected: {path.name}",
@@ -963,10 +972,10 @@ def load_memory_artifacts(path: Path) -> list[ArtifactEvent]:
         if not rows:
             continue
 
-        for row in rows[:2000]:
+        for index, row in enumerate(rows[:2000]):
             out.append(
                 ArtifactEvent(
-                    artifact_id=_gen_artifact_id("mem"),
+                    artifact_id=_gen_artifact_id("mem", path.name, plugin, index),
                     timestamp=None,
                     event_type=f"memory_{plugin.replace('.', '_')}",
                     description=f"Volatility {plugin} record",
@@ -984,7 +993,7 @@ def load_memory_artifacts(path: Path) -> list[ArtifactEvent]:
         return out
     return [
         ArtifactEvent(
-            artifact_id=_gen_artifact_id("mem"),
+            artifact_id=_gen_artifact_id("mem", path.name, "volatility-empty"),
             timestamp=_timestamp_from_stat(path),
             event_type="memory_artifact_ingested",
             description=f"Memory image detected: {path.name}",

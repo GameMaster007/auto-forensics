@@ -46,7 +46,7 @@ def event_from_artifact(item: ArtifactEvent) -> TimelineEvent:
 
 def event_from_binary(binary: BinaryFeature) -> TimelineEvent:
     return TimelineEvent(
-        timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        timestamp=None,
         source="binary_analysis",
         event_type="binary_analyzed",
         description=f"Analyzed {binary.path} (score={binary.suspicious_score})",

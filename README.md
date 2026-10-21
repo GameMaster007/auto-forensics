@@ -72,7 +72,16 @@ auto-forensics run \
 
 `--llm mock` does not call a network and does not need an API key. It
 writes `case_report.md` and `run_manifest.json` under the output
-directory.
+directory. Replay checks that a second run still matches:
+
+```bash
+auto-forensics replay output/demo-synthetic/run_manifest.json
+```
+
+A match prints `"match": true` and exits 0. A changed input file, or a
+report hash that does not match the manifest, exits 1. The hash omits
+`generated_at`, so the clock in the report does not cause a mismatch.
+Seed is 0. The mock does not sample, so its temperature stays null.
 
 `--llm off` uses the same citation rule with a score-based heuristic
 and no draft wording from the mock. `--llm ollama` calls a local
@@ -97,22 +106,28 @@ auto-forensics analyze --case-id demo-synthetic --llm mock
 ## Example output
 
 This is the findings section from `auto-forensics run --llm mock` on
-`examples/case1/artifacts`. The clock inside a full report changes
-between runs, so the report hash in the manifest changes with it.
-The citations below are hashes of the files in the repository.
+`examples/case1/artifacts`. The citations below are hashes of the files
+in the repository. `generated_at` is still written on the report and is
+left out of the manifest's report hash.
 
 ```text
 ## Findings
 - [MEDIUM] Draft triage: binary risk signal needs analyst review (0.39)
-  - Evidence: suspicious_score=1.75; LLM-generated draft. Analyst verification required.
+  - Evidence: suspicious_score=1.75; LLM-generated draft. Analyst verification required.; cmd.exe
   - Recommendation: Open the cited file and confirm the claim before acting on it.
   - Status: worker pipeline; LLM-generated, analyst-unverified
+  - Verification: supported
   - Citation: `bin-e5961e7b20c14b3a` `sample_loader.bin` offset 0 `e5961e7b20c14b3a89f9a553bd77a199cb8750689692f6b0299be934aca9705b`
 - [MEDIUM] Sysmon process execution signal (0.72)
   - Evidence: unknown executable launched from temp directory; source=sysmon
   - Recommendation: Open the cited artifact and confirm the signal before acting.
   - Status: worker pipeline; detector, analyst-unverified
+  - Verification: supported
   - Citation: `evt-1001` `events.json` row 1 `7091b7a90f5e452f1d81f9ed211a2526d7d46fcd33451c28d44b3fe4370273c8`
+
+## Verifier
+- supported: `fdg-mock-e5961e7b20` (mock) cited row contains every claim sentence
+- supported: `plg-eda4f0bb58a4` (mock) cited row contains every claim sentence
 ```
 
 The binary citation is offset 0. That means "this file". The pipeline
@@ -120,10 +135,11 @@ does not yet point at the matching string inside the file. The JSON
 event citation is record 1 of `events.json`.
 
 The manifest for that run lists one worker, `pipeline`, and the tools
-it was allowed to call: `parse_artifacts`, `analyze_binaries`,
-`yara_scan`, `event_detectors`, `draft_findings`, `builtin_detectors`,
-`sigma_rules`, and `summarize_case`. `limits.verifier`,
-`limits.replay`, and `limits.orchestrator` are `not-run`.
+it was allowed to call, including `verify_findings`. `limits.verifier`
+is `rules+mock`. `limits.replay` is `available`. `limits.orchestrator`
+is `not-run`. The binary draft quotes `cmd.exe` because that string
+is in `sample_loader.bin` and the verifier requires a claim sentence
+to occur in the cited file.
 
 ## Architecture
 
@@ -134,6 +150,7 @@ flowchart TD
   tools["Allow-listed tool registry"]
   store["In-run case store"]
   cite["Drop findings with no citation from this run"]
+  verify["Verifier, re-read each cited row"]
   report["JSON and Markdown report"]
   manifest["run_manifest.json, including the tool log"]
 
@@ -141,8 +158,9 @@ flowchart TD
   pipeline --> tools
   tools --> store
   store --> cite
-  cite --> report
-  cite --> manifest
+  cite --> verify
+  verify --> report
+  verify --> manifest
 
   orch["Orchestrator, planned"]
   other["Further workers, planned"]
@@ -183,16 +201,19 @@ More detail is in `ARCHITECTURE.md` and `docs/ROADMAP.md`.
 | `offset` | Byte offset. Binary findings use 0, meaning the whole file |
 | `sha256` | Hash of the source file |
 
-The check confirms that this run ingested that id and hash. It does
-not open the row again and decide whether the sentence is true.
+The citation check confirms that this run ingested that id and hash.
+The verifier then opens the file again. A claim sentence that is not
+in the cited row is dropped, and the manifest records a rejected
+verdict. The check is "the words are in the row". It does not decide
+whether those words are a fair conclusion.
 
 ## Offline model and Ollama
 
 | `--llm` | Behaviour |
 | --- | --- |
-| `mock` | Fixed draft wording. No socket. Used by the demo and the tests. |
-| `off` | Heuristic score only, still cited. |
-| `ollama` | Local endpoint, temperature 0. `--llama-endpoint` defaults to `http://localhost:11434`. |
+| `mock` | Fixed draft wording. No socket. Used by the demo and the tests. The verifier's judge is the offline mock. |
+| `off` | Heuristic score only, still cited. The verifier uses rules only. |
+| `ollama` | Local endpoint, temperature 0, seed 0. `--llama-endpoint` defaults to `http://localhost:11434`. The verifier may ask that endpoint to judge a claim the rules already accepted. |
 
 `--disable-llama` is the older spelling of `--llm off`.
 
@@ -202,18 +223,24 @@ Leave it unset for the demo.
 
 ## Limitations
 
-- The citation check does not re-read the row. A planted false sentence
-  that still names a real row would be kept. The verifier that should
-  reject it is not built.
+- The verifier checks that each claim sentence occurs in the cited
+  row. A planted sentence that is not in the row is dropped. A false
+  sentence that repeats the row is kept. A mock or heuristic draft
+  with no claim sentence is kept and labeled score-based when the
+  file hash matches. A live model draft with no claim sentence stays
+  in the report as needs review.
 - Sigma keyword matches are dropped, because they do not cite a row.
 - YARA matches cite the file at offset 0 when rules and `yara-python`
-  are installed.
-- There is no accept or reject command. Every finding is
-  `analyst-unverified`.
-- The manifest does not replay a run. Seed is always null. Report
-  hashes include the time the report was written.
+  are installed. A YARA finding with no claim sentence is kept when
+  the file hash matches, because the finding is a detector label.
+- There is no analyst accept or reject command. Every finding is
+  `analyst-unverified`. `verification: supported` is the verifier.
+- Replay compares input hashes and the canonical report hash. It does
+  not compare the raw report file, because that file contains
+  `generated_at`.
 - The mock is not a model. It drafts one sentence when a binary's
-  score is above zero.
+  score is above zero, and it quotes one suspicious string from that
+  file so the verifier has a sentence to check.
 - Parsers here are a teaching subset: JSON, CSV, text, and a few
   optional formats. They are not Plaso, Hayabusa, or Chainsaw.
 - Only the `pipeline` worker runs. The interfaces for more workers are

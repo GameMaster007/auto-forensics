@@ -1,10 +1,9 @@
 """Rules that decide whether a drafted finding may be shown.
 
-A finding survives only when each citation it keeps matches an artifact
-this run actually ingested. The check is on the pointer (artifact id
-and SHA-256). It does not re-read the row and decide whether the
-sentence is true. That second check is the verifier, which is not
-implemented yet.
+A finding survives the citation check only when each citation it keeps
+matches an artifact this run actually ingested. That check is on the
+pointer (artifact id and SHA-256). The verifier in ``verifier.py`` is
+the later pass that re-reads the row.
 """
 
 from __future__ import annotations

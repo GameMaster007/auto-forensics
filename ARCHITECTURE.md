@@ -46,7 +46,7 @@
 
 `Citation` stores `artifact_id`, `source_file`, `sha256`, and either `row` or `offset`. `drop_uncited` removes a finding whose citations do not match the catalog built from this run. The catalog entry is kept, not the copy a model returned.
 
-`run_manifest.json` records input hashes, the tool version, the prompt-template hash, model provider, temperature, and the SHA-256 of `case_report.json`. Temperature is 0 for a live Ollama or OpenAI-compatible call. It is null for the offline mock, which does not sample. `seed` is null. The manifest does not replay the run.
+`run_manifest.json` records the input directory, input hashes, the tool version, the prompt-template hash, model provider, temperature, seed, and the canonical SHA-256 of `case_report.json`. That hash omits `generated_at`. Temperature is 0 for a live Ollama or OpenAI-compatible call, and those calls send seed 0. The offline mock does not sample, so its temperature is null and its seed is still recorded as 0. `auto-forensics replay` re-runs from the manifest and exits non-zero when the inputs or the canonical report hash differ.
 
 ## Workers, tools, and the case store
 
@@ -59,7 +59,9 @@ detectors and is not that allow-list.
 `DatabaseBackend` is still the durable database behind `init` and
 `analyze`. `run_case` does not open it. A `CaseStore` backed by that
 database, and an orchestrator that runs more than one worker, are
-planned and are not called. See `docs/ROADMAP.md`.
+planned and are not called. The verifier is a stage inside the
+pipeline worker: it re-reads each cited row and drops a claim the row
+does not support. See `docs/ROADMAP.md`.
 
 Evidence sent to a model is JSON inside a `<<<EVIDENCE_DATA` fence. The instruction text does not contain evidence values.
 

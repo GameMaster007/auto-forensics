@@ -75,6 +75,12 @@ class Finding:
     ``review_status`` is ``unverified`` until an analyst accepts or
     rejects the draft. This version stores the status and does not
     yet provide the review command.
+    ``verification`` is the verifier label kept on a finding that
+    stays in the report: ``supported``, ``score-based``, or
+    ``needs review``. Score-based is a mock or heuristic draft with
+    no claim sentence and a matching file hash. A live model draft
+    with no claim sentence is needs review. Rejected findings are
+    left out.
     """
 
     finding_id: str
@@ -93,6 +99,7 @@ class Finding:
     origin: str = "detector"
     review_status: str = "unverified"
     worker: str = "pipeline"
+    verification: str = ""
 
 
 @dataclass(slots=True)

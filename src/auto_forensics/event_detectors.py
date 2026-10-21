@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import logging
-import uuid
 
 from .citations import citation_from_event
+from .ids import stable_id
 from .models import ArtifactEvent, Finding
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,7 @@ def findings_from_artifact_events(artifacts: list[ArtifactEvent], limit: int = 5
         tactic_final = str(item.metadata.get("attack_tactic") or tactic)
         pointer = citation_from_event(item)
         finding = Finding(
-            finding_id=f"evt-{uuid.uuid4().hex[:12]}",
+            finding_id=stable_id("evt", event_id, item.artifact_id, description),
             title=f"Event {event_id}: {item.event_type}",
             severity=severity,
             confidence=0.7,
