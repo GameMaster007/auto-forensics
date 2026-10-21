@@ -652,10 +652,9 @@ class AutoForensicsService:
                 progress_callback("running", 85, "Running IOC enrichment")
             report.enrichments = self._enrich_iocs_with_cache(report.iocs)
             report.summary["ioc_enrichment_count"] = len(report.enrichments)
-            (output_dir / "case_report.json").write_text(
-                json.dumps(report.to_dict(), indent=2),
-                encoding="utf-8",
-            )
+            # case_report.json stays as run_case wrote it. That is the
+            # file the manifest hashed. Enrichment is in the database
+            # and in the return value of this method.
             self.db.set_case_status(case_id, "complete", None)
             self.db.append_audit_log(
                 action="case_analyzed",

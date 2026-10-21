@@ -50,10 +50,12 @@ def citation_for_binary(binary: BinaryFeature) -> Citation:
 def file_citation(path: Path, root: Path | None = None) -> Citation:
     """Cite a file that was hashed during this run, at offset 0."""
     digest = sha256_file(path).lower()
+    source_file = path.name
     if root is not None:
-        source_file = str(path.resolve().relative_to(root.resolve()))
-    else:
-        source_file = path.name
+        try:
+            source_file = str(path.resolve().relative_to(root.resolve()))
+        except ValueError:
+            source_file = path.name
     return Citation(
         artifact_id=f"file-{digest[:16]}",
         source_file=source_file,
@@ -62,27 +64,41 @@ def file_citation(path: Path, root: Path | None = None) -> Citation:
     )
 
 
-def catalog_from_citations(citations: list[Citation]) -> dict[tuple[str, str], Citation]:
-    """Index complete citations by ``(artifact_id, sha256)``."""
-    catalog: dict[tuple[str, str], Citation] = {}
+def catalog_key(citation: Citation) -> tuple[str, str, int | None, int | None]:
+    """Identity of one pointer, including the row or offset."""
+    return (citation.artifact_id, citation.sha256.lower(), citation.row, citation.offset)
+
+
+def catalog_from_citations(
+    citations: list[Citation],
+) -> dict[tuple[str, str, int | None, int | None], Citation]:
+    """Index complete citations by artifact id, hash, row, and offset.
+
+    Two records in one file can share an artifact id. They stay as two
+    catalog entries. A later record does not replace an earlier row.
+    """
+    catalog: dict[tuple[str, str, int | None, int | None], Citation] = {}
     for citation in citations:
         if not citation.is_complete():
             continue
-        catalog[(citation.artifact_id, citation.sha256.lower())] = citation
+        catalog[catalog_key(citation)] = citation
     return catalog
 
 
-def bind_citations(finding: Finding, catalog: dict[tuple[str, str], Citation]) -> Finding:
+def bind_citations(
+    finding: Finding,
+    catalog: dict[tuple[str, str, int | None, int | None], Citation],
+) -> Finding:
     """Replace a finding's citations with the catalog entries they match.
 
-    A model may copy an id, but the row and path stored on the finding
-    are the ones this process computed. Citations that do not match the
-    catalog are removed.
+    The model may copy an id, but the row and path stored on the finding
+    are the ones this process computed. A citation that names a different
+    row is removed rather than rewritten onto another record.
     """
     bound: list[Citation] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, int | None, int | None]] = set()
     for citation in finding.citations:
-        key = (citation.artifact_id, citation.sha256.lower())
+        key = catalog_key(citation)
         match = catalog.get(key)
         if match is None or key in seen:
             continue
@@ -94,7 +110,7 @@ def bind_citations(finding: Finding, catalog: dict[tuple[str, str], Citation]) -
 
 def drop_uncited(
     findings: list[Finding],
-    catalog: dict[tuple[str, str], Citation],
+    catalog: dict[tuple[str, str, int | None, int | None], Citation],
 ) -> tuple[list[Finding], int]:
     """Keep findings that still have a catalog citation. Count the rest."""
     kept: list[Finding] = []

@@ -314,8 +314,13 @@ def _evidence_catalog(
         pointers.append(citation_for_binary(binary))
     root = input_dir.resolve()
     for path in sorted(root.rglob("*")):
-        if path.is_file() and not path.is_symlink() and len(path.relative_to(root).parts) <= 20:
-            pointers.append(file_citation(path, root=root))
+        if not path.is_file() or path.is_symlink() or len(path.relative_to(root).parts) > 20:
+            continue
+        try:
+            path.resolve().relative_to(root)
+        except ValueError:
+            continue
+        pointers.append(file_citation(path, root=root))
     return catalog_from_citations(pointers)
 
 

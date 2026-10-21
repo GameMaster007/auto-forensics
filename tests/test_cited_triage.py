@@ -6,6 +6,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from auto_forensics.citations import catalog_from_citations, drop_uncited
 from auto_forensics.db import Database
 from auto_forensics.llama_workflow import (
@@ -39,14 +41,24 @@ def _binary(path: Path) -> BinaryFeature:
 
 def test_uncited_finding_is_dropped_and_known_pointer_replaces_model_copy():
     real = Citation(artifact_id="evt-1", source_file="events.json", sha256=_sha(), row=2)
-    catalog = catalog_from_citations([real])
-    invented = Finding(
+    same_file_other_row = Citation(artifact_id="evt-1", source_file="events.json", sha256=_sha(), row=1)
+    catalog = catalog_from_citations([real, same_file_other_row])
+    wrong_row = Finding(
         finding_id="fdg-1",
         title="Invented",
         severity="high",
         confidence=0.9,
         tactic="execution",
         citations=[Citation(artifact_id="evt-1", source_file="other.txt", sha256=_sha(), row=99)],
+        origin="llm",
+    )
+    copied = Finding(
+        finding_id="fdg-3",
+        title="Copied pointer",
+        severity="medium",
+        confidence=0.5,
+        tactic="execution",
+        citations=[Citation(artifact_id="evt-1", source_file="other.txt", sha256=_sha(), row=2)],
         origin="llm",
     )
     uncited = Finding(
@@ -56,10 +68,12 @@ def test_uncited_finding_is_dropped_and_known_pointer_replaces_model_copy():
         confidence=0.2,
         tactic="execution",
     )
-    kept, dropped = drop_uncited([invented, uncited], catalog)
+    kept, dropped = drop_uncited([wrong_row, copied, uncited], catalog)
 
-    assert dropped == 1
+    assert dropped == 2
+    assert len(catalog) == 2
     assert len(kept) == 1
+    assert kept[0].finding_id == "fdg-3"
     assert kept[0].citations[0].source_file == "events.json"
     assert kept[0].citations[0].row == 2
 
@@ -293,6 +307,31 @@ def test_case_store_keeps_findings_from_more_than_one_worker():
     assert store.workers() == ["pipeline", "verifier"]
     assert [item.worker for item in store.findings()] == ["pipeline", "verifier"]
     assert first.worker == "pipeline"
+
+
+def test_directory_symlink_outside_the_evidence_root_does_not_abort(tmp_path: Path):
+    source = tmp_path / "evidence"
+    source.mkdir()
+    (source / "payload.bin").write_bytes(b"MZ powershell -nop -w hidden\n")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "note.txt").write_text("outside the case", encoding="utf-8")
+    link = source / "linked"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("Symlinks not supported on this platform")
+
+    report = run_case(
+        PipelineConfig(
+            case_id="symlink-case",
+            input_dir=source,
+            output_dir=tmp_path / "out",
+            enable_llama=True,
+            llm_provider="mock",
+        )
+    )
+    assert report.summary["llm_provider"] == "mock"
 
 
 def test_mock_summary_does_not_echo_timeline_text():
