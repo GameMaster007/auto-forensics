@@ -27,6 +27,7 @@ from .manifest import build_run_manifest, hash_input_tree, prompt_template_sha25
 from .models import ArtifactEvent, BinaryFeature, CaseReport, Citation, Finding, TimelineEvent, utc_now_iso
 from .pdf_report import write_pdf_report
 from .plugins import PluginRegistry
+from .security import stays_in_tree
 from .sigma_rules import evaluate_sigma_rules
 from .stix_export import build_stix_bundle
 from .timeline import normalize_timeline
@@ -314,11 +315,7 @@ def _evidence_catalog(
         pointers.append(citation_for_binary(binary))
     root = input_dir.resolve()
     for path in sorted(root.rglob("*")):
-        if not path.is_file() or path.is_symlink() or len(path.relative_to(root).parts) > 20:
-            continue
-        try:
-            path.resolve().relative_to(root)
-        except ValueError:
+        if not stays_in_tree(path, root) or len(path.relative_to(root).parts) > 20:
             continue
         pointers.append(file_citation(path, root=root))
     return catalog_from_citations(pointers)
@@ -416,10 +413,11 @@ def run_case(config: PipelineConfig) -> CaseReport:
     artifacts, binaries = tools.call("parse_artifacts")
     binary_features = tools.call("analyze_binaries", binaries)
     # Cap directory traversal depth at 20 to avoid runaway scans on deep trees.
+    evidence_root = config.input_dir.resolve()
     scan_candidates = [
         path
-        for path in sorted(config.input_dir.rglob("*"))
-        if path.is_file() and not path.is_symlink() and len(path.relative_to(config.input_dir).parts) <= 20
+        for path in sorted(evidence_root.rglob("*"))
+        if stays_in_tree(path, evidence_root) and len(path.relative_to(evidence_root).parts) <= 20
     ]
 
     findings: list[Finding] = []

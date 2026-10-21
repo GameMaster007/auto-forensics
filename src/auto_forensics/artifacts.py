@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .models import ArtifactEvent
-from .security import SecurityError, read_limited_text, sha256_file
+from .security import SecurityError, read_limited_text, sha256_file, stays_in_tree
 
 logger = logging.getLogger(__name__)
 
@@ -1095,12 +1095,11 @@ def discover_artifacts(
         parser_registry = ArtifactParserRegistry()
     parser_registry.register_defaults()
 
-    for path in sorted(input_dir.rglob("*")):
-        if not path.is_file():
+    root = input_dir.resolve()
+    for path in sorted(root.rglob("*")):
+        if not stays_in_tree(path, root):
             continue
         suffix = path.suffix.lower()
-        if path.is_symlink():
-            continue
         if suffix in binary_suffixes:
             binaries.append(path)
             continue

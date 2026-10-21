@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .security import sha256_file
+from .security import sha256_file, stays_in_tree
 from .version import __version__
 
 
@@ -31,7 +31,7 @@ def hash_input_tree(input_dir: Path, max_files: int = 10_000) -> list[dict[str, 
     rows: list[dict[str, Any]] = []
     root = input_dir.resolve()
     for path in sorted(root.rglob("*")):
-        if not path.is_file() or path.is_symlink():
+        if not stays_in_tree(path, root):
             continue
         if len(path.relative_to(root).parts) > 20:
             continue

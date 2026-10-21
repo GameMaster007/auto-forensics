@@ -315,23 +315,35 @@ def test_directory_symlink_outside_the_evidence_root_does_not_abort(tmp_path: Pa
     (source / "payload.bin").write_bytes(b"MZ powershell -nop -w hidden\n")
     outside = tmp_path / "outside"
     outside.mkdir()
-    (outside / "note.txt").write_text("outside the case", encoding="utf-8")
+    (outside / "escape.bin").write_bytes(b"MZ outside powershell\n")
+    (outside / "escape.json").write_text(
+        json.dumps(
+            [{"artifact_id": "evt-out", "event_type": "process_start", "description": "escaped", "source": "sysmon"}]
+        ),
+        encoding="utf-8",
+    )
     link = source / "linked"
     try:
         link.symlink_to(outside, target_is_directory=True)
     except OSError:
         pytest.skip("Symlinks not supported on this platform")
 
+    output = tmp_path / "out"
     report = run_case(
         PipelineConfig(
             case_id="symlink-case",
             input_dir=source,
-            output_dir=tmp_path / "out",
+            output_dir=output,
             enable_llama=True,
             llm_provider="mock",
         )
     )
+    listed = [
+        item["path"] for item in json.loads((output / "run_manifest.json").read_text(encoding="utf-8"))["input_files"]
+    ]
     assert report.summary["llm_provider"] == "mock"
+    assert "payload.bin" in listed
+    assert all("escape" not in item for item in listed)
 
 
 def test_mock_summary_does_not_echo_timeline_text():
