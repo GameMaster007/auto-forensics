@@ -13,7 +13,7 @@ run and the misses have been counted.
 | Item | State in this tree |
 | --- | --- |
 | 1. Mandatory citations. Drop a claim that does not cite an ingested row and hash. | The report keeps a finding only when its citation matches an artifact hashed in this run. The check is that the pointer exists. It does not re-read the row and decide whether the sentence is supported. Sigma keyword matches have no row citation, so they are dropped. |
-| 2. Ingest Plaso, Hayabusa, and Chainsaw output. | Not started. The parsers in this tree read a small set of teaching formats. |
+| 2. Ingest Plaso, Hayabusa, and Chainsaw output. | `psort` l2tcsv and JSONL, Hayabusa CSV and JSONL, and Chainsaw JSON are read as cited rows. This tree does not run those programs. |
 | 3. Run manifest and replay. | `auto-forensics replay run_manifest.json` re-runs the case and compares input hashes and the canonical report hash. `generated_at` is omitted from that hash. Seed is 0. Temperature is 0 for a live model and null for the mock. |
 | 4. Verifier. Re-fetch each cited row and check that it supports the claim. | The pipeline re-reads the cited file, checks the hash, and keeps a claim only when each claim sentence appears in that row. A mock or live judge can reject a claim the rules accepted. It cannot put a rejected claim back. Verdicts are in the report and the manifest. This pass is a tool on the `pipeline` worker, not a second worker. |
 | 5. Local model through Ollama, offline. | `--llm ollama` calls a local endpoint at temperature 0. The demo and the tests use `--llm mock` and do not need a model or an API key. |
@@ -67,5 +67,5 @@ exists.
 
 Imaging, a timeline viewer, endpoint collection, and a model trained
 for this project. Plaso, Hayabusa, and Chainsaw remain the parsers.
-This repository drafts a cited brief on top of their output once that
-import exists.
+This repository drafts a cited brief on top of an export they already
+wrote.

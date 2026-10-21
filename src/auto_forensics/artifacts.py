@@ -129,20 +129,42 @@ def _make_event(
 
 def load_json_artifacts(path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> list[ArtifactEvent]:
     try:
-        raw = json.loads(read_limited_text(path, max_text_bytes))
-    except (json.JSONDecodeError, SecurityError):
+        text = read_limited_text(path, max_text_bytes)
+    except SecurityError:
         return []
-    items = raw if isinstance(raw, list) else [raw]
     digest = sha256_file(path).lower()
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError:
+        from .timeline_imports import events_from_json_lines
+
+        return events_from_json_lines(text, path.name, digest)
+    items = raw if isinstance(raw, list) else [raw]
+    return _events_from_json_items(items, path.name, digest)
+
+
+def _events_from_json_items(
+    items: list[Any] | Any,
+    source_file: str,
+    digest: str,
+) -> list[ArtifactEvent]:
+    """Keep the teaching JSON shape, and recognize tool exports in it."""
+    from .timeline_imports import event_from_record
+
+    records = items if isinstance(items, list) else [items]
     out: list[ArtifactEvent] = []
     record = 0
-    for item in items:
+    for item in records:
         if not isinstance(item, dict):
             continue
         record += 1
-        source = str(item.get("source") or path.name)
-        event = _make_event(item, source=source, identity=f"{path.name}:{record}")
-        _stamp_provenance(event, path.name, digest, row=record)
+        specialized = event_from_record(item, source_file, digest, record)
+        if specialized is not None:
+            out.append(specialized)
+            continue
+        source = str(item.get("source") or source_file)
+        event = _make_event(item, source=source, identity=f"{source_file}:{record}")
+        _stamp_provenance(event, source_file, digest, row=record)
         out.append(event)
     return out
 
@@ -159,6 +181,11 @@ def load_csv_artifacts(path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> lis
         return out
     digest = sha256_file(path).lower()
     reader = csv.DictReader(lines)
+    from .timeline_imports import events_from_csv
+
+    specialized = events_from_csv(reader, path.name, digest)
+    if specialized is not None:
+        return specialized
     # Line 1 is the header. The first data record is file line 2.
     for line_number, row in enumerate(reader, start=2):
         event = _make_event(row, source=path.name, identity=f"{path.name}:{line_number}")
@@ -1005,7 +1032,7 @@ def load_memory_artifacts(path: Path) -> list[ArtifactEvent]:
 
 class JsonArtifactParser:
     name = "json-artifact-parser"
-    supported_suffixes = (".json",)
+    supported_suffixes = (".json", ".jsonl")
     supported_names: tuple[str, ...] = ()
 
     def parse(self, path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> list[ArtifactEvent]:

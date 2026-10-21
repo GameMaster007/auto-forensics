@@ -16,6 +16,7 @@ part of the record.
 
 from __future__ import annotations
 
+import csv
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -294,12 +295,59 @@ def _read_row(path: Path, row: int) -> str | None:
                 return _json_record_text(records[row - 1])
         elif isinstance(raw, dict) and row == 1:
             return _json_record_text(raw)
+    if path.suffix.lower() == ".csv":
+        decoded = _csv_record_text(path, row)
+        if decoded is not None:
+            return decoded
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return None
     if row <= len(lines):
-        return lines[row - 1]
+        line = lines[row - 1]
+        record = _json_object_line(line)
+        if record is not None:
+            return _json_record_text(record)
+        return line
+    return None
+
+
+def _csv_record_text(path: Path, row: int) -> str | None:
+    """Decoded CSV fields plus the raw line.
+
+    A quoted quote is doubled in the file and single in the field. The
+    claim is the field value, so that value has to be part of the cited
+    text. The raw line stays too, for a claim that quotes the line.
+    """
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    reader = csv.DictReader(lines)
+    for record in reader:
+        if reader.line_num != row:
+            continue
+        values = [lines[row - 1] if row <= len(lines) else ""]
+        for key, value in record.items():
+            if key:
+                values.append(str(key))
+            if value:
+                values.append(str(value))
+        return "\n".join(values)
+    return None
+
+
+def _json_object_line(line: str) -> dict | None:
+    """Parse one JSONL record so a claim can match the field value."""
+    stripped = line.strip()
+    if not stripped.startswith("{"):
+        return None
+    try:
+        value = json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(value, dict):
+        return value
     return None
 
 

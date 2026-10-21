@@ -1,0 +1,3 @@
+date,time,timezone,MACB,source,sourcetype,type,user,host,short,desc,version,filename,inode,notes,format,extra
+08/19/2016,08:06:57,UTC,....,LOG,Windows Event Log,Event Logged,alice,WS-01,Process started,Process started: cmd.exe /c whoami,2,Security.evtx,1001,tag:execution,evt,
+08/19/2016,08:07:01,UTC,....,FILE,File stat,Creation Time,alice,WS-01,File created,OS:/Windows/Temp/note.txt created,2,/Windows/Temp/note.txt,1002,-,filestat,

@@ -221,6 +221,40 @@ An OpenAI-compatible endpoint is used only when
 `AUTO_FORENSICS_OPENAI_ENDPOINT` is set and you did not pass `--llm`.
 Leave it unset for the demo.
 
+## Plaso, Hayabusa, and Chainsaw
+
+This tool does not run those programs and it does not collect evidence.
+Drop an export they already wrote into the input directory. The
+synthetic files in `examples/timeline-imports/` are small and contain
+no real case:
+
+| File | Export |
+| --- | --- |
+| `plaso-psort.csv` | Plaso `psort` l2tcsv. Seventeen fixed columns. `date` is `MM/DD/YYYY`. |
+| `plaso-psort.jsonl` | Plaso `psort -o json_line`. One event per line. |
+| `hayabusa.csv` | Hayabusa CSV timeline. The header includes `RuleTitle` and `EventID`. |
+| `hayabusa.jsonl` | Hayabusa JSONL timeline. One detection per line. |
+| `chainsaw.json` | Chainsaw `--json`. A JSON array of detection objects. |
+
+```bash
+auto-forensics run --llm mock --case-id timeline-imports \
+  --input-dir examples/timeline-imports \
+  --output-dir output/timeline-imports
+```
+
+`--llm mock` makes no network call and needs no API key. Each kept
+finding cites the export's SHA-256 and the row: line 2 of a CSV is the
+first record, a JSONL row is that line's number, and a JSON array row
+is the 1-based object index. Hayabusa and Chainsaw rows are detections,
+so each rule name becomes a claim. A Plaso row becomes a claim only
+when the export already tagged it (`tag` in JSONL, or `notes` starting
+with `tag:` in l2tcsv). Other Plaso rows stay on the timeline.
+
+The field text is untrusted evidence. The recommendation is fixed
+wording from this program. When a row is sent to a model, it sits
+inside the `<<<EVIDENCE_DATA` fence with the rest of the case. A
+sentence in the export does not become an instruction.
+
 ## Limitations
 
 - The verifier checks that each claim sentence occurs in the cited
@@ -241,8 +275,8 @@ Leave it unset for the demo.
 - The mock is not a model. It drafts one sentence when a binary's
   score is above zero, and it quotes one suspicious string from that
   file so the verifier has a sentence to check.
-- Parsers here are a teaching subset: JSON, CSV, text, and a few
-  optional formats. They are not Plaso, Hayabusa, or Chainsaw.
+- The parsers read Plaso, Hayabusa, and Chainsaw exports. They do not
+  run those programs, and they do not image a disk or collect logs.
 - Only the `pipeline` worker runs. The interfaces for more workers are
   in the tree so they can be added later. Nothing schedules them.
 - No precision, recall, or timing figure is published. None has been
