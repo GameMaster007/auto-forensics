@@ -16,6 +16,7 @@ from typing import Any
 from .citations import citation_from_event
 from .ids import stable_id
 from .models import ArtifactEvent, Finding
+from .timeline import parse_iso
 
 _PLASO_L2T = {
     "date",
@@ -59,6 +60,11 @@ _TACTICS = {
     "impact",
 }
 _TECHNIQUE = re.compile(r"t\d{4}(?:\.\d{3})?", re.IGNORECASE)
+_CLOCK = re.compile(
+    r"^(?P<date>\d{4}-\d{2}-\d{2})[ T](?P<time>\d{2}:\d{2}:\d{2})(?P<fraction>\.\d{1,6})?"
+    r"(?:\s*(?P<zone>Z|UTC|GMT|[+-]\d{2}:?\d{2}))?$",
+    re.IGNORECASE,
+)
 _FINDING_LIMIT = 500
 _RECOMMENDATIONS = {
     "hayabusa": "Open the cited Hayabusa row and confirm the rule before acting on it.",
@@ -240,7 +246,7 @@ def _hayabusa_event(
         source_file=source_file,
         digest=digest,
         row=row,
-        timestamp=_text(fields.get("timestamp")) or None,
+        timestamp=_clock_for_timeline(fields.get("timestamp")),
         event_type="hayabusa_rule",
         description=title,
         extra={
@@ -264,8 +270,8 @@ def _plaso_event(
     message = _text(fields.get("desc") or fields.get("message") or fields.get("short"))
     if not message:
         return None
-    timestamp = _text(fields.get("datetime") or fields.get("timestamp"))
-    if not timestamp:
+    timestamp = _clock_for_timeline(fields.get("datetime") or fields.get("timestamp"))
+    if timestamp is None:
         timestamp = _join_clock(fields.get("date"), fields.get("time"), fields.get("timezone"))
     event_type = _text(fields.get("timestamp_desc") or fields.get("type")) or "plaso_event"
     return _event(
@@ -310,7 +316,7 @@ def _chainsaw_event(
         source_file=source_file,
         digest=digest,
         row=row,
-        timestamp=_text(fields.get("timestamp")) or None,
+        timestamp=_clock_for_timeline(fields.get("timestamp")),
         event_type="chainsaw_detection",
         description=names[0],
         extra={
@@ -428,13 +434,44 @@ def _text(value: Any) -> str:
     return str(value).strip()
 
 
-def _join_clock(date: Any, time: Any, zone: Any) -> str:
+def _join_clock(date: Any, time: Any, zone: Any) -> str | None:
     day = _text(date)
     clock = _text(time)
     if not day or not clock:
-        return ""
+        return None
     zone_text = _text(zone)
-    return f"{day}T{clock}{zone_text}" if zone_text else f"{day}T{clock}"
+    combined = f"{day}T{clock} {zone_text}".strip() if zone_text else f"{day}T{clock}"
+    return _clock_for_timeline(combined)
+
+
+def _clock_for_timeline(value: Any) -> str | None:
+    """Return a timestamp ``parse_iso`` accepts, or None.
+
+    l2tcsv zones are names such as ``UTC``, and Hayabusa writes a space
+    before the offset. Those forms sort after every real timestamp
+    unless they are rewritten as ISO 8601.
+    """
+    text = _text(value)
+    if not text:
+        return None
+    if parse_iso(text) is not None:
+        return text
+    match = _CLOCK.match(text)
+    if match is None:
+        return None
+    fraction = match.group("fraction") or ""
+    if fraction:
+        fraction = "." + fraction[1:].ljust(6, "0")[:6]
+    zone = (match.group("zone") or "UTC").upper()
+    if zone in {"Z", "UTC", "GMT"}:
+        offset = "+00:00"
+    else:
+        digits = zone[1:].replace(":", "")
+        offset = f"{zone[0]}{digits[:2]}:{digits[2:4]}"
+    normalized = f"{match.group('date')}T{match.group('time')}{fraction}{offset}"
+    if parse_iso(normalized) is None:
+        return None
+    return normalized
 
 
 def _severity(level: str) -> str:
@@ -442,10 +479,15 @@ def _severity(level: str) -> str:
 
 
 def _tactic(value: Any) -> str:
-    if isinstance(value, list):
-        candidates = [_text(item).lower().replace(" ", "-") for item in value]
-    else:
-        candidates = [_text(value).lower().replace(" ", "-")]
+    items = value if isinstance(value, list) else [value]
+    candidates: list[str] = []
+    for item in items:
+        text = _text(item).lower().replace("_", "-").replace(" ", "-")
+        if not text:
+            continue
+        candidates.append(text)
+        if text.startswith("attack."):
+            candidates.append(text.removeprefix("attack."))
     for candidate in candidates:
         if candidate in _TACTICS:
             return candidate

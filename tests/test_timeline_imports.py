@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 from dataclasses import asdict
@@ -10,6 +11,7 @@ from pathlib import Path
 from auto_forensics.artifacts import load_csv_artifacts, load_json_artifacts
 from auto_forensics.llama_workflow import EVIDENCE_CLOSE, EVIDENCE_OPEN, build_llm_prompt
 from auto_forensics.pipeline import PipelineConfig, run_case
+from auto_forensics.timeline import normalize_timeline, parse_iso
 from auto_forensics.timeline_imports import findings_from_imported_timelines
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples" / "timeline-imports"
@@ -65,7 +67,83 @@ def test_hayabusa_and_chainsaw_findings_cite_the_detection_row():
     assert chainsaw_finding.citations[0].row == 1
     assert chainsaw_finding.citations[0].sha256 == _sha256(EXAMPLES / "chainsaw.json")
     assert chainsaw_finding.severity == "high"
+    assert chainsaw_finding.tactic == "execution"
+    assert chainsaw_finding.technique_id == "T1059"
     assert chainsaw_finding.recommendation.startswith("Open the cited Chainsaw row")
+
+
+def test_imported_timestamps_parse_and_sort_before_untimed_rows():
+    plaso = load_csv_artifacts(EXAMPLES / "plaso-psort.csv")
+    hayabusa_csv = load_csv_artifacts(EXAMPLES / "hayabusa.csv")
+    hayabusa_jsonl = load_json_artifacts(EXAMPLES / "hayabusa.jsonl")
+    chainsaw = load_json_artifacts(EXAMPLES / "chainsaw.json")
+    plaso_jsonl = load_json_artifacts(EXAMPLES / "plaso-psort.jsonl")
+    imported = plaso + hayabusa_csv + hayabusa_jsonl + chainsaw + plaso_jsonl
+
+    assert plaso[0].timestamp == "2016-08-19T08:06:57+00:00"
+    assert hayabusa_csv[0].timestamp == "2016-08-19T08:06:57.658000+09:00"
+    assert hayabusa_jsonl[0].timestamp == "2016-08-19T08:06:57.658000+09:00"
+    assert all(parse_iso(event.timestamp) is not None for event in imported)
+
+    ordered = normalize_timeline(imported, [], [])
+    parsed = [parse_iso(event.timestamp) for event in ordered]
+    assert all(item is not None for item in parsed)
+    assert parsed == sorted(parsed)
+    assert ordered[0].description.startswith("Suspicious process start")
+    assert parse_iso(ordered[0].timestamp) < parse_iso(plaso[0].timestamp)
+
+
+def test_chainsaw_attack_prefix_maps_to_a_tactic(tmp_path: Path):
+    source = tmp_path / "chainsaw.json"
+    source.write_text(
+        json.dumps(
+            [
+                {
+                    "authors": ["synthetic"],
+                    "kind": "individual",
+                    "level": "high",
+                    "name": "Privilege test",
+                    "source": "sigma",
+                    "tags": ["attack.privilege_escalation"],
+                    "timestamp": "2016-08-19T08:06:57+00:00",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    findings = findings_from_imported_timelines(load_json_artifacts(source))
+    assert findings[0].tactic == "privilege-escalation"
+
+
+def test_quoted_csv_rule_title_is_the_cited_field(tmp_path: Path):
+    source = tmp_path / "evidence"
+    source.mkdir()
+    title = 'Suspicious "cmd"'
+    path = source / "hayabusa.csv"
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["Timestamp", "EventID", "Level", "RuleTitle", "Channel"],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "Timestamp": "2016-08-19 08:06:57.658 +09:00",
+                "EventID": "1",
+                "Level": "high",
+                "RuleTitle": title,
+                "Channel": "Sysmon",
+            }
+        )
+    events = load_csv_artifacts(path)
+    findings = findings_from_imported_timelines(events)
+    from auto_forensics.verifier import verify_findings
+
+    kept, verdicts = verify_findings(findings, source)
+    assert [item.evidence[0] for item in kept] == [title]
+    assert verdicts[0].verdict == "supported"
+    assert kept[0].verification == "supported"
+    assert kept[0].citations[0].row == 2
 
 
 def test_quoted_jsonl_rule_title_is_the_cited_field(tmp_path: Path):
