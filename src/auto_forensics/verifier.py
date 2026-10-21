@@ -299,7 +299,25 @@ def _read_row(path: Path, row: int) -> str | None:
     except OSError:
         return None
     if row <= len(lines):
-        return lines[row - 1]
+        line = lines[row - 1]
+        record = _json_object_line(line)
+        if record is not None:
+            return _json_record_text(record)
+        return line
+    return None
+
+
+def _json_object_line(line: str) -> dict | None:
+    """Parse one JSONL record so a claim can match the field value."""
+    stripped = line.strip()
+    if not stripped.startswith("{"):
+        return None
+    try:
+        value = json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(value, dict):
+        return value
     return None
 
 

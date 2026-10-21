@@ -1,0 +1,2 @@
+Timestamp,Computer,Channel,EventID,Level,RecordID,RuleTitle,Details,RuleFile,EvtxFile
+2016-08-19 08:06:57.658 +09:00,WS-01,Sysmon,1,high,10,Suspicious process start,CmdLine: cmd.exe /c whoami,proc.yml,Sysmon.evtx

@@ -37,6 +37,7 @@ from .security import stays_in_tree
 from .sigma_rules import evaluate_sigma_rules
 from .stix_export import build_stix_bundle
 from .timeline import normalize_timeline
+from .timeline_imports import findings_from_imported_timelines
 from .tools import ToolRegistry
 from .verifier import MockClaimJudge, resolve_verifier_mode, verifier_limit_name, verify_findings
 from .workers import PIPELINE_WORKER
@@ -405,7 +406,7 @@ def run_case(config: PipelineConfig) -> CaseReport:
         return scan_paths_with_yara(candidates, config.rules_dir)
 
     def event_findings(parsed: list[ArtifactEvent]) -> list[Finding]:
-        return findings_from_artifact_events(parsed)
+        return findings_from_artifact_events(parsed) + findings_from_imported_timelines(parsed)
 
     def draft_findings(
         parsed: list[ArtifactEvent],

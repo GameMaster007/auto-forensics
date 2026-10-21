@@ -1,0 +1,1 @@
+{"Timestamp": "2016-08-19 08:06:57.658 +09:00", "Computer": "WS-01", "Channel": "Sysmon", "EventID": 1, "Level": "med", "RecordID": 11, "RuleTitle": "Encoded powershell", "Details": {"CmdLine": "powershell.exe -enc SQBFAFgA"}, "RuleFile": "proc.yml", "EvtxFile": "Sysmon.evtx", "MitreTactics": "Execution", "MitreTags": "T1059.001"}

@@ -1,0 +1,2 @@
+{"datetime": "2016-08-19T08:06:57.000000+00:00", "display_name": "OS:/Windows/System32/cmd.exe", "filename": "/Windows/System32/cmd.exe", "hostname": "WS-01", "message": "Process started: cmd.exe /c whoami", "parser": "winevtx", "timestamp_desc": "Event Logged", "tag": "execution"}
+{"datetime": "2016-08-19T08:07:01.000000+00:00", "display_name": "OS:/Windows/Temp/note.txt", "filename": "/Windows/Temp/note.txt", "hostname": "WS-01", "message": "OS:/Windows/Temp/note.txt created", "parser": "filestat", "timestamp_desc": "Creation Time"}

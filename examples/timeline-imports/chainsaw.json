@@ -1,0 +1,23 @@
+[
+  {
+    "authors": ["synthetic"],
+    "group": "Sigma",
+    "kind": "individual",
+    "document": {
+      "kind": "evtx",
+      "path": "Security.evtx",
+      "data": {
+        "Event": {
+          "System": {"EventID": 4688, "Computer": "WS-01"},
+          "EventData": {"CommandLine": "cmd.exe /c whoami"}
+        }
+      }
+    },
+    "level": "high",
+    "name": "Suspicious process creation",
+    "source": "sigma",
+    "status": "stable",
+    "tags": ["attack.execution", "attack.t1059"],
+    "timestamp": "2016-08-19T08:06:57+00:00"
+  }
+]
