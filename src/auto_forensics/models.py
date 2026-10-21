@@ -73,14 +73,16 @@ class Finding:
     Today that is always ``pipeline``. A later orchestrator can submit
     findings from more than one worker into the same case store.
     ``review_status`` is ``unverified`` until an analyst accepts or
-    rejects the draft. This version stores the status and does not
-    yet provide the review command.
-    ``verification`` is the verifier label kept on a finding that
-    stays in the report: ``supported``, ``score-based``, or
-    ``needs review``. Score-based is a mock or heuristic draft with
-    no claim sentence and a matching file hash. A live model draft
-    with no claim sentence is needs review. Rejected findings are
-    left out.
+    rejects the draft. ``analyst_verified`` is true only after an
+    accept. A reject clears it and sets ``verification`` to
+    ``not verified``. ``machine_verification`` keeps the verifier
+    label in that case.
+    ``verification`` is otherwise the verifier label kept on a
+    finding that stays in the report: ``supported``, ``score-based``,
+    or ``needs review``. Score-based is a mock or heuristic draft
+    with no claim sentence and a matching file hash. A live model
+    draft with no claim sentence is needs review. Findings the
+    verifier rejected are left out of the report.
     """
 
     finding_id: str
@@ -100,6 +102,11 @@ class Finding:
     review_status: str = "unverified"
     worker: str = "pipeline"
     verification: str = ""
+    analyst_verified: bool = False
+    review_actor: str = ""
+    review_at: str = ""
+    review_note: str = ""
+    machine_verification: str = ""
 
 
 @dataclass(slots=True)

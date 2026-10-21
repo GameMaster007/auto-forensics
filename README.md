@@ -83,6 +83,28 @@ report hash that does not match the manifest, exits 1. The hash omits
 `generated_at`, so the clock in the report does not cause a mismatch.
 Seed is 0. The mock does not sample, so its temperature stays null.
 
+An analyst records a decision on that same output directory. The
+default status stays `analyst-unverified` until this command runs:
+
+```bash
+auto-forensics review \
+  --output-dir output/demo-synthetic \
+  --finding-id FINDING-ID \
+  --decision accept \
+  --actor "A. Analyst" \
+  --note "The cited row supports the draft."
+```
+
+`--decision` is `accept`, `reject`, or `annotate`. Annotate requires
+`--note` and does not change the decision. The command appends
+`analyst_reviews.jsonl` (actor, time, note) and rewrites the report.
+A second accept or reject is refused unless `--override` is set. The
+earlier log line stays. Replay reads that log and applies it again, so
+the report hash still matches. A rejected finding is `analyst-rejected`
+and its verification is `not verified`. It is not in
+`verified_finding_ids`. `verification: supported` on any other finding
+is still the machine check, not an analyst decision.
+
 `--llm off` uses the same citation rule with a score-based heuristic
 and no draft wording from the mock. `--llm ollama` calls a local
 Ollama-compatible endpoint at temperature 0. If that endpoint is down,
@@ -250,6 +272,10 @@ so each rule name becomes a claim. A Plaso row becomes a claim only
 when the export already tagged it (`tag` in JSONL, or `notes` starting
 with `tag:` in l2tcsv). Other Plaso rows stay on the timeline.
 
+Hayabusa `--iso-8601` timestamps may have seven fractional digits and a
+trailing `Z`. Those are stored with six digits and `+00:00`, so they
+sort on Python 3.10 instead of falling through as untimed.
+
 The field text is untrusted evidence. The recommendation is fixed
 wording from this program. When a row is sent to a model, it sits
 inside the `<<<EVIDENCE_DATA` fence with the rest of the case. A
@@ -267,8 +293,11 @@ sentence in the export does not become an instruction.
 - YARA matches cite the file at offset 0 when rules and `yara-python`
   are installed. A YARA finding with no claim sentence is kept when
   the file hash matches, because the finding is a detector label.
-- There is no analyst accept or reject command. Every finding is
-  `analyst-unverified`. `verification: supported` is the verifier.
+- `auto-forensics review` records accept, reject, or annotate on a
+  run directory. The default is still `analyst-unverified`. A
+  rejected finding is not verified. `verification: supported` on a
+  finding that has not been rejected is the verifier, not an analyst
+  decision.
 - Replay compares input hashes and the canonical report hash. It does
   not compare the raw report file, because that file contains
   `generated_at`.
