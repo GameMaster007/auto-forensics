@@ -65,6 +65,8 @@ _CLOCK = re.compile(
     r"(?:\s*(?P<zone>Z|UTC|GMT|[+-]\d{2}:?\d{2}))?$",
     re.IGNORECASE,
 )
+# psort -o l2tcsv writes date as MM/DD/YYYY. See plaso output/l2t_csv.py.
+_L2T_DATE = re.compile(r"^(?P<month>\d{2})/(?P<day>\d{2})/(?P<year>\d{4})$")
 _FINDING_LIMIT = 500
 _RECOMMENDATIONS = {
     "hayabusa": "Open the cited Hayabusa row and confirm the rule before acting on it.",
@@ -434,8 +436,20 @@ def _text(value: Any) -> str:
     return str(value).strip()
 
 
+def _l2t_date(value: str) -> str:
+    """Turn an l2tcsv ``MM/DD/YYYY`` date into ``YYYY-MM-DD``.
+
+    An ISO date is returned unchanged. ``00/00/0000`` is Plaso's untimed
+    sentinel and fails ``parse_iso`` after this rewrite.
+    """
+    match = _L2T_DATE.match(value)
+    if match is None:
+        return value
+    return f"{match.group('year')}-{match.group('month')}-{match.group('day')}"
+
+
 def _join_clock(date: Any, time: Any, zone: Any) -> str | None:
-    day = _text(date)
+    day = _l2t_date(_text(date))
     clock = _text(time)
     if not day or not clock:
         return None
@@ -447,9 +461,9 @@ def _join_clock(date: Any, time: Any, zone: Any) -> str | None:
 def _clock_for_timeline(value: Any) -> str | None:
     """Return a timestamp ``parse_iso`` accepts, or None.
 
-    l2tcsv zones are names such as ``UTC``, and Hayabusa writes a space
-    before the offset. Those forms sort after every real timestamp
-    unless they are rewritten as ISO 8601.
+    l2tcsv dates are ``MM/DD/YYYY`` and zones are names such as ``UTC``.
+    Hayabusa writes a space before the offset. Those forms sort after
+    every real timestamp unless they are rewritten as ISO 8601.
     """
     text = _text(value)
     if not text:

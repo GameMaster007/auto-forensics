@@ -230,7 +230,7 @@ no real case:
 
 | File | Export |
 | --- | --- |
-| `plaso-psort.csv` | Plaso `psort` l2tcsv. Seventeen fixed columns, header included. |
+| `plaso-psort.csv` | Plaso `psort` l2tcsv. Seventeen fixed columns. `date` is `MM/DD/YYYY`. |
 | `plaso-psort.jsonl` | Plaso `psort -o json_line`. One event per line. |
 | `hayabusa.csv` | Hayabusa CSV timeline. The header includes `RuleTitle` and `EventID`. |
 | `hayabusa.jsonl` | Hayabusa JSONL timeline. One detection per line. |

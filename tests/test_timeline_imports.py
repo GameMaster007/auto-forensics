@@ -80,7 +80,9 @@ def test_imported_timestamps_parse_and_sort_before_untimed_rows():
     plaso_jsonl = load_json_artifacts(EXAMPLES / "plaso-psort.jsonl")
     imported = plaso + hayabusa_csv + hayabusa_jsonl + chainsaw + plaso_jsonl
 
+    assert "08/19/2016,08:06:57,UTC," in (EXAMPLES / "plaso-psort.csv").read_text(encoding="utf-8")
     assert plaso[0].timestamp == "2016-08-19T08:06:57+00:00"
+    assert plaso[1].timestamp == "2016-08-19T08:07:01+00:00"
     assert hayabusa_csv[0].timestamp == "2016-08-19T08:06:57.658000+09:00"
     assert hayabusa_jsonl[0].timestamp == "2016-08-19T08:06:57.658000+09:00"
     assert all(parse_iso(event.timestamp) is not None for event in imported)
@@ -91,6 +93,53 @@ def test_imported_timestamps_parse_and_sort_before_untimed_rows():
     assert parsed == sorted(parsed)
     assert ordered[0].description.startswith("Suspicious process start")
     assert parse_iso(ordered[0].timestamp) < parse_iso(plaso[0].timestamp)
+
+
+def test_l2tcsv_iso_dates_parse_and_the_zero_date_stays_untimed(tmp_path: Path):
+    header = (
+        "date,time,timezone,MACB,source,sourcetype,type,user,host,short,desc,"
+        "version,filename,inode,notes,format,extra"
+    )
+    path = tmp_path / "plaso.csv"
+
+    def row(date: str, clock: str, notes: str, desc: str) -> str:
+        return ",".join(
+            [
+                date,
+                clock,
+                "UTC",
+                "....",
+                "LOG",
+                "Windows Event Log",
+                "Event Logged",
+                "alice",
+                "WS-01",
+                "short",
+                desc,
+                "2",
+                "Security.evtx",
+                "1",
+                notes,
+                "evt",
+                "",
+            ]
+        )
+
+    path.write_text(
+        "\n".join(
+            [
+                header,
+                row("2016-08-19", "08:07:01", "-", "OS:/Windows/Temp/note.txt created"),
+                row("00/00/0000", "00:00:00", "tag:execution", "Unknown time marker"),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    events = load_csv_artifacts(path)
+    by_desc = {event.description: event.timestamp for event in events}
+    assert by_desc["OS:/Windows/Temp/note.txt created"] == "2016-08-19T08:07:01+00:00"
+    assert by_desc["Unknown time marker"] is None
 
 
 def test_chainsaw_attack_prefix_maps_to_a_tactic(tmp_path: Path):
