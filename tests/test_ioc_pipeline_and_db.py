@@ -4,7 +4,7 @@ from pathlib import Path
 
 from auto_forensics.db import Database
 from auto_forensics.ioc_pipeline import extract_iocs
-from auto_forensics.models import BinaryFeature, IOC, IOCEnrichment, Finding, TimelineEvent
+from auto_forensics.models import IOC, BinaryFeature, Finding, IOCEnrichment, TimelineEvent
 
 
 def test_extract_iocs_from_binary_findings_and_timeline():

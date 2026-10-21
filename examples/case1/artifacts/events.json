@@ -17,7 +17,7 @@
     "description": "outbound connection to suspicious IP",
     "source": "firewall",
     "host": "WS-01",
-    "dst_ip": "185.101.93.19",
+    "dst_ip": "203.0.113.19",
     "dst_port": 443
   }
 ]

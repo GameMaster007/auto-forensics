@@ -8,6 +8,7 @@ body:
     attributes:
       value: |
         Share the problem first, then the proposed solution.
+        Do not attach real evidence or secrets. Read `docs/ROADMAP.md` before proposing a second parser stack or an orchestrator.
   - type: textarea
     id: problem
     attributes:

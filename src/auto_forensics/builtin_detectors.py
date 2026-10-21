@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import uuid
 
-from .models import ArtifactEvent, BinaryFeature, Finding, TimelineEvent
+from .citations import citation_from_event
+from .models import ArtifactEvent, BinaryFeature, Citation, Finding, TimelineEvent
 
 
 def _finding(
@@ -11,6 +12,7 @@ def _finding(
     tactic: str,
     evidence: list[str],
     technique_id: str = "",
+    citation: Citation | None = None,
 ) -> Finding:
     return Finding(
         finding_id=f"plg-{uuid.uuid4().hex[:12]}",
@@ -19,10 +21,13 @@ def _finding(
         confidence=0.72,
         tactic=tactic,
         evidence=evidence[:8],
-        recommendation="Validate scope and pivot to endpoint/network telemetry for confirmation.",
+        recommendation="Open the cited artifact and confirm the signal before acting.",
         technique_id=technique_id,
         confidence_low=0.55,
         confidence_high=0.85,
+        citations=[citation] if citation is not None and citation.is_complete() else [],
+        origin="detector",
+        review_status="unverified",
     )
 
 
@@ -49,6 +54,7 @@ class SysmonDetector:
                         tactic="execution",
                         evidence=[item.description, f"source={item.source}"],
                         technique_id="T1059",
+                        citation=citation_from_event(item),
                     )
                 )
             elif "network" in item.event_type.lower() or str(item.metadata.get("event_id")) == "3":
@@ -59,6 +65,7 @@ class SysmonDetector:
                         tactic="command-and-control",
                         evidence=[item.description, f"source={item.source}"],
                         technique_id="T1071",
+                        citation=citation_from_event(item),
                     )
                 )
             if len(findings) >= 100:
@@ -90,6 +97,7 @@ class DefenderDetector:
                         tactic="defense-evasion",
                         evidence=[item.description, f"source={item.source}"],
                         technique_id="T1562",
+                        citation=citation_from_event(item),
                     )
                 )
             if len(findings) >= 100:
@@ -120,6 +128,7 @@ class ZeekDetector:
                         tactic="command-and-control",
                         evidence=[item.description, f"event_type={item.event_type}"],
                         technique_id="T1071",
+                        citation=citation_from_event(item),
                     )
                 )
             if len(findings) >= 100:
@@ -151,6 +160,7 @@ class SuricataDetector:
                     tactic="command-and-control",
                     evidence=[item.description, f"source={item.source}"],
                     technique_id="T1071",
+                    citation=citation_from_event(item),
                 )
             )
             if len(findings) >= 100:

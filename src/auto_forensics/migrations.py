@@ -49,6 +49,20 @@ MIGRATION_STEPS: tuple[MigrationStep, ...] = (
             "CREATE INDEX IF NOT EXISTS idx_analysis_jobs_case_type ON analysis_jobs(case_id, job_type, updated_at)",
         ),
     ),
+    MigrationStep(
+        version=4,
+        name="add_finding_citations",
+        sql_statements=(
+            "ALTER TABLE findings ADD COLUMN citations_json TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE findings ADD COLUMN origin TEXT NOT NULL DEFAULT 'detector'",
+            "ALTER TABLE findings ADD COLUMN review_status TEXT NOT NULL DEFAULT 'unverified'",
+        ),
+    ),
+    MigrationStep(
+        version=5,
+        name="add_finding_worker",
+        sql_statements=("ALTER TABLE findings ADD COLUMN worker TEXT NOT NULL DEFAULT 'pipeline'",),
+    ),
 )
 
 

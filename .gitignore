@@ -6,8 +6,12 @@ __pycache__/
 .pytest_cache/
 .pytest_tmp/
 .codex_tmp_test/
+.ruff_cache/
 nul
 training/.venv/
 training/outputs/
 output/
 .auto_forensics/
+*.egg-info/
+dist/
+build/

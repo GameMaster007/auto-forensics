@@ -37,9 +37,31 @@
 1. Create case (`init` / `POST /api/cases`)
 2. Ingest evidence (`ingest` / `POST /api/cases/{id}/ingest`)
 3. Analyze (`analyze` / `POST /api/cases/{id}/analyze`)
-4. Persist findings/timeline (`db.py`)
-5. Render reports (`case_report.json`, `case_report.md`)
-6. Query overview/report (`overview`, `report`, API endpoints)
+4. Keep a finding only when its citation matches an artifact hashed in this run (`citations.py`)
+5. Persist findings, citations, and timeline
+6. Write `case_report.json` and `run_manifest.json`
+7. Query overview/report (`overview`, `report`, API endpoints)
+
+## Citations and the run manifest
+
+`Citation` stores `artifact_id`, `source_file`, `sha256`, and either `row` or `offset`. `drop_uncited` removes a finding whose citations do not match the catalog built from this run. The catalog entry is kept, not the copy a model returned.
+
+`run_manifest.json` records input hashes, the tool version, the prompt-template hash, model provider, temperature, and the SHA-256 of `case_report.json`. Temperature is 0 for a live Ollama or OpenAI-compatible call. It is null for the offline mock, which does not sample. `seed` is null. The manifest does not replay the run.
+
+## Workers, tools, and the case store
+
+`run_case` is the only worker. Its name is `pipeline`. Stages that
+read evidence or draft text are invoked through `ToolRegistry`, and
+each attempt is stored on `MemoryCaseStore` and copied into the
+manifest. `PluginRegistry` is unchanged: it loads parsers and
+detectors and is not that allow-list.
+
+`DatabaseBackend` is still the durable database behind `init` and
+`analyze`. `run_case` does not open it. A `CaseStore` backed by that
+database, and an orchestrator that runs more than one worker, are
+planned and are not called. See `docs/ROADMAP.md`.
+
+Evidence sent to a model is JSON inside a `<<<EVIDENCE_DATA` fence. The instruction text does not contain evidence values.
 
 ## Security Highlights
 

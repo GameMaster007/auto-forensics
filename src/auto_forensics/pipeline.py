@@ -10,17 +10,28 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from .attack_mapper import apply_attack_mapping, build_attack_navigator_layer, load_attack_techniques
 from .artifacts import discover_artifacts
+from .attack_mapper import apply_attack_mapping, build_attack_navigator_layer, load_attack_techniques
+from .case_store import MemoryCaseStore
+from .citations import (
+    catalog_from_citations,
+    citation_for_binary,
+    citation_from_event,
+    drop_uncited,
+    file_citation,
+)
 from .event_detectors import findings_from_artifact_events
 from .ioc_pipeline import extract_iocs
-from .llama_workflow import LlamaWorkflow, heuristic_fallback
-from .models import CaseReport, Finding, TimelineEvent, utc_now_iso
+from .llama_workflow import LlamaWorkflow, MockLlamaWorkflow, heuristic_fallback, prompt_template_text
+from .manifest import build_run_manifest, hash_input_tree, prompt_template_sha256, write_run_manifest
+from .models import ArtifactEvent, BinaryFeature, CaseReport, Citation, Finding, TimelineEvent, utc_now_iso
 from .pdf_report import write_pdf_report
 from .plugins import PluginRegistry
 from .sigma_rules import evaluate_sigma_rules
 from .stix_export import build_stix_bundle
 from .timeline import normalize_timeline
+from .tools import ToolRegistry
+from .workers import PIPELINE_WORKER
 from .yara_detector import scan_paths_with_yara
 
 
@@ -39,6 +50,7 @@ class PipelineConfig:
     attack_stix_path: Path | None = None
     openai_compatible_endpoint: str | None = None
     openai_api_key: str | None = None
+    llm_provider: str | None = None
 
 
 def _severity_rank(value: str) -> int:
@@ -104,6 +116,12 @@ def _to_markdown(report: CaseReport) -> str:
             lines.append(f"  - Evidence: {'; '.join(item.evidence)}")
         if item.recommendation:
             lines.append(f"  - Recommendation: {item.recommendation}")
+        lines.append(f"  - Status: {_review_label(item)}")
+        if item.citations:
+            for citation in item.citations:
+                lines.append(f"  - Citation: {_format_citation(citation)}")
+        else:
+            lines.append("  - Citation: none")
     lines.append("")
     lines.append("## IOCs")
     if not report.iocs:
@@ -201,11 +219,22 @@ def _to_html(report: CaseReport) -> str:
         `<td>${{esc(item.tactic)}}</td>` +
         `<td>${{esc(item.technique_id || "")}}</td>` +
         `<td>${{esc(item.confidence)}}</td>` +
+        `<td>${{esc(item.review_status || "unverified")}}</td>` +
+        `<td>${{esc(citeLabel(item))}}</td>` +
         `</tr>`
       ).join("");
       document.getElementById("findings").innerHTML =
-        `<thead><tr><th>Severity</th><th>Title</th><th>Tactic</th><th>Technique</th><th>Confidence</th></tr></thead>` +
-        `<tbody>${{rows || "<tr><td colspan='5'>No findings.</td></tr>"}}</tbody>`;
+        `<thead><tr><th>Severity</th><th>Title</th><th>Tactic</th><th>Technique</th><th>Confidence</th><th>Review</th><th>Citation</th></tr></thead>` +
+        `<tbody>${{rows || "<tr><td colspan='7'>No findings.</td></tr>"}}</tbody>`;
+    }}
+
+    function citeLabel(item) {{
+      const cites = item.citations || [];
+      if (!cites.length) return "uncited";
+      const first = cites[0];
+      const loc = first.row !== null && first.row !== undefined ? "row " + first.row : "offset " + first.offset;
+      const extra = cites.length > 1 ? " +" + (cites.length - 1) : "";
+      return loc + extra;
     }}
 
     function renderTimeline(filterValue) {{
@@ -247,75 +276,176 @@ def _to_html(report: CaseReport) -> str:
 """
 
 
+def resolve_llm_provider(config: PipelineConfig) -> str:
+    """Choose mock, ollama, openai_compatible, or off."""
+    if not config.enable_llama or config.llm_provider == "off":
+        return "off"
+    if config.llm_provider in {"mock", "ollama", "openai_compatible"}:
+        return config.llm_provider
+    if config.openai_compatible_endpoint:
+        return "openai_compatible"
+    return "ollama"
+
+
+def _review_label(item: Finding) -> str:
+    who = "LLM-generated" if item.origin == "llm" else item.origin
+    return f"worker {item.worker}; {who}, analyst-{item.review_status}"
+
+
+def _format_citation(citation: Citation) -> str:
+    if citation.row is not None:
+        location = f"row {citation.row}"
+    else:
+        location = f"offset {citation.offset}"
+    return f"`{citation.artifact_id}` `{citation.source_file}` {location} `{citation.sha256}`"
+
+
+def _evidence_catalog(
+    input_dir: Path,
+    artifacts: list[ArtifactEvent],
+    binary_features: list[BinaryFeature],
+) -> dict[tuple[str, str], Citation]:
+    pointers: list[Citation] = []
+    for event in artifacts:
+        pointer = citation_from_event(event)
+        if pointer is not None:
+            pointers.append(pointer)
+    for binary in binary_features:
+        pointers.append(citation_for_binary(binary))
+    root = input_dir.resolve()
+    for path in sorted(root.rglob("*")):
+        if path.is_file() and not path.is_symlink() and len(path.relative_to(root).parts) <= 20:
+            pointers.append(file_citation(path, root=root))
+    return catalog_from_citations(pointers)
+
+
 def run_case(config: PipelineConfig) -> CaseReport:
-    registry = config.plugin_registry or PluginRegistry()
-    registry.register_defaults()
-    artifacts, binaries = discover_artifacts(
-        config.input_dir,
-        max_text_bytes=config.max_text_bytes,
-        parser_registry=registry.artifact_parsers,
-    )
-    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="af-binary") as pool:
-        binary_features = list(pool.map(registry.analyze_binary, binaries))
+    """Parse a directory, draft findings, drop uncited drafts, and write a manifest.
+
+    This function is the ``pipeline`` worker. It is the only worker that
+    runs. Tool stages go through an allow-list, and the case store
+    records those calls plus the findings. There is no orchestrator.
+    """
+    started_at = utc_now_iso()
+    store = MemoryCaseStore()
+    tools = ToolRegistry(worker=PIPELINE_WORKER, store=store)
+    plugin_registry = config.plugin_registry or PluginRegistry()
+    plugin_registry.register_defaults()
+    provider = resolve_llm_provider(config)
+    workflow: LlamaWorkflow | MockLlamaWorkflow | None = None
+    if provider == "mock":
+        workflow = MockLlamaWorkflow()
+    elif provider == "openai_compatible":
+        workflow = LlamaWorkflow(
+            config.openai_compatible_endpoint or "",
+            config.llama_model,
+            provider="openai_compatible",
+            api_key=config.openai_api_key,
+        )
+    elif provider == "ollama":
+        workflow = LlamaWorkflow(config.llama_endpoint, config.llama_model)
+
+    def parse_artifacts() -> tuple[list[ArtifactEvent], list[Path]]:
+        return discover_artifacts(
+            config.input_dir,
+            max_text_bytes=config.max_text_bytes,
+            parser_registry=plugin_registry.artifact_parsers,
+        )
+
+    def analyze_binaries(found: list[Path]) -> list[BinaryFeature]:
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="af-binary") as pool:
+            return list(pool.map(plugin_registry.analyze_binary, found))
+
+    def yara_scan(candidates: list[Path]) -> tuple[list[Finding], list[TimelineEvent]]:
+        return scan_paths_with_yara(candidates, config.rules_dir)
+
+    def event_findings(parsed: list[ArtifactEvent]) -> list[Finding]:
+        return findings_from_artifact_events(parsed)
+
+    def draft_findings(
+        parsed: list[ArtifactEvent],
+        features: list[BinaryFeature],
+        catalog_list: list[Citation],
+    ) -> tuple[list[Finding], list[TimelineEvent]]:
+        drafted: list[Finding] = []
+        hints: list[TimelineEvent] = []
+        if workflow:
+            def analyze_one(binary: BinaryFeature) -> tuple[list[Finding], list[TimelineEvent]]:
+                try:
+                    related_events = normalize_timeline(parsed, [binary], [])
+                    return workflow.analyze_binary(binary, related_events[-10:], catalog_list)
+                except Exception as exc:
+                    logger.warning("LLM analysis failed for %s: %s — using heuristic fallback", binary.path, exc)
+                    return heuristic_fallback(binary, citation_for_binary(binary))
+
+            with ThreadPoolExecutor(max_workers=3, thread_name_prefix="af-llm") as pool:
+                for model_findings, model_hints in pool.map(analyze_one, features):
+                    drafted.extend(model_findings)
+                    hints.extend(model_hints)
+        else:
+            for binary in features:
+                if binary.suspicious_score > 0:
+                    model_findings, model_hints = heuristic_fallback(binary, citation_for_binary(binary))
+                    drafted.extend(model_findings)
+                    hints.extend(model_hints)
+        return drafted, hints
+
+    def detector_findings(
+        parsed: list[ArtifactEvent],
+        features: list[BinaryFeature],
+        timeline: list[TimelineEvent],
+    ) -> list[Finding]:
+        return plugin_registry.detectors.detect(parsed, features, timeline)
+
+    def sigma_findings(timeline: list[TimelineEvent]) -> list[Finding]:
+        return evaluate_sigma_rules(timeline, config.sigma_rules_dir or config.rules_dir)
+
+    tools.allow("parse_artifacts", parse_artifacts)
+    tools.allow("analyze_binaries", analyze_binaries)
+    tools.allow("yara_scan", yara_scan)
+    tools.allow("event_detectors", event_findings)
+    tools.allow("draft_findings", draft_findings)
+    tools.allow("builtin_detectors", detector_findings)
+    tools.allow("sigma_rules", sigma_findings)
+
+    artifacts, binaries = tools.call("parse_artifacts")
+    binary_features = tools.call("analyze_binaries", binaries)
     # Cap directory traversal depth at 20 to avoid runaway scans on deep trees.
-    # Use a generator to avoid materialising the full list in memory for large trees.
-    scan_candidates = (
-        p for p in sorted(config.input_dir.rglob("*"))
-        if p.is_file() and len(p.relative_to(config.input_dir).parts) <= 20
-    )
+    scan_candidates = [
+        path
+        for path in sorted(config.input_dir.rglob("*"))
+        if path.is_file() and not path.is_symlink() and len(path.relative_to(config.input_dir).parts) <= 20
+    ]
 
     findings: list[Finding] = []
     generated_hints: list[TimelineEvent] = []
-    model_summary: dict[str, Any] | None = None
-    workflow: LlamaWorkflow | None = None
-
     try:
-        yara_findings, yara_hints = scan_paths_with_yara(scan_candidates, config.rules_dir)
-        findings.extend(yara_findings)
+        yara_found, yara_hints = tools.call("yara_scan", scan_candidates)
+        findings.extend(yara_found)
         generated_hints.extend(yara_hints)
     except Exception as exc:
         logger.warning("YARA scan failed: %s", exc)
 
-    findings.extend(findings_from_artifact_events(artifacts))
-
-    if config.enable_llama:
-        if config.openai_compatible_endpoint:
-            workflow = LlamaWorkflow(
-                config.openai_compatible_endpoint,
-                config.llama_model,
-                provider="openai_compatible",
-                api_key=config.openai_api_key,
-            )
-        else:
-            workflow = LlamaWorkflow(config.llama_endpoint, config.llama_model)
-
-    if workflow:
-        def analyze_one(binary):
-            try:
-                related_events = normalize_timeline(artifacts, [binary], [])
-                return workflow.analyze_binary(binary, related_events[-10:])
-            except Exception as exc:
-                logger.warning("LLM analysis failed for %s: %s — using heuristic fallback", binary.path, exc)
-                return heuristic_fallback(binary)
-
-        with ThreadPoolExecutor(max_workers=3, thread_name_prefix="af-llm") as pool:
-            for model_findings, hints in pool.map(analyze_one, binary_features):
-                findings.extend(model_findings)
-                generated_hints.extend(hints)
-    else:
-        for binary in binary_features:
-            if binary.suspicious_score > 0:
-                model_findings, hints = heuristic_fallback(binary)
-                findings.extend(model_findings)
-                generated_hints.extend(hints)
+    findings.extend(tools.call("event_detectors", artifacts))
+    catalog = _evidence_catalog(config.input_dir, artifacts, binary_features)
+    drafted, draft_hints = tools.call("draft_findings", artifacts, binary_features, list(catalog.values()))
+    findings.extend(drafted)
+    generated_hints.extend(draft_hints)
 
     timeline = normalize_timeline(artifacts, binary_features, generated_hints)
-    findings.extend(registry.detectors.detect(artifacts, binary_features, timeline))
-    sigma_findings = evaluate_sigma_rules(timeline, config.sigma_rules_dir or config.rules_dir)
-    findings.extend(sigma_findings)
+    findings.extend(tools.call("builtin_detectors", artifacts, binary_features, timeline))
+    findings.extend(tools.call("sigma_rules", timeline))
+    findings, dropped_uncited = drop_uncited(findings, catalog)
+    store.add_findings(PIPELINE_WORKER, findings)
+    findings = store.findings()
 
+    model_summary: dict[str, Any] | None = None
     if workflow:
-        model_summary = workflow.summarize_case(findings, timeline)
+        def summarize_case() -> dict[str, Any] | None:
+            return workflow.summarize_case(findings, timeline)
+
+        tools.allow("summarize_case", summarize_case)
+        model_summary = tools.call("summarize_case")
 
     attack_techniques = load_attack_techniques(config.attack_stix_path)
     findings = apply_attack_mapping(findings, attack_techniques)
@@ -323,6 +453,8 @@ def run_case(config: PipelineConfig) -> CaseReport:
     iocs = extract_iocs(binary_features, findings, timeline)
 
     summary = _build_summary(findings, timeline, iocs_count=len(iocs), model_summary=model_summary)
+    summary["dropped_uncited"] = dropped_uncited
+    summary["llm_provider"] = provider
     report = CaseReport(
         case_id=config.case_id,
         generated_at=utc_now_iso(),
@@ -347,4 +479,26 @@ def run_case(config: PipelineConfig) -> CaseReport:
         encoding="utf-8",
     )
     write_pdf_report(report, config.output_dir / "case_report.pdf")
+    report_path = config.output_dir / "case_report.json"
+    model_name = "none"
+    if provider == "mock":
+        model_name = MockLlamaWorkflow.model
+    elif provider in {"ollama", "openai_compatible"}:
+        model_name = config.llama_model
+    manifest = build_run_manifest(
+        case_id=config.case_id,
+        started_at=started_at,
+        finished_at=utc_now_iso(),
+        input_files=hash_input_tree(config.input_dir),
+        provider=provider,
+        model_name=model_name,
+        prompt_sent=provider in {"ollama", "openai_compatible"},
+        prompt_template_sha256_value=prompt_template_sha256(prompt_template_text()),
+        finding_count=len(findings),
+        dropped_uncited=dropped_uncited,
+        report_path=report_path,
+        workers=store.workers(),
+        tool_calls=[call.to_dict() for call in store.tool_calls()],
+    )
+    write_run_manifest(config.output_dir / "run_manifest.json", manifest)
     return report

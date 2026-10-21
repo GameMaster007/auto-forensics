@@ -1,5 +1,7 @@
 # Auto Forensics — Project Wiki
 
+The [README](README.md) is the current description of the project: AI drafts, the analyst verifies, everything is cited. This page is a longer reference. Parts of it describe optional integrations that are not part of the cited-triage foundation.
+
 ## Table of Contents
 
 1. [Overview](#overview)

@@ -8,8 +8,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .migrations import LATEST_SCHEMA_VERSION, MIGRATION_STEPS
-from .models import IOC, IOCEnrichment, Finding, TimelineEvent, utc_now_iso
-
+from .models import IOC, Finding, IOCEnrichment, TimelineEvent, citations_as_json, decode_finding_row, utc_now_iso
 
 SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
@@ -326,8 +325,9 @@ class Database:
                 """
                 INSERT INTO findings(
                     finding_id, case_id, title, severity, confidence, tactic,
-                    evidence_json, recommendation, created_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    evidence_json, recommendation, created_at,
+                    citations_json, origin, review_status, worker
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -340,6 +340,10 @@ class Database:
                         json.dumps(f.evidence),
                         f.recommendation,
                         now,
+                        citations_as_json(f.citations),
+                        f.origin,
+                        f.review_status,
+                        f.worker,
                     )
                     for f in findings
                 ],
@@ -384,21 +388,13 @@ class Database:
         with self.connect() as con:
             rows = con.execute(
                 """
-                SELECT finding_id, title, severity, confidence, tactic, evidence_json, recommendation, created_at
+                SELECT finding_id, title, severity, confidence, tactic, evidence_json, recommendation,
+                       created_at, citations_json, origin, review_status, worker
                 FROM findings WHERE case_id = ? ORDER BY created_at DESC
                 """,
                 (case_id,),
             ).fetchall()
-        out: list[dict[str, Any]] = []
-        for row in rows:
-            item = dict(row)
-            raw = item.pop("evidence_json")
-            try:
-                item["evidence"] = json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                item["evidence"] = []
-            out.append(item)
-        return out
+        return [decode_finding_row(dict(row)) for row in rows]
 
     def get_timeline(self, case_id: str) -> list[dict[str, Any]]:
         with self.connect() as con:
@@ -806,7 +802,8 @@ class Database:
         with self.connect() as con:
             finding_rows = con.execute(
                 """
-                SELECT finding_id, title, severity, confidence, tactic, evidence_json, recommendation, created_at
+                SELECT finding_id, title, severity, confidence, tactic, evidence_json, recommendation,
+                       created_at, citations_json, origin, review_status, worker
                 FROM findings
                 WHERE case_id = ?
                   AND (
@@ -854,11 +851,7 @@ class Database:
                 (case_id, needle, needle, needle, limit),
             ).fetchall()
 
-        finding_out: list[dict[str, Any]] = []
-        for row in finding_rows:
-            item = dict(row)
-            item["evidence"] = json.loads(item.pop("evidence_json"))
-            finding_out.append(item)
+        finding_out = [decode_finding_row(dict(row)) for row in finding_rows]
 
         timeline_out: list[dict[str, Any]] = []
         for row in timeline_rows:

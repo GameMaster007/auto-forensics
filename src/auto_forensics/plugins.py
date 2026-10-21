@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import importlib.util
 import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, Sequence
 
@@ -10,11 +10,11 @@ logger = logging.getLogger(__name__)
 
 from .binary_analysis import analyze_binary
 from .models import (
+    IOC,
     ArtifactEvent,
     BinaryFeature,
     CaseReport,
     Finding,
-    IOC,
     IOCEnrichment,
     TimelineEvent,
 )

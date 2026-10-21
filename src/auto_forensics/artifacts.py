@@ -13,11 +13,10 @@ import uuid
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .models import ArtifactEvent
-from .security import SecurityError, read_limited_text
+from .security import SecurityError, read_limited_text, sha256_file
 
 logger = logging.getLogger(__name__)
 
@@ -125,12 +124,17 @@ def load_json_artifacts(path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> li
     except (json.JSONDecodeError, SecurityError):
         return []
     items = raw if isinstance(raw, list) else [raw]
+    digest = sha256_file(path).lower()
     out: list[ArtifactEvent] = []
+    record = 0
     for item in items:
         if not isinstance(item, dict):
             continue
+        record += 1
         source = str(item.get("source") or path.name)
-        out.append(_make_event(item, source=source))
+        event = _make_event(item, source=source)
+        _stamp_provenance(event, path.name, digest, row=record)
+        out.append(event)
     return out
 
 
@@ -144,9 +148,13 @@ def load_csv_artifacts(path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> lis
     lines = text.splitlines()
     if not lines:
         return out
+    digest = sha256_file(path).lower()
     reader = csv.DictReader(lines)
-    for row in reader:
-        out.append(_make_event(row, source=path.name))
+    # Line 1 is the header. The first data record is file line 2.
+    for line_number, row in enumerate(reader, start=2):
+        event = _make_event(row, source=path.name)
+        _stamp_provenance(event, path.name, digest, row=line_number)
+        out.append(event)
     return out
 
 
@@ -156,25 +164,26 @@ def load_txt_artifacts(path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> lis
         content = read_limited_text(path, max_text_bytes)
     except SecurityError:
         return out
-    for line in content.splitlines():
+    digest = sha256_file(path).lower()
+    offset = 0
+    for line_number, line in enumerate(content.splitlines(keepends=True), start=1):
+        start = offset
+        offset += len(line.encode("utf-8"))
         text = line.strip()
         if not text:
             continue
         parts = [x.strip() for x in text.split("|", 2)]
         if len(parts) == 3:
-            out.append(
-                ArtifactEvent(
-                    artifact_id=_gen_artifact_id("evt"),
-                    timestamp=parts[0] or None,
-                    event_type=parts[1] or "text_event",
-                    description=parts[2] or "no description",
-                    source=path.name,
-                    metadata={},
-                )
+            event = ArtifactEvent(
+                artifact_id=_gen_artifact_id("evt"),
+                timestamp=parts[0] or None,
+                event_type=parts[1] or "text_event",
+                description=parts[2] or "no description",
+                source=path.name,
+                metadata={},
             )
-            continue
-        out.append(
-            ArtifactEvent(
+        else:
+            event = ArtifactEvent(
                 artifact_id=_gen_artifact_id("note"),
                 timestamp=None,
                 event_type="text_note",
@@ -182,8 +191,39 @@ def load_txt_artifacts(path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> lis
                 source=path.name,
                 metadata={},
             )
-        )
+        _stamp_provenance(event, path.name, digest, row=line_number, offset=start)
+        out.append(event)
     return out
+
+
+def _stamp_provenance(
+    event: ArtifactEvent,
+    source_file: str,
+    digest: str,
+    row: int,
+    offset: int | None = None,
+) -> None:
+    """Record where an event came from so a finding can cite it."""
+    event.metadata["source_file"] = source_file
+    event.metadata["source_sha256"] = digest
+    event.metadata["row"] = row
+    if offset is not None:
+        event.metadata["offset"] = offset
+
+
+def _ensure_provenance(events: list[ArtifactEvent], path: Path) -> None:
+    """Fill provenance when a parser did not set it.
+
+    ``row`` falls back to the 1-based order of records returned for
+    this file. A parser that already set ``row`` keeps that value.
+    """
+    if not events:
+        return
+    digest = sha256_file(path).lower()
+    for index, event in enumerate(events, start=1):
+        event.metadata.setdefault("source_file", path.name)
+        event.metadata.setdefault("source_sha256", digest)
+        event.metadata.setdefault("row", index)
 
 
 def _first_tag_text(root: ET.Element, tag: str) -> str | None:
@@ -1059,9 +1099,13 @@ def discover_artifacts(
         if not path.is_file():
             continue
         suffix = path.suffix.lower()
+        if path.is_symlink():
+            continue
         if suffix in binary_suffixes:
             binaries.append(path)
             continue
-        events.extend(parser_registry.parse(path, max_text_bytes=max_text_bytes))
+        parsed = parser_registry.parse(path, max_text_bytes=max_text_bytes)
+        _ensure_provenance(parsed, path)
+        events.extend(parsed)
 
     return events, binaries

@@ -14,7 +14,7 @@ from .service import AutoForensicsService
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="auto-forensics",
-        description="Automated malware-oriented binary analysis and incident timeline generation.",
+        description="Draft cited forensic findings for an analyst to verify.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -35,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable model workflow and rely on heuristic findings.",
     )
+    _add_llm_argument(analyze)
 
     overview = sub.add_parser("overview", help="Show complete case overview from the database.")
     overview.add_argument("--case-id", required=True, help="Case identifier.")
@@ -66,6 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable model workflow and rely on heuristic findings.",
     )
+    _add_llm_argument(run)
 
     export_case = sub.add_parser("export", help="Export case as signed zip archive.")
     export_case.add_argument("--case-id", required=True, help="Case identifier.")
@@ -90,6 +92,24 @@ def build_parser() -> argparse.ArgumentParser:
     cleanup_jobs = sub.add_parser("cleanup-jobs", help="Delete job history older than retention days.")
     cleanup_jobs.add_argument("--retention-days", type=int, default=None, help="Override configured retention window.")
     return parser
+
+
+def _add_llm_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--llm",
+        choices=["mock", "ollama", "off"],
+        default=None,
+        help="mock is offline and needs no API key. ollama calls a local endpoint. off uses heuristics only.",
+    )
+
+
+def _llm_choice(args: argparse.Namespace) -> tuple[bool, str | None]:
+    """Return ``(enable_llama, provider)`` for analyze and run."""
+    if args.disable_llama or args.llm == "off":
+        return False, "off"
+    if args.llm in {"mock", "ollama"}:
+        return True, args.llm
+    return True, None
 
 
 def main() -> None:
@@ -123,7 +143,12 @@ def main() -> None:
             return
 
         if args.command == "analyze":
-            result = ensure_service().analyze_case(args.case_id, enable_llama=not args.disable_llama)
+            enabled, provider = _llm_choice(args)
+            result = ensure_service().analyze_case(
+                args.case_id,
+                enable_llama=enabled,
+                llm_provider=provider,
+            )
             print(json.dumps(result, indent=2))
             return
 
@@ -181,11 +206,12 @@ def main() -> None:
             return
 
         if args.command == "run":
+            enabled, provider = _llm_choice(args)
             cfg = PipelineConfig(
                 case_id=args.case_id,
                 input_dir=args.input_dir,
                 output_dir=args.output_dir,
-                enable_llama=not args.disable_llama,
+                enable_llama=enabled,
                 llama_endpoint=args.llama_endpoint,
                 llama_model=args.llama_model,
                 rules_dir=config.rules_dir,
@@ -193,6 +219,7 @@ def main() -> None:
                 attack_stix_path=config.attack_stix_path,
                 openai_compatible_endpoint=config.openai_compatible_endpoint,
                 openai_api_key=config.openai_api_key,
+                llm_provider=provider,
             )
             report_obj = run_case(cfg)
             print(json.dumps(report_obj.to_dict(), indent=2))

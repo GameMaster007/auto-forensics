@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 
 from .models import ArtifactEvent, BinaryFeature, TimelineEvent
 
-
 PROCESS_EVENT_TYPES = {"process_creation", "process_start"}
 NETWORK_EVENT_TYPES = {"dns_query", "http_request", "tls_client_hello", "c2_beacon_suspected"}
 NETWORK_PROCESS_CORRELATION_WINDOW_SECONDS = 120
