@@ -86,6 +86,9 @@ def build_run_manifest(
     tool_calls: list[dict[str, Any]],
     verifier: str,
     verification: list[dict[str, Any]],
+    rules_dir: str | None = None,
+    sigma_rules_dir: str | None = None,
+    attack_stix_path: str | None = None,
 ) -> dict[str, Any]:
     """Build the manifest dict. ``report_sha256`` is the canonical hash."""
     live_model = provider in {"ollama", "openai_compatible"}
@@ -97,6 +100,11 @@ def build_run_manifest(
         "finished_at": finished_at,
         "input_dir": input_dir,
         "input_files": input_files,
+        "paths": {
+            "rules_dir": rules_dir,
+            "sigma_rules_dir": sigma_rules_dir,
+            "attack_stix_path": attack_stix_path,
+        },
         "model": {
             "provider": provider,
             "name": model_name,

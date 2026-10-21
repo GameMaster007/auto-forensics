@@ -565,6 +565,9 @@ def run_case(config: PipelineConfig) -> CaseReport:
         tool_calls=[call.to_dict() for call in store.tool_calls()],
         verifier=verifier_limit_name(judge_mode),
         verification=[item.to_dict() for item in verdicts],
+        rules_dir=str(config.rules_dir) if config.rules_dir else None,
+        sigma_rules_dir=str(config.sigma_rules_dir) if config.sigma_rules_dir else None,
+        attack_stix_path=str(config.attack_stix_path) if config.attack_stix_path else None,
     )
     write_run_manifest(config.output_dir / "run_manifest.json", manifest)
     return report

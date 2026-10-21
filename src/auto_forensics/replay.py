@@ -9,6 +9,7 @@ the caller exits non-zero.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +43,6 @@ def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict
                 input_differences.append(path)
 
     model = manifest.get("model") if isinstance(manifest.get("model"), dict) else {}
-    provider = str(model.get("provider") or "off")
     expected_sha = str(manifest.get("output", {}).get("sha256") or "")
     destination = output_dir or (manifest_path.parent / "replay")
     output_match = False
@@ -50,20 +50,7 @@ def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict
     seed_match = False
     actual_sha = ""
     if input_dir is not None and input_dir.is_dir():
-        seed = model.get("seed")
-        report = run_case(
-            PipelineConfig(
-                case_id=str(manifest.get("case_id") or "replay"),
-                input_dir=input_dir,
-                output_dir=destination,
-                enable_llama=provider != "off",
-                llama_endpoint=str(model.get("endpoint") or "http://localhost:11434"),
-                llama_model=str(model.get("name") or "llama3.1:8b"),
-                llm_provider=provider,
-                seed=int(seed) if isinstance(seed, int) else 0,
-                verifier_judge=_judge_mode(str(manifest.get("limits", {}).get("verifier") or "")),
-            )
-        )
+        report = run_case(config_from_manifest(manifest, input_dir, destination))
         del report
         replayed = json.loads((destination / "run_manifest.json").read_text(encoding="utf-8"))
         actual_sha = str(replayed.get("output", {}).get("sha256") or "")
@@ -82,6 +69,48 @@ def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict
         "input_differences": input_differences,
         "replay_output_dir": str(destination),
     }
+
+
+def config_from_manifest(manifest: dict[str, Any], input_dir: Path, output_dir: Path) -> PipelineConfig:
+    """Build the pipeline config a manifest can repeat.
+
+    Rule and STIX paths are taken from the manifest. An API key is read
+    from the environment at replay time and is never stored.
+    """
+    model = manifest.get("model") if isinstance(manifest.get("model"), dict) else {}
+    paths = manifest.get("paths") if isinstance(manifest.get("paths"), dict) else {}
+    provider = str(model.get("provider") or "off")
+    seed = model.get("seed")
+    endpoint = model.get("endpoint")
+    llama_endpoint = "http://localhost:11434"
+    openai_endpoint = None
+    if provider == "ollama" and endpoint:
+        llama_endpoint = str(endpoint)
+    if provider == "openai_compatible" and endpoint:
+        openai_endpoint = str(endpoint)
+    api_key = os.environ.get("AUTO_FORENSICS_OPENAI_API_KEY") if provider == "openai_compatible" else None
+    return PipelineConfig(
+        case_id=str(manifest.get("case_id") or "replay"),
+        input_dir=input_dir,
+        output_dir=output_dir,
+        enable_llama=provider != "off",
+        llama_endpoint=llama_endpoint,
+        llama_model=str(model.get("name") or "llama3.1:8b"),
+        rules_dir=_recorded_path(paths.get("rules_dir")),
+        sigma_rules_dir=_recorded_path(paths.get("sigma_rules_dir")),
+        attack_stix_path=_recorded_path(paths.get("attack_stix_path")),
+        openai_compatible_endpoint=openai_endpoint,
+        openai_api_key=api_key,
+        llm_provider=provider,
+        seed=int(seed) if isinstance(seed, int) else 0,
+        verifier_judge=_judge_mode(str(manifest.get("limits", {}).get("verifier") or "")),
+    )
+
+
+def _recorded_path(value: object) -> Path | None:
+    if not value:
+        return None
+    return Path(str(value))
 
 
 def _judge_mode(verifier_limit: str) -> str:

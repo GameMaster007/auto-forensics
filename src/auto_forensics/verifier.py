@@ -18,11 +18,19 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
 
-from .models import Citation, Finding
-from .security import sha256_file
+from .models import ArtifactEvent, Citation, Finding
+from .security import sha256_file, stays_in_tree
 
 MAX_VERIFY_BYTES = 8 * 1024 * 1024
+# Same window ``analyze_binary`` uses for string hits. An offset-0
+# citation has to see a keyword found in that window.
+MAX_BINARY_VERIFY_BYTES = 32 * 1024 * 1024
 _OFFSET_WINDOW = 8192
+_TEXT_PARSERS = {
+    "json-artifact-parser",
+    "csv-artifact-parser",
+    "text-artifact-parser",
+}
 
 _METADATA_PREFIXES = (
     "suspicious_score=",
@@ -182,14 +190,19 @@ def claim_lines(finding: Finding) -> list[str]:
 
 def read_cited_text(input_dir: Path, citation: Citation) -> tuple[str | None, str]:
     """Re-hash the cited file and return the cited row or byte window."""
-    path = locate_source(input_dir, citation.source_file)
+    path = locate_source(input_dir, citation.source_file, citation.sha256)
     if path is None:
         return None, REASON_UNREADABLE
     if sha256_file(path).lower() != citation.sha256.lower():
         return None, REASON_HASH
-    if path.stat().st_size > MAX_VERIFY_BYTES and citation.row is not None:
-        return None, REASON_UNREADABLE
     if citation.row is not None:
+        structured = _read_structured_record(path, citation.row)
+        if structured is not None:
+            return structured, ""
+        if _is_structured_artifact(path):
+            return None, REASON_UNREADABLE
+        if path.stat().st_size > MAX_VERIFY_BYTES:
+            return None, REASON_UNREADABLE
         text = _read_row(path, citation.row)
         if text is None:
             return None, REASON_UNREADABLE
@@ -200,17 +213,19 @@ def read_cited_text(input_dir: Path, citation: Citation) -> tuple[str | None, st
     with path.open("rb") as handle:
         if start:
             handle.seek(start)
-        window = handle.read(_OFFSET_WINDOW if start else min(path.stat().st_size, MAX_VERIFY_BYTES))
+        cap = _OFFSET_WINDOW if start else min(path.stat().st_size, MAX_BINARY_VERIFY_BYTES)
+        window = handle.read(cap)
     if start and not window and start >= path.stat().st_size:
         return None, REASON_UNREADABLE
     return window.decode("utf-8", errors="replace"), ""
 
 
-def locate_source(input_dir: Path, source_file: str) -> Path | None:
+def locate_source(input_dir: Path, source_file: str, sha256: str = "") -> Path | None:
     """Find ``source_file`` under ``input_dir``.
 
     A relative path is tried first. A bare file name is accepted when
-    exactly one file under the directory has that name.
+    exactly one file under the directory has that name. When several
+    files share the name, the citation hash picks the file.
     """
     root = input_dir.resolve()
     rel = Path(source_file)
@@ -222,14 +237,15 @@ def locate_source(input_dir: Path, source_file: str) -> Path | None:
     matches = [
         path
         for path in sorted(root.rglob("*"))
-        if path.name == rel.name
-        and path.is_file()
-        and not path.is_symlink()
-        and path.is_relative_to(root)
-        and len(path.relative_to(root).parts) <= 20
+        if path.name == rel.name and stays_in_tree(path, root) and len(path.relative_to(root).parts) <= 20
     ]
     if len(matches) == 1:
         return matches[0]
+    wanted = sha256.lower()
+    if wanted:
+        for path in matches:
+            if sha256_file(path).lower() == wanted:
+                return path
     return None
 
 
@@ -244,9 +260,9 @@ def _read_row(path: Path, row: int) -> str | None:
         if isinstance(raw, list):
             records = [item for item in raw if isinstance(item, dict)]
             if row <= len(records):
-                return json.dumps(records[row - 1], sort_keys=True, ensure_ascii=True)
+                return _json_record_text(records[row - 1])
         elif isinstance(raw, dict) and row == 1:
-            return json.dumps(raw, sort_keys=True, ensure_ascii=True)
+            return _json_record_text(raw)
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
@@ -254,6 +270,72 @@ def _read_row(path: Path, row: int) -> str | None:
     if row <= len(lines):
         return lines[row - 1]
     return None
+
+
+def _is_structured_artifact(path: Path) -> bool:
+    """True when the file is parsed into records that are not text lines."""
+    from .plugins import ArtifactParserRegistry
+
+    registry = ArtifactParserRegistry()
+    registry.register_defaults()
+    parser = registry.parser_for_path(path)
+    return parser is not None and parser.name not in _TEXT_PARSERS
+
+
+def _read_structured_record(path: Path, row: int) -> str | None:
+    """Re-parse one EVTX, pcap, registry, prefetch, MFT, or memory record.
+
+    Those parsers stamp a synthetic row. The description is not a line
+    in the file, so the cited text is the parsed record.
+    """
+    if not _is_structured_artifact(path):
+        return None
+    from .plugins import ArtifactParserRegistry
+
+    registry = ArtifactParserRegistry()
+    registry.register_defaults()
+    events = registry.parse(path)
+    for index, event in enumerate(events, start=1):
+        recorded = event.metadata.get("row")
+        record_row = recorded if isinstance(recorded, int) and recorded >= 1 else index
+        if record_row == row:
+            return _event_text(event)
+    return None
+
+
+def _event_text(event: ArtifactEvent) -> str:
+    parts = [event.description]
+    for key, value in event.metadata.items():
+        if key in {"source_file", "source_sha256", "row", "offset"}:
+            continue
+        if value is None:
+            continue
+        parts.append(f"{key}={value}")
+    return "\n".join(parts)
+
+
+def _json_record_text(record: dict) -> str:
+    """Field values plus a UTF-8 dump.
+
+    ``json.dumps`` escapes quotes and, with ``ensure_ascii``, non-ASCII.
+    The claim sentence is the field value, so those values are included
+    as themselves.
+    """
+    values: list[str] = []
+
+    def walk(node: object) -> None:
+        if isinstance(node, str):
+            values.append(node)
+        elif isinstance(node, dict):
+            for item in node.values():
+                walk(item)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(record)
+    dumped = json.dumps(record, sort_keys=True, ensure_ascii=False)
+    return dumped + "\n" + "\n".join(values)
 
 
 def _verdict(
