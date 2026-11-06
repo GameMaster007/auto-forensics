@@ -17,6 +17,7 @@ part of the record.
 from __future__ import annotations
 
 import csv
+import io
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -222,6 +223,8 @@ def claim_lines(finding: Finding) -> list[str]:
 
 def read_cited_text(input_dir: Path, citation: Citation) -> tuple[str | None, str]:
     """Re-hash the cited file and return the cited row or byte window."""
+    if not citation.is_complete():
+        return None, REASON_UNREADABLE
     path = locate_source(input_dir, citation.source_file, citation.sha256)
     if path is None:
         return None, REASON_UNREADABLE
@@ -263,9 +266,11 @@ def locate_source(input_dir: Path, source_file: str, sha256: str = "") -> Path |
     rel = Path(source_file)
     if rel.is_absolute() or ".." in rel.parts or not source_file:
         return None
-    direct = (root / rel).resolve()
-    if direct.is_file() and not direct.is_symlink() and direct.is_relative_to(root):
+    direct = root / rel
+    if stays_in_tree(direct, root):
         return direct
+    if len(rel.parts) != 1:
+        return None
     matches = [
         path
         for path in sorted(root.rglob("*"))
@@ -296,9 +301,7 @@ def _read_row(path: Path, row: int) -> str | None:
         elif isinstance(raw, dict) and row == 1:
             return _json_record_text(raw)
     if path.suffix.lower() == ".csv":
-        decoded = _csv_record_text(path, row)
-        if decoded is not None:
-            return decoded
+        return _csv_record_text(path, row)
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
@@ -320,14 +323,19 @@ def _csv_record_text(path: Path, row: int) -> str | None:
     text. The raw line stays too, for a claim that quotes the line.
     """
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        text = path.read_text(encoding="utf-8", errors="replace").removeprefix("\ufeff")
     except OSError:
         return None
-    reader = csv.DictReader(lines)
+    lines = text.splitlines(keepends=True)
+    reader = csv.DictReader(io.StringIO(text, newline=""))
+    _ = reader.fieldnames
+    previous_line = reader.line_num
     for record in reader:
+        start_line = previous_line
+        previous_line = reader.line_num
         if reader.line_num != row:
             continue
-        values = [lines[row - 1] if row <= len(lines) else ""]
+        values = ["".join(lines[start_line:row])]
         for key, value in record.items():
             if key:
                 values.append(str(key))

@@ -2,6 +2,16 @@
 
 ## [Unreleased] — 0.1.0
 
+### Integrity fixes
+
+- Keep evidence text inside the HTML report's data string even when it
+  contains a closing script tag. Escape quotes in generated table cells.
+- Reject negative, zero-row, boolean, and non-integer citation locations.
+- Exclude files reached through directory symlinks, including links back
+  into the evidence tree. Qualified citation paths do not fall back to
+  a different directory with the same filename.
+- Preserve multiline CSV fields and cite their final physical line.
+
 First public foundation. The package already contained a case store, a
 CLI, and tests. This version makes a fresh install the supported path
 and states what the tool will not claim.

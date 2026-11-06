@@ -59,9 +59,17 @@ class Citation:
 
     def is_complete(self) -> bool:
         """Return True when an analyst could open this pointer."""
-        located = self.row is not None or self.offset is not None
-        digest = self.sha256.lower()
-        return bool(self.artifact_id and self.source_file and _SHA256_RE.fullmatch(digest) and located)
+        if not all(isinstance(value, str) and value.strip() for value in (
+            self.artifact_id, self.source_file, self.sha256
+        )):
+            return False
+        if self.row is None and self.offset is None:
+            return False
+        if self.row is not None and (type(self.row) is not int or self.row < 1):
+            return False
+        if self.offset is not None and (type(self.offset) is not int or self.offset < 0):
+            return False
+        return _SHA256_RE.fullmatch(self.sha256.lower()) is not None
 
 
 @dataclass(slots=True)

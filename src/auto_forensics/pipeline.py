@@ -182,7 +182,9 @@ def _to_markdown(report: CaseReport) -> str:
 
 
 def _to_html(report: CaseReport) -> str:
-    payload = json.dumps(report.to_dict())
+    # Evidence is untrusted even in a local report. HTML's parser recognizes
+    # </script> inside a JavaScript string, so JSON escaping alone is insufficient.
+    payload = json.dumps(report.to_dict()).replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
     escaped_case = html.escape(report.case_id)
     return f"""<!DOCTYPE html>
 <html lang=\"en\">
@@ -247,7 +249,9 @@ def _to_html(report: CaseReport) -> str:
       return String(value === undefined || value === null ? "" : value)
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
     }}
     document.getElementById("kpis").innerHTML = [
       `<span class=\"kpi\">Findings: <strong>${{report.summary.total_findings || 0}}</strong></span>`,

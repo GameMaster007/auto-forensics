@@ -66,19 +66,25 @@ def is_supported_artifact(path: Path) -> bool:
 
 
 def stays_in_tree(path: Path, root: Path) -> bool:
-    """Return True when ``path`` is a regular file that resolves inside ``root``.
+    """Accept regular files below the root without following any symlink.
 
-    ``rglob`` follows a directory symlink, so a file can look like it
-    sits under ``root`` while its real path does not. Those files are
-    outside the case and are not evidence for this run.
+    Check every component before resolving it, including directory links
+    whose targets happen to be inside the evidence tree.
     """
-    if not path.is_file() or path.is_symlink():
-        return False
     try:
-        path.resolve().relative_to(root.resolve())
-    except ValueError:
+        resolved_root = root.resolve()
+        candidate = path.absolute()
+        relative = candidate.relative_to(resolved_root)
+        if ".." in relative.parts:
+            return False
+        component = resolved_root
+        for part in relative.parts:
+            component /= part
+            if component.is_symlink():
+                return False
+        return candidate.is_file() and candidate.resolve().is_relative_to(resolved_root)
+    except (OSError, ValueError, RuntimeError):
         return False
-    return True
 
 
 def sha256_file(path: Path) -> str:

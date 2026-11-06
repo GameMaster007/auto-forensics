@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import logging
 import re
@@ -176,18 +177,19 @@ def load_csv_artifacts(path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> lis
     except SecurityError:
         return out
     # Reuse CSV parser safely on bounded input.
-    lines = text.splitlines()
-    if not lines:
+    if not text.strip():
         return out
     digest = sha256_file(path).lower()
-    reader = csv.DictReader(lines)
+    reader = csv.DictReader(io.StringIO(text.removeprefix("\ufeff"), newline=""))
     from .timeline_imports import events_from_csv
 
     specialized = events_from_csv(reader, path.name, digest)
     if specialized is not None:
         return specialized
-    # Line 1 is the header. The first data record is file line 2.
-    for line_number, row in enumerate(reader, start=2):
+    # Cite the physical line on which the CSV record ends, including
+    # quoted fields that span more than one line.
+    for row in reader:
+        line_number = reader.line_num
         event = _make_event(row, source=path.name, identity=f"{path.name}:{line_number}")
         _stamp_provenance(event, path.name, digest, row=line_number)
         out.append(event)

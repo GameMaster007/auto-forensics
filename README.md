@@ -219,7 +219,7 @@ More detail is in `ARCHITECTURE.md` and `docs/ROADMAP.md`.
 | --- | --- |
 | `artifact_id` | Id from the record, or a stable id derived from the file hash |
 | `source_file` | File the parser read |
-| `row` | 1-based record index for JSON, or 1-based file line for CSV and text |
+| `row` | 1-based record index for JSON, or 1-based file line for CSV and text. A multiline CSV record cites its final physical line. |
 | `offset` | Byte offset. Binary findings use 0, meaning the whole file |
 | `sha256` | Hash of the source file |
 
