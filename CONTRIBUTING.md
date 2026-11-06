@@ -23,6 +23,10 @@ ruff check src tests
 python -m pytest -q
 ```
 
+CI installs `".[dev,db,sigma,server]"` so the API, database, and Sigma
+tests run too. Use those extras locally for the same coverage. Enrichment
+job tests use a local response fixture and do not query a live service.
+
 The offline demo needs no API key:
 
 ```bash

@@ -57,14 +57,14 @@ def _create_case_with_artifacts(client, tmp_path: Path, case_id: str) -> None:
     assert ingested.status_code == 200
 
 
-def test_api_case_jobs_and_cleanup_endpoints(tmp_path: Path):
+def test_api_case_jobs_and_cleanup_endpoints(tmp_path: Path, offline_enrichment: None):
     pytest.importorskip("fastapi")
     testclient_module = pytest.importorskip("fastapi.testclient")
     TestClient = testclient_module.TestClient
 
     cfg = _config(tmp_path)
     app = create_app(cfg)
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1")
 
     case_id = "case-api-jobs-001"
     _create_case_with_artifacts(client, tmp_path, case_id)
@@ -127,3 +127,13 @@ def test_api_case_jobs_and_cleanup_endpoints(tmp_path: Path):
     cleanup_default = client.post("/api/admin/jobs/cleanup", json={})
     assert cleanup_default.status_code == 200
     assert cleanup_default.json()["retention_days"] == cfg.job_retention_days
+
+
+def test_api_rejects_an_untrusted_host(tmp_path: Path):
+    pytest.importorskip("fastapi")
+    testclient_module = pytest.importorskip("fastapi.testclient")
+    app = create_app(_config(tmp_path))
+    with testclient_module.TestClient(app, base_url="http://untrusted.example") as client:
+        response = client.get("/api/cases")
+    assert response.status_code == 400
+    assert "Invalid host header" in response.text

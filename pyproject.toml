@@ -23,7 +23,7 @@ memory = ["volatility3>=2.8.0"]
 pdf = ["reportlab>=4.2.2"]
 db = ["sqlalchemy>=2.0.36", "psycopg[binary]>=3.2.9"]
 server = ["fastapi>=0.110.0,<1.0.0", "uvicorn>=0.30.0,<1.0.0"]
-dev = ["pytest>=8.0.0,<9.0.0", "ruff>=0.6.9,<1.0.0"]
+dev = ["pytest>=8.0.0,<9.0.0", "ruff>=0.6.9,<1.0.0", "httpx>=0.27.0,<1.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/GameMaster007/auto-forensics"
