@@ -7,7 +7,7 @@ from typing import Any
 from .citations import file_citation
 from .ids import stable_id
 from .models import Finding, TimelineEvent
-from .security import SecurityError, confine_path
+from .security import SecurityError, read_limited_text, stays_in_tree
 
 logger = logging.getLogger(__name__)
 
@@ -37,18 +37,23 @@ def _compile_rules(rules_dir: Path) -> list[tuple[Path, Any]]:
         return []
 
     compiled: list[tuple[Path, Any]] = []
-    for rule_file in sorted(rules_dir.rglob("*")):
-        if not rule_file.is_file():
+    root = rules_dir.resolve()
+
+    def include_source(requested: str, filename: str | None, namespace: str) -> str:
+        del namespace
+        parent = Path(filename).parent if filename else root
+        included = parent / requested
+        if not stays_in_tree(included, root):
+            raise SecurityError("YARA includes must be regular files inside the rules directory")
+        return read_limited_text(included, 4 * 1024 * 1024)
+
+    for rule_file in sorted(root.rglob("*")):
+        if not stays_in_tree(rule_file, root):
             continue
         if rule_file.suffix.lower() not in {".yar", ".yara"}:
             continue
         try:
-            confine_path(rules_dir, rule_file)
-        except SecurityError:
-            logger.warning("YARA rule file escapes rules directory, skipping: %s", rule_file)
-            continue
-        try:
-            compiled.append((rule_file, yara.compile(filepath=str(rule_file))))
+            compiled.append((rule_file, yara.compile(filepath=str(rule_file), include_callback=include_source)))
         except Exception as exc:
             logger.warning("Failed to compile YARA rule %s: %s", rule_file, exc)
             continue

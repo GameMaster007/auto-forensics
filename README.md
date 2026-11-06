@@ -83,6 +83,30 @@ report hash that does not match the manifest, exits 1. The hash omits
 `generated_at`, so the clock in the report does not cause a mismatch.
 Seed is 0. The mock does not sample, so its temperature stays null.
 
+Check a saved run without executing a detector or calling a model:
+
+```bash
+auto-forensics verify output/demo-synthetic/run_manifest.json
+```
+
+The command checks evidence hashes, configured rule and ATT&CK resource
+hashes, the saved report's canonical hash, and the files named by its
+citations. It reports added, missing, and modified evidence separately
+and exits 1 on a mismatch. `--input-dir` checks a relocated evidence
+copy. It does not decide whether a claim is true or authenticate a
+manifest that somebody has rewritten together with the report.
+
+New runs write manifest version 2, including the parser byte limit and
+resource hashes. Version 1 manifests remain readable with a warning
+about those missing checks. Replay stops before executing when evidence
+or recorded resources differ. Output must stay outside the evidence
+directory, and replay refuses to overwrite the original run directory.
+The evidence inventory fails explicitly above 10,000 files or depth 20;
+it does not silently truncate the manifest. A change detected while a
+run is processing evidence prevents publication of that run.
+
+`auto-forensics --version` prints the package version.
+
 An analyst records a decision on that same output directory. The
 default status stays `analyst-unverified` until this command runs:
 

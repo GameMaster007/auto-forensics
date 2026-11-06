@@ -4,6 +4,14 @@
 
 ### Integrity fixes
 
+- Add a read-only `verify` command with explicit evidence change lists,
+  report hash checks, citation file checks, and optional relocated inputs.
+- Record parser limits and rule/STIX hashes in manifest version 2;
+  reject malformed manifests and stop replay before executing changed inputs.
+- Refuse output inside evidence and replay over the original run directory.
+  Refuse incomplete file inventories and evidence changes during a run.
+- Print the installed package version with `--version`.
+
 - Keep evidence text inside the HTML report's data string even when it
   contains a closing script tag. Escape quotes in generated table cells.
 - Reject negative, zero-row, boolean, and non-integer citation locations.

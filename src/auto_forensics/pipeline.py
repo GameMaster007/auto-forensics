@@ -26,6 +26,7 @@ from .llama_workflow import LlamaWorkflow, MockLlamaWorkflow, heuristic_fallback
 from .manifest import (
     build_run_manifest,
     canonical_report_sha256,
+    hash_analysis_resources,
     hash_input_tree,
     prompt_template_sha256,
     write_run_manifest,
@@ -33,7 +34,7 @@ from .manifest import (
 from .models import ArtifactEvent, BinaryFeature, CaseReport, Citation, Finding, TimelineEvent, utc_now_iso
 from .pdf_report import write_pdf_report
 from .plugins import PluginRegistry
-from .security import stays_in_tree
+from .security import SecurityError, stays_in_tree, validate_case_id
 from .sigma_rules import evaluate_sigma_rules
 from .stix_export import build_stix_bundle
 from .timeline import normalize_timeline
@@ -418,6 +419,23 @@ def run_case(config: PipelineConfig) -> CaseReport:
     records those calls plus the findings. There is no orchestrator.
     """
     started_at = utc_now_iso()
+    validate_case_id(config.case_id)
+    if type(config.seed) is not int:
+        raise SecurityError("The model seed must be an integer")
+    if config.llm_provider not in {None, "off", "mock", "ollama", "openai_compatible"}:
+        raise SecurityError("Unknown model provider")
+    evidence_root = config.input_dir.resolve()
+    if config.output_dir.resolve().is_relative_to(evidence_root):
+        raise SecurityError("The output directory must be outside the evidence directory")
+    if type(config.max_text_bytes) is not int or config.max_text_bytes < 1:
+        raise SecurityError("max_text_bytes must be a positive integer")
+    input_files = hash_input_tree(evidence_root)
+    resource_paths = {
+        "rules_dir": config.rules_dir,
+        "sigma_rules_dir": config.sigma_rules_dir,
+        "attack_stix_path": config.attack_stix_path,
+    }
+    resources = hash_analysis_resources(resource_paths)
     store = MemoryCaseStore()
     tools = ToolRegistry(worker=PIPELINE_WORKER, store=store)
     plugin_registry = config.plugin_registry or PluginRegistry()
@@ -571,6 +589,10 @@ def run_case(config: PipelineConfig) -> CaseReport:
         summary=summary,
         iocs=iocs,
     )
+    if hash_input_tree(evidence_root) != input_files:
+        raise SecurityError("Evidence changed during analysis; the report was not published")
+    if hash_analysis_resources(resource_paths) != resources:
+        raise SecurityError("Analysis resources changed during analysis; the report was not published")
     config.output_dir.mkdir(parents=True, exist_ok=True)
     (config.output_dir / "case_report.json").write_text(
         json.dumps(report.to_dict(), indent=2), encoding="utf-8"
@@ -597,7 +619,7 @@ def run_case(config: PipelineConfig) -> CaseReport:
         started_at=started_at,
         finished_at=utc_now_iso(),
         input_dir=str(config.input_dir.resolve()),
-        input_files=hash_input_tree(config.input_dir),
+        input_files=input_files,
         provider=provider,
         model_name=model_name,
         endpoint=config.llama_endpoint if provider == "ollama" else config.openai_compatible_endpoint,
@@ -613,9 +635,11 @@ def run_case(config: PipelineConfig) -> CaseReport:
         tool_calls=[call.to_dict() for call in store.tool_calls()],
         verifier=verifier_limit_name(judge_mode),
         verification=[item.to_dict() for item in verdicts],
-        rules_dir=str(config.rules_dir) if config.rules_dir else None,
-        sigma_rules_dir=str(config.sigma_rules_dir) if config.sigma_rules_dir else None,
-        attack_stix_path=str(config.attack_stix_path) if config.attack_stix_path else None,
+        rules_dir=str(config.rules_dir.resolve()) if config.rules_dir else None,
+        sigma_rules_dir=str(config.sigma_rules_dir.resolve()) if config.sigma_rules_dir else None,
+        attack_stix_path=str(config.attack_stix_path.resolve()) if config.attack_stix_path else None,
+        resources=resources,
+        max_text_bytes=config.max_text_bytes,
     )
     write_run_manifest(config.output_dir / "run_manifest.json", manifest)
     return report

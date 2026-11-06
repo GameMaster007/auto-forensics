@@ -13,9 +13,11 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .manifest import hash_input_tree
+from .integrity import check_inputs, check_resources
+from .manifest import read_run_manifest
 from .pipeline import PipelineConfig, run_case
 from .reviews import ANALYST_REVIEW_LOG, ReviewError, apply_review_log
+from .security import SecurityError
 
 
 def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict[str, Any]:
@@ -26,38 +28,34 @@ def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict
     Analyst decisions in ``analyst_reviews.jsonl`` beside that manifest
     are applied again before the report hash is compared.
     """
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    recorded_inputs = {
-        str(item["path"]): str(item["sha256"]).lower()
-        for item in manifest.get("input_files", [])
-        if isinstance(item, dict)
-    }
-    input_dir_raw = manifest.get("input_dir")
-    input_dir = Path(str(input_dir_raw)) if input_dir_raw else None
-    input_match = False
-    input_differences: list[str] = []
-    if input_dir is None or not input_dir.is_dir():
-        input_differences.append("input directory from the manifest is missing")
-    else:
-        current = {item["path"]: item["sha256"] for item in hash_input_tree(input_dir)}
-        input_match = current == recorded_inputs
-        for path in sorted(set(current) | set(recorded_inputs)):
-            if current.get(path) != recorded_inputs.get(path):
-                input_differences.append(path)
+    manifest = read_run_manifest(manifest_path)
+    input_dir = Path(manifest["input_dir"])
+    input_match, input_changes, input_error = check_inputs(manifest, input_dir)
+    input_differences = sorted(path for paths in input_changes.values() for path in paths)
+    if input_error:
+        input_differences.append(input_error)
+    resources_match, resource_error = check_resources(manifest)
 
     model = manifest.get("model") if isinstance(manifest.get("model"), dict) else {}
     expected_sha = str(manifest.get("output", {}).get("sha256") or "")
     destination = output_dir or (manifest_path.parent / "replay")
+    if destination.resolve() == manifest_path.parent.resolve():
+        raise SecurityError("Replay output must not overwrite the original run directory")
+    if destination.resolve().is_relative_to(input_dir.resolve()):
+        raise SecurityError("Replay output must be outside the evidence directory")
     output_match = False
     prompt_match = False
     seed_match = False
     actual_sha = ""
     review_error = ""
-    if input_dir is not None and input_dir.is_dir():
+    executed = False
+    if input_match and resources_match:
+        executed = True
         report = run_case(config_from_manifest(manifest, input_dir, destination))
         del report
         try:
-            apply_review_log(destination, manifest_path.parent / ANALYST_REVIEW_LOG)
+            if not apply_review_log(destination, manifest_path.parent / ANALYST_REVIEW_LOG):
+                review_error = "Review log names a finding missing from the replay"
         except ReviewError as exc:
             review_error = str(exc)
         replayed = json.loads((destination / "run_manifest.json").read_text(encoding="utf-8"))
@@ -65,13 +63,16 @@ def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict
         output_match = bool(actual_sha) and actual_sha == expected_sha
         prompt_match = replayed.get("model", {}).get("prompt_template_sha256") == model.get("prompt_template_sha256")
         seed_match = replayed.get("model", {}).get("seed") == model.get("seed")
-    match = input_match and output_match and prompt_match and seed_match
+    match = input_match and resources_match and output_match and prompt_match and seed_match and not review_error
     return {
         "match": match,
         "input_match": input_match,
         "output_match": output_match,
         "prompt_match": prompt_match,
         "seed_match": seed_match,
+        "resources_match": resources_match,
+        "resource_error": resource_error,
+        "executed": executed,
         "expected_sha256": expected_sha,
         "actual_sha256": actual_sha,
         "input_differences": input_differences,
@@ -121,6 +122,7 @@ def config_from_manifest(manifest: dict[str, Any], input_dir: Path, output_dir: 
         openai_compatible_endpoint=openai_endpoint,
         openai_api_key=api_key,
         llm_provider=provider,
+        max_text_bytes=manifest.get("config", {}).get("max_text_bytes", 4 * 1024 * 1024),
         seed=int(seed) if isinstance(seed, int) else 0,
         verifier_judge=_judge_mode(str(manifest.get("limits", {}).get("verifier") or "")),
     )

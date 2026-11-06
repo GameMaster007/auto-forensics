@@ -1,0 +1,107 @@
+"""Read-only checks of a published run; no model or detector is executed."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from .manifest import canonical_report_sha256, hash_analysis_resources, hash_input_tree, read_run_manifest
+from .models import Citation
+from .security import SecurityError, read_limited_text, stays_in_tree
+
+
+def compare_inventory(recorded: list[dict[str, Any]], current: list[dict[str, Any]]) -> dict[str, list[str]]:
+    expected = {item["path"]: (item["sha256"].lower(), item["size_bytes"]) for item in recorded}
+    observed = {item["path"]: (item["sha256"].lower(), item["size_bytes"]) for item in current}
+    return {
+        "added": sorted(observed.keys() - expected.keys()),
+        "missing": sorted(expected.keys() - observed.keys()),
+        "modified": sorted(path for path in expected.keys() & observed.keys() if expected[path] != observed[path]),
+    }
+
+
+def check_inputs(manifest: dict[str, Any], input_dir: Path) -> tuple[bool, dict[str, list[str]], str]:
+    try:
+        changes = compare_inventory(manifest["input_files"], hash_input_tree(input_dir))
+    except (OSError, SecurityError) as exc:
+        return False, {"added": [], "missing": [], "modified": []}, str(exc)
+    return not any(changes.values()), changes, ""
+
+
+def check_resources(manifest: dict[str, Any]) -> tuple[bool, str]:
+    if manifest["manifest_version"] < 2:
+        return True, ""
+    paths = {key: Path(value) if value else None for key, value in manifest.get("paths", {}).items()}
+    try:
+        current = hash_analysis_resources(paths)
+    except (OSError, SecurityError) as exc:
+        return False, str(exc)
+    def index(rows: list[dict[str, Any]]) -> dict[tuple[str, str], tuple[str, int]]:
+        return {(item["kind"], item["path"]): (item["sha256"].lower(), item["size_bytes"]) for item in rows}
+
+    return index(current) == index(manifest["resources"]), ""
+
+
+def verify_run(manifest_path: Path, *, input_dir: Path | None = None) -> dict[str, Any]:
+    """Check evidence, resources, and the stored report without rerunning it.
+
+    Hashes detect changes relative to the manifest. This is not a digital
+    signature, and it does not decide whether a finding's words are true.
+    """
+    manifest = read_run_manifest(manifest_path)
+    source = input_dir if input_dir is not None else Path(manifest["input_dir"])
+    input_match, changes, input_error = check_inputs(manifest, source)
+    resources_match, resource_error = check_resources(manifest)
+    errors = [error for error in (input_error, resource_error) if error]
+    actual_sha = ""
+    report_match = False
+    citations_match = False
+    report_path = manifest_path.parent / manifest["output"]["report"]
+    try:
+        if not stays_in_tree(report_path, manifest_path.parent):
+            raise SecurityError("Published report is missing or reached through a symlink")
+        report = json.loads(read_limited_text(report_path, 64 * 1024 * 1024))
+        if not isinstance(report, dict) or not isinstance(report.get("findings"), list):
+            raise SecurityError("Published report is not a case report object")
+        actual_sha = canonical_report_sha256(report)
+        report_match = actual_sha == manifest["output"]["sha256"].lower()
+        citations_match = _check_citation_files(report["findings"], manifest["input_files"])
+    except (OSError, ValueError, TypeError) as exc:
+        errors.append(str(exc))
+    warnings = []
+    if manifest["manifest_version"] < 2:
+        warnings.append("Legacy manifest does not record resource hashes or the parser text limit")
+    return {
+        "match": input_match and resources_match and report_match and citations_match and not errors,
+        "input_match": input_match,
+        "resources_match": resources_match,
+        "report_match": report_match,
+        "citation_files_match": citations_match,
+        "input_changes": changes,
+        "expected_sha256": manifest["output"]["sha256"],
+        "actual_sha256": actual_sha,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+def _check_citation_files(findings: list[Any], inputs: list[dict[str, Any]]) -> bool:
+    for finding in findings:
+        if not isinstance(finding, dict) or not isinstance(finding.get("citations"), list) or not finding["citations"]:
+            return False
+        for raw in finding["citations"]:
+            if not isinstance(raw, dict):
+                return False
+            citation = Citation(**raw)
+            if not citation.is_complete():
+                return False
+            matches = [item for item in inputs if item["sha256"].lower() == citation.sha256.lower() and (
+                item["path"] == citation.source_file
+                or (len(Path(citation.source_file).parts) == 1 and Path(item["path"]).name == citation.source_file)
+            )]
+            if not matches:
+                return False
+            if citation.offset and not any(citation.offset < item["size_bytes"] for item in matches):
+                return False
+    return True

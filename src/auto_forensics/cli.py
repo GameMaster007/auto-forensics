@@ -6,11 +6,13 @@ from pathlib import Path
 
 from .api import main as api_main
 from .config import AppConfig
+from .integrity import verify_run
 from .pipeline import PipelineConfig, run_case
 from .replay import replay_manifest
 from .reviews import ReviewError, record_review
 from .security import SecurityError
 from .service import AutoForensicsService
+from .version import __version__
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -18,6 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="auto-forensics",
         description="Draft cited forensic findings for an analyst to verify.",
     )
+    parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
 
     init_case = sub.add_parser("init", help="Create or return a case workspace.")
@@ -91,6 +94,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Directory for the replayed report. Defaults to a replay directory beside the manifest.",
     )
+
+    verify = sub.add_parser("verify", help="Check a run's evidence and stored report without executing a model.")
+    verify.add_argument("manifest", type=Path, help="Path to run_manifest.json.")
+    verify.add_argument("--input-dir", type=Path, default=None, help="Check a relocated copy of the evidence.")
 
     export_case = sub.add_parser("export", help="Export case as signed zip archive.")
     export_case.add_argument("--case-id", required=True, help="Case identifier.")
@@ -262,6 +269,13 @@ def main() -> None:
 
         if args.command == "replay":
             result = replay_manifest(args.manifest, output_dir=args.output_dir)
+            print(json.dumps(result, indent=2))
+            if not result["match"]:
+                raise SystemExit(1)
+            return
+
+        if args.command == "verify":
+            result = verify_run(args.manifest, input_dir=args.input_dir)
             print(json.dumps(result, indent=2))
             if not result["match"]:
                 raise SystemExit(1)

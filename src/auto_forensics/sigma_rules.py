@@ -6,7 +6,7 @@ from typing import Any
 
 from .ids import stable_id
 from .models import Finding, TimelineEvent
-from .security import SecurityError, confine_path
+from .security import stays_in_tree
 
 logger = logging.getLogger(__name__)
 
@@ -62,13 +62,9 @@ def evaluate_sigma_rules(timeline: list[TimelineEvent], rules_dir: Path | None) 
         return []
 
     findings: list[Finding] = []
-    for rule_path in sorted(rules_dir.rglob("*")):
-        if not rule_path.is_file() or rule_path.suffix.lower() not in {".yml", ".yaml"}:
-            continue
-        try:
-            confine_path(rules_dir, rule_path)
-        except SecurityError:
-            logger.warning("Sigma rule file escapes rules directory, skipping: %s", rule_path)
+    root = rules_dir.resolve()
+    for rule_path in sorted(root.rglob("*")):
+        if not stays_in_tree(rule_path, root) or rule_path.suffix.lower() not in {".yml", ".yaml"}:
             continue
         try:
             payload = yaml.safe_load(rule_path.read_text(encoding="utf-8"))
