@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import os
 import shutil
+import stat
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -158,9 +160,7 @@ class CaseManager:
                         directory.mkdir()
                         identity = directory.stat()
                         created_directories.append((directory, identity.st_dev, identity.st_ino))
-                    # A hard link publishes a complete staged file and refuses
-                    # to replace anything created since preflight.
-                    os.link(stage / relative, destination)
+                    _publish_staged_evidence(stage / relative, destination, size, digest)
                     added.append(destination)
                     existing[key] = ArtifactIndexEntry(
                         key, src.suffix.lower().lstrip("."), size, digest, {"source_path": str(src)},
@@ -200,3 +200,72 @@ class CaseManager:
             except OSError as exc:
                 if exc.errno not in {errno.ENOTEMPTY, errno.EEXIST}:
                     raise
+
+
+def _publish_staged_evidence(staged: Path, destination: Path, size: int, digest: str) -> None:
+    """Publish without overwriting, including on filesystems without links.
+
+    The hard-link path exposes a complete file atomically. The exclusive-copy
+    fallback is protected from managed readers by the caller's case lock;
+    its custody record is committed only after the copy has been verified.
+    """
+    try:
+        os.link(staged, destination)
+        return
+    except NotImplementedError:
+        pass
+    except OSError as exc:
+        if exc.errno not in {errno.EPERM, errno.EOPNOTSUPP, errno.ENOSYS, errno.EXDEV}:
+            raise
+
+    descriptor = os.open(
+        destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600,
+    )
+    owned = os.fstat(descriptor)
+    copied = 0
+    copied_hash = hashlib.sha256()
+    closed = False
+    try:
+        with staged.open("rb") as source:
+            while chunk := source.read(min(1024 * 1024, size - copied + 1)):
+                if copied + len(chunk) > size:
+                    raise SecurityError("Staged evidence grew during exclusive publication")
+                remaining = memoryview(chunk)
+                while remaining:
+                    count = os.write(descriptor, remaining)
+                    if count <= 0:
+                        raise OSError(errno.EIO, "Evidence copy made no progress")
+                    copied_hash.update(remaining[:count])
+                    copied += count
+                    remaining = remaining[count:]
+        os.fsync(descriptor)
+        current = destination.lstat()
+        if (
+            not stat.S_ISREG(current.st_mode)
+            or (current.st_dev, current.st_ino) != (owned.st_dev, owned.st_ino)
+            or copied != size or copied_hash.hexdigest() != digest
+            or current.st_size != size or sha256_file(destination) != digest
+        ):
+            raise SecurityError("Staged evidence changed during exclusive publication")
+        shutil.copystat(staged, destination)
+    except Exception as exc:
+        # Windows refuses unlinking an open file, including on FAT volumes.
+        os.close(descriptor)
+        closed = True
+        try:
+            current = destination.lstat()
+        except FileNotFoundError:
+            raise exc
+        if (
+            stat.S_ISREG(current.st_mode)
+            and (current.st_dev, current.st_ino) == (owned.st_dev, owned.st_ino)
+            and current.st_size == copied
+            and sha256_file(destination) == copied_hash.hexdigest()
+        ):
+            destination.unlink()
+        else:
+            raise SecurityError("Failed evidence copy changed; files were preserved for recovery") from exc
+        raise
+    finally:
+        if not closed:
+            os.close(descriptor)

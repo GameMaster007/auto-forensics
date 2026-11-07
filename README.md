@@ -138,6 +138,9 @@ snapshot must also match the indexed hashes before execution and publication.
 Ingest commits its index, custody log, audit entry, and ready status together.
 A confirmed failure removes only newly published unchanged files and owned
 empty directories; uncertain commits preserve evidence for recovery.
+Filesystems without hard links use an exclusive, verified copy from staging.
+The managed case lock excludes analysis during that copy; a failed partial
+copy is removed only when its identity and copied bytes remain unchanged.
 
 Ingest responses include skipped-entry counts and up to 1,000 relative
 paths with reasons (unsupported artifact, file-size limit, symlink, or
@@ -255,7 +258,9 @@ snapshot so a source replacement after hashing cannot supply a new claim.
 
 Reports validate their full saved schema before publication. Projected
 text fields and reviewer names reject NUL characters before writes; raw
-JSON metadata retains literal evidence. Float fields accept integers only
+JSON metadata and finding review notes retain literal NUL as escaped JSON.
+Finding IDs and reviewer names reject NUL before any review write.
+Float fields accept integers only
 when their values are exactly representable in the database's floating
 point format. Synchronization also treats signed zero consistently.
 

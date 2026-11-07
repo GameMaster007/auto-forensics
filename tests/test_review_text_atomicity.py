@@ -60,10 +60,56 @@ def test_case_note_nul_is_refused_before_note_or_audit_writes(database_backend, 
     assert _snapshot(service) == before
 
 
-def test_json_only_finding_review_note_retains_nul_and_audit(database_backend, tmp_path):
+def test_json_only_finding_review_note_retains_nul_and_audit(database_backend, tmp_path, monkeypatch):
+    import auto_forensics.api as api
+    from auto_forensics.replay import replay_manifest
+
+    TestClient = pytest.importorskip("fastapi.testclient").TestClient
     service = existing._case(database_backend, tmp_path)
     finding_id = database_backend.get_findings("corruption-case")[0]["finding_id"]
-    service.review_finding("corruption-case", finding_id=finding_id, decision="accept", actor="Ada", note="before\x00after")
+    monkeypatch.setattr(api, "AutoForensicsService", lambda config: service)
+    with TestClient(api.create_app(service.config), base_url="http://127.0.0.1") as client:
+        response = client.post(
+            f"/api/cases/corruption-case/findings/{finding_id}/review",
+            json={"decision": "accept", "actor": "Ada", "note": "before\x00after"},
+        )
+        assert response.status_code == 200
     assert database_backend.get_findings("corruption-case")[0]["review_note"] == "before\x00after"
     assert any(row["action"] == "finding_reviewed" for row in database_backend.get_audit_log("corruption-case"))
     assert service.check_case_integrity("corruption-case")["match"] is True
+    output = Path(service.require_case("corruption-case")["output_dir"])
+    assert b"\\u0000" in (output / "analyst_reviews.jsonl").read_bytes()
+    assert b"\x00" not in (output / "analyst_reviews.jsonl").read_bytes()
+    assert replay_manifest(output / "run_manifest.json")["match"] is True
+
+
+@pytest.mark.parametrize("suffix", ["\x00tail", "\ud800", "\udfff"])
+def test_invalid_finding_identifier_is_refused_before_any_review_mutation(database_backend, tmp_path, monkeypatch, suffix):
+    service = existing._case(database_backend, tmp_path)
+    finding_id = database_backend.get_findings("corruption-case")[0]["finding_id"]
+    before = _snapshot(service)
+    with pytest.raises(ReviewError, match="NUL|Unicode"):
+        service.review_finding("corruption-case", finding_id=finding_id + suffix, decision="accept", actor="Ada")
+    assert _snapshot(service) == before
+    if suffix.startswith("\x00"):
+        import auto_forensics.api as api
+
+        TestClient = pytest.importorskip("fastapi.testclient").TestClient
+        monkeypatch.setattr(api, "AutoForensicsService", lambda config: service)
+        with TestClient(api.create_app(service.config), base_url="http://127.0.0.1") as client:
+            response = client.post(
+                f"/api/cases/corruption-case/findings/{finding_id}%00tail/review",
+                json={"decision": "accept", "actor": "Ada"},
+            )
+            assert response.status_code == 409
+        assert _snapshot(service) == before
+
+
+@pytest.mark.parametrize("note", ["invalid\ud800", "invalid\udfff"])
+def test_invalid_review_note_unicode_is_refused_before_any_saved_mutation(database_backend, tmp_path, note):
+    service = existing._case(database_backend, tmp_path)
+    finding_id = database_backend.get_findings("corruption-case")[0]["finding_id"]
+    before = _snapshot(service)
+    with pytest.raises(ReviewError, match="Unicode"):
+        service.review_finding("corruption-case", finding_id=finding_id, decision="annotate", actor="Ada", note=note)
+    assert _snapshot(service) == before

@@ -4,6 +4,10 @@
 
 ### Integrity fixes
 
+- Support managed ingestion on filesystems without hard links using an
+  exclusive verified copy, preserving competing files and rolling back
+  only unchanged partial data after failure. Refuse invalid finding IDs
+  before review writes; retain escaped JSON review notes through replay.
 - Scope durable finding IDs to each case, preserving existing rows in a
   transactional compatibility migration. Failed table rebuilds roll back.
 - Preserve distinct cited rows when a detector reuses an ID within one

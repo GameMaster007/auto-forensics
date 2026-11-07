@@ -372,6 +372,8 @@ def _clean_actor(value: str) -> str:
 
 
 def _clean_note(value: str, *, required: bool) -> str:
+    # Notes live in JSON, where NUL is escaped and retained as literal data.
+    # Actor and finding IDs also enter SQL TEXT columns and forbid NUL.
     if not isinstance(value, str):
         raise ReviewError("note must be text")
     text = " ".join(value.split())
@@ -379,6 +381,10 @@ def _clean_note(value: str, *, required: bool) -> str:
         raise ReviewError("an annotation needs a note")
     if len(text) > 2000:
         raise ReviewError("note is too long")
+    try:
+        text.encode("utf-8")
+    except UnicodeError as exc:
+        raise ReviewError("note must be valid Unicode text") from exc
     return text
 
 
@@ -388,4 +394,10 @@ def _clean_id(value: str) -> str:
     text = value.strip()
     if not text or any(char.isspace() for char in text) or len(text) > 200:
         raise ReviewError("finding id is required")
+    if "\x00" in text:
+        raise ReviewError("finding id cannot contain NUL characters")
+    try:
+        text.encode("utf-8")
+    except UnicodeError as exc:
+        raise ReviewError("finding id must be valid Unicode text") from exc
     return text
