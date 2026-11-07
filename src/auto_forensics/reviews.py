@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .file_ops import directory_lock
-from .manifest import MAX_REPORT_BYTES
+from .manifest import MAX_REPORT_BYTES, read_run_manifest
 from .models import (
     IOC,
     BinaryFeature,
@@ -30,6 +30,7 @@ from .models import (
 from .pipeline import rewrite_published_report
 from .security import SecurityError, read_limited_text
 from .timeline import parse_iso
+from .version import __version__
 
 ANALYST_REVIEW_LOG = "analyst_reviews.jsonl"
 _DECISIONS = {"accept", "reject"}
@@ -69,6 +70,8 @@ def record_review_locked(
     """Record under an output lock already held by a managed-case operation."""
     from .integrity import verify_run
 
+    if read_run_manifest(output_dir / "run_manifest.json").get("tool_version") != __version__:
+        raise ReviewError("Review requires the tool version recorded in the manifest; no decision was recorded")
     result = verify_run(output_dir / "run_manifest.json", input_dir=input_dir)
     if not result["match"]:
         raise ReviewError("Run integrity check failed before review; no decision was recorded")

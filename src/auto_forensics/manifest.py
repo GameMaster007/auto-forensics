@@ -45,6 +45,9 @@ def read_run_manifest(path: Path) -> dict[str, Any]:
         raise SecurityError("Run manifest must be an object with a manifest_version")
     if manifest["manifest_version"] not in {1, 2}:
         raise SecurityError("Unsupported run manifest version")
+    version = manifest.get("tool_version")
+    if version is not None and (not isinstance(version, str) or not version or len(version) > 128):
+        raise SecurityError("Run manifest has an invalid tool version")
     if not isinstance(manifest.get("case_id"), str) or not manifest["case_id"]:
         raise SecurityError("Run manifest is missing its case identifier")
     if not isinstance(manifest.get("input_dir"), str) or not manifest["input_dir"] or "\x00" in manifest["input_dir"]:

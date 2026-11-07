@@ -287,6 +287,16 @@ plugin-provided findings. Analyst acceptance comes from the review log.
 Invalid, boolean, and nonfinite model scores use the documented numeric
 defaults rather than becoming maximum confidence.
 
+This work is packaged as the unpublished development version
+`0.2.0.dev0`. The CLI, API metadata, and manifest record that same
+version. Archived runs can still be checked with `verify`; replay and
+review require their recorded tool version so changed algorithms do
+not silently rewrite an older run. A missing version also prevents
+execution. Start a separate case/output for a new-version analysis.
+Generated egg-info is excluded from source control and recreated by
+the build. The base wheel has no runtime dependencies; server, parsers,
+PDF, and database extras remain optional.
+
 `--llm off` uses the same citation rule with a score-based heuristic
 and no draft wording from the mock. `--llm ollama` calls a local
 Ollama-compatible endpoint at temperature 0. If that endpoint is down,

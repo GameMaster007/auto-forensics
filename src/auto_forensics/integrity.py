@@ -15,6 +15,7 @@ from .manifest import (
 )
 from .models import Citation
 from .security import SecurityError, read_limited_text, sha256_file, stays_in_tree
+from .version import __version__
 
 
 def compare_inventory(recorded: list[dict[str, Any]], current: list[dict[str, Any]]) -> dict[str, list[str]]:
@@ -85,6 +86,8 @@ def verify_run(manifest_path: Path, *, input_dir: Path | None = None) -> dict[st
     except (OSError, ValueError, TypeError) as exc:
         errors.append(str(exc))
     warnings = []
+    if manifest.get("tool_version") != __version__:
+        warnings.append("This run records another or unknown tool version; verify checks archived bytes, while replay/review require the recorded version")
     if manifest["manifest_version"] < 2:
         warnings.append("Legacy manifest does not record resource hashes or the parser text limit")
     if "artifacts" not in manifest:

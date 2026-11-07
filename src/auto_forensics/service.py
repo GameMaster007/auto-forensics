@@ -758,7 +758,7 @@ class AutoForensicsService:
             "output_json": str(output_dir / "case_report.json"),
             "output_md": str(output_dir / "case_report.md"),
             "output_html": str(output_dir / "case_report.html"),
-            "output_pdf": str(output_dir / "case_report.pdf"),
+            "output_pdf": str(output_dir / "case_report.pdf") if (output_dir / "case_report.pdf").is_file() else None,
             "output_attack_navigator": str(output_dir / "attack_navigator_layer.json"),
             "output_stix": str(output_dir / "case_stix_bundle.json"),
             "output_manifest": str(output_dir / "run_manifest.json"),

@@ -18,6 +18,7 @@ from .manifest import read_run_manifest
 from .pipeline import PipelineConfig, run_case
 from .reviews import ANALYST_REVIEW_LOG, ReviewError, apply_review_log
 from .security import SecurityError
+from .version import __version__
 
 
 def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict[str, Any]:
@@ -30,6 +31,8 @@ def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict
     """
     manifest_path = manifest_path.parent.resolve() / manifest_path.name
     manifest = read_run_manifest(manifest_path)
+    tool_version_match = manifest.get("tool_version") == __version__
+    version_error = "" if tool_version_match else "Replay requires the tool version recorded in the manifest; no analysis was executed"
     input_dir = Path(manifest["input_dir"])
     input_match, input_changes, input_error = check_inputs(manifest, input_dir)
     input_differences = sorted(path for paths in input_changes.values() for path in paths)
@@ -55,7 +58,7 @@ def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict
     seed_match = False
     actual_sha = ""
     executed = False
-    if input_match and resources_match and reviews_match:
+    if input_match and resources_match and reviews_match and tool_version_match:
         executed = True
         report = run_case(config_from_manifest(manifest, input_dir, destination))
         del report
@@ -69,7 +72,7 @@ def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict
         output_match = bool(actual_sha) and actual_sha == expected_sha
         prompt_match = replayed.get("model", {}).get("prompt_template_sha256") == model.get("prompt_template_sha256")
         seed_match = replayed.get("model", {}).get("seed") == model.get("seed")
-    match = input_match and resources_match and output_match and prompt_match and seed_match and not review_error
+    match = input_match and resources_match and output_match and prompt_match and seed_match and tool_version_match and not review_error
     return {
         "match": match,
         "input_match": input_match,
@@ -85,6 +88,10 @@ def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict
         "input_differences": input_differences,
         "replay_output_dir": str(destination),
         "review_error": review_error,
+        "tool_version_match": tool_version_match,
+        "recorded_tool_version": manifest.get("tool_version"),
+        "current_tool_version": __version__,
+        "version_error": version_error,
     }
 
 

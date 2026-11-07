@@ -224,6 +224,30 @@ def test_v1_manifests_remain_readable_with_explicit_resource_warning(tmp_path: P
     assert replay_manifest(manifest)["match"] is True
 
 
+@pytest.mark.parametrize("version", ["0.1.0", "future-version", None])
+def test_other_tool_versions_can_be_verified_but_cannot_be_replayed_or_reviewed(tmp_path: Path, monkeypatch, version):
+    from auto_forensics.reviews import ReviewError, record_review
+
+    _source, manifest = _run(tmp_path)
+    raw = json.loads(manifest.read_text())
+    if version is None:
+        raw.pop("tool_version")
+    else:
+        raw["tool_version"] = version
+    manifest.write_text(json.dumps(raw))
+    verification = verify_run(manifest)
+    assert verification["match"] is True and verification["warnings"]
+    before = {path.name: path.read_bytes() for path in manifest.parent.iterdir()}
+    monkeypatch.setattr("auto_forensics.replay.run_case", lambda *args, **kwargs: pytest.fail("Version mismatch must not execute analysis"))
+    replay = replay_manifest(manifest)
+    assert replay["executed"] is False and replay["tool_version_match"] is False
+    assert replay["version_error"]
+    finding_id = json.loads((manifest.parent / "case_report.json").read_text())["findings"][0]["finding_id"]
+    with pytest.raises(ReviewError, match="tool version"):
+        record_review(manifest.parent, finding_id=finding_id, decision="accept", actor="Ada")
+    assert before == {path.name: path.read_bytes() for path in manifest.parent.iterdir()}
+
+
 def test_yara_includes_are_confined_to_the_recorded_rule_tree(tmp_path: Path):
     pytest.importorskip("yara")
     from auto_forensics.yara_detector import _compile_rules

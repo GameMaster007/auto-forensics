@@ -14,6 +14,7 @@ from .config import AppConfig
 from .reviews import ReviewError
 from .security import SecurityError, confine_path, validate_case_id
 from .service import AutoForensicsService
+from .version import __version__
 
 FASTAPI_AVAILABLE = True
 try:
@@ -131,7 +132,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
     app = FastAPI(
         title="Auto Forensics Framework",
-        version="1.0.0",
+        version=__version__,
         docs_url=None if config.production else "/docs",
         redoc_url=None,
         openapi_url=None if config.production else "/openapi.json",

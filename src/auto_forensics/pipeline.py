@@ -49,6 +49,7 @@ from .timeline import normalize_timeline, timeline_sort_key
 from .timeline_imports import findings_from_imported_timelines
 from .tools import ToolRegistry
 from .verifier import MockClaimJudge, resolve_verifier_mode, verifier_limit_name, verify_findings
+from .version import __version__
 from .workers import PIPELINE_WORKER
 from .yara_detector import scan_paths_with_yara
 
@@ -748,6 +749,8 @@ def rewrite_published_report(
     digest = canonical_report_sha256(payload)
     manifest_path = output_dir / "run_manifest.json"
     manifest = read_run_manifest(manifest_path)
+    if manifest.get("tool_version") != __version__:
+        raise SecurityError("Report rewriting requires the tool version recorded in the manifest")
     manifest["output"]["sha256"] = digest
     manifest["finding_count"] = len(report.findings)
     with tempfile.TemporaryDirectory(prefix=".af-review-", dir=output_dir.parent) as temporary:
