@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,9 +27,34 @@ FINDING_V5_COLUMNS = {
 }
 
 
-def validate_finding_rebuild(columns: set[str]) -> None:
+def validate_finding_rebuild(
+    columns: set[str], *, incoming_references: bool = False,
+    indexes: list[dict[str, Any]] | None = None, foreign_keys: list[dict[str, Any]] | None = None,
+    extra_constraints: bool = False,
+) -> None:
     if columns != FINDING_V5_COLUMNS:
         raise SchemaCompatibilityError("Findings has an unrecognized column layout; refusing to discard data")
+    if incoming_references:
+        raise SchemaCompatibilityError("Findings has external foreign-key references; refusing to discard dependent data")
+    canonical_indexes = {"idx_findings_case": ["case_id"], "idx_findings_case_title": ["case_id", "title"]}
+    for index in indexes or []:
+        if (canonical_indexes.get(index["name"]) != index.get("column_names")
+                or index.get("unique") or any((index.get("dialect_options") or {}).values())):
+            extra_constraints = True
+    if foreign_keys is not None:
+        if len(foreign_keys) != 1:
+            extra_constraints = True
+        for foreign_key in foreign_keys:
+            options = foreign_key.get("options") or {}
+            if (foreign_key.get("constrained_columns") != ["case_id"]
+                    or foreign_key.get("referred_table") != "cases"
+                    or foreign_key.get("referred_columns") != ["case_id"]
+                    or str(options.get("ondelete", "")).upper() != "CASCADE"
+                    or str(options.get("onupdate") or "NO ACTION").upper() != "NO ACTION"
+                    or options.get("deferrable")):
+                extra_constraints = True
+    if extra_constraints:
+        raise SchemaCompatibilityError("Findings has custom indexes, triggers, or constraints; refusing to discard schema behavior")
 
 
 MIGRATION_STEPS: tuple[MigrationStep, ...] = (

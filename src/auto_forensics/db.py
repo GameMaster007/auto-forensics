@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -279,7 +280,33 @@ class Database:
                 primary_key = {row[1] for row in con.execute("PRAGMA table_info(findings)") if row[5]}
                 statements = () if step.name == "scope_finding_ids_to_case" and primary_key == {"case_id", "finding_id"} else step.sql_statements
                 if step.name == "scope_finding_ids_to_case" and statements:
-                    validate_finding_rebuild({row[1] for row in con.execute("PRAGMA table_info(findings)")})
+                    tables = [row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+                    incoming = any(
+                        str(foreign_key[2]).lower() == "findings"
+                        for table in tables
+                        for foreign_key in con.execute('PRAGMA foreign_key_list("' + table.replace('"', '""') + '")')
+                    )
+                    indexes = []
+                    for index in con.execute("PRAGMA index_list(findings)"):
+                        if index[3] == "pk":
+                            continue
+                        index_name = index[1].replace('"', '""')
+                        indexes.append({
+                            "name": index[1], "unique": bool(index[2]),
+                            "column_names": [row[2] for row in con.execute(f'PRAGMA index_info("{index_name}")')],
+                            "dialect_options": {"partial": True} if index[4] else {},
+                        })
+                    foreign_keys = [{
+                        "constrained_columns": [key[3]], "referred_table": key[2], "referred_columns": [key[4]],
+                        "options": {"onupdate": key[5], "ondelete": key[6]},
+                    } for key in con.execute("PRAGMA foreign_key_list(findings)")]
+                    table_sql = con.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='findings'").fetchone()[0]
+                    custom_constraints = bool(re.search(r"\b(?:CHECK|UNIQUE)\b", table_sql, re.IGNORECASE))
+                    triggers = con.execute("SELECT 1 FROM sqlite_master WHERE type='trigger' AND tbl_name='findings'").fetchone()
+                    validate_finding_rebuild(
+                        {row[1] for row in con.execute("PRAGMA table_info(findings)")}, incoming_references=incoming,
+                        indexes=indexes, foreign_keys=foreign_keys, extra_constraints=custom_constraints or bool(triggers),
+                    )
                 for statement in statements:
                     column = added_column(statement)
                     if column and column[1] in {row[1] for row in con.execute(f"PRAGMA table_info({column[0]})")}:
@@ -329,6 +356,32 @@ class Database:
                 VALUES(?, ?, ?, 'created', ?, ?, NULL)
                 """,
                 (case_id, now, now, str(evidence_dir), str(output_dir)),
+            )
+
+    def import_case_records(
+        self, case_id: str, evidence_dir: Path, output_dir: Path,
+        artifacts: list[dict[str, Any]], provenance: dict[str, Any],
+    ) -> None:
+        """Commit the imported identity, custody baseline, and audit together."""
+        now = utc_now_iso()
+        with self.connect() as con:
+            con.execute(
+                "INSERT INTO cases(case_id, created_at, updated_at, status, evidence_dir, output_dir, last_error) "
+                "VALUES(?, ?, ?, 'ready', ?, ?, NULL)",
+                (case_id, now, now, str(evidence_dir), str(output_dir)),
+            )
+            con.executemany(
+                "INSERT INTO artifacts(case_id, rel_path, artifact_type, size_bytes, sha256, ingested_at, metadata_json) VALUES(?, ?, ?, ?, ?, ?, ?)",
+                [(case_id, item["rel_path"], item["artifact_type"], item["size_bytes"], item["sha256"], now,
+                  json.dumps(item.get("metadata", {}))) for item in artifacts],
+            )
+            con.executemany(
+                "INSERT INTO evidence_hash_log(case_id, rel_path, sha256, size_bytes, logged_at) VALUES(?, ?, ?, ?, ?)",
+                [(case_id, item["rel_path"], item["sha256"], item["size_bytes"], now) for item in artifacts],
+            )
+            con.execute(
+                "INSERT INTO audit_log(case_id, action, actor, details_json, created_at) VALUES(?, 'case_imported', 'system', ?, ?)",
+                (case_id, json.dumps(provenance), now),
             )
 
     def list_cases(self) -> list[dict[str, Any]]:
@@ -882,7 +935,7 @@ class Database:
             finding_rows = con.execute(
                 """
                 SELECT finding_id, title, severity, confidence, tactic, evidence_json, recommendation,
-                       created_at, citations_json, origin, review_status, worker
+                       created_at, citations_json, origin, review_status, worker, details_json
                 FROM findings
                 WHERE case_id = ?
                   AND (

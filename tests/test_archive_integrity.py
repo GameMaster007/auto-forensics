@@ -118,8 +118,11 @@ def test_export_roundtrip_restores_custody_index_and_declares_checksum_mode(tmp_
 
 def test_keyed_archives_require_the_matching_key(tmp_path: Path):
     service = _service(tmp_path / "one", key="a" * 64)
-    case = service.create_case("source-case")
-    (Path(case["evidence_dir"]) / "note.txt").write_text("synthetic evidence")
+    service.create_case("source-case")
+    source = tmp_path / "one" / "source"
+    source.mkdir()
+    (source / "note.txt").write_text("synthetic evidence")
+    service.ingest_case("source-case", source)
     path = tmp_path / "keyed.zip"
     service.export_case_archive("source-case", path)
     with zipfile.ZipFile(path) as archive:
@@ -144,6 +147,76 @@ def test_export_rejects_symlinks_and_a_destination_inside_the_case(tmp_path: Pat
     with pytest.raises(SecurityError, match="symlinks"):
         service.export_case_archive("source-case", path)
     assert path.read_bytes() == b"existing archive remains intact"
+
+
+def test_export_cannot_replace_failed_custody_with_a_new_archive_baseline(tmp_path: Path, monkeypatch):
+    service = _service(tmp_path)
+    case = service.create_case("source-case")
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "note.txt").write_bytes(b"original evidence")
+    service.ingest_case("source-case", source)
+    original = service.db.get_evidence_hash_log("source-case")
+    (Path(case["evidence_dir"]) / "note.txt").write_bytes(b"tampered evidence")
+    # A separate read could observe original bytes while the actual ZIP
+    # inventory sees tampering. The inventory itself must match custody.
+    monkeypatch.setattr("auto_forensics.service.custody_changes", lambda *args: {"added": [], "missing": [], "modified": []})
+    destination = tmp_path / "existing.zip"
+    destination.write_bytes(b"preserved destination")
+    with pytest.raises(SecurityError, match="custody index"):
+        service.export_case_archive("source-case", destination)
+    assert destination.read_bytes() == b"preserved destination"
+    assert service.db.get_evidence_hash_log("source-case") == original
+    assert not list(tmp_path.glob(".af-export-*"))
+
+
+def test_imported_uppercase_hashes_allow_additive_ingest(tmp_path: Path):
+    service = _service(tmp_path)
+    row = _row("evidence/note.txt", b"original evidence")
+    row["sha256"] = row["sha256"].upper()
+    archive = _archive(service, tmp_path / "upper.zip", [row], [(row["rel_path"], b"original evidence")])
+    service.import_case_archive(archive)
+    assert service.db.get_artifacts("archive-case")[0]["sha256"] == row["sha256"].lower()
+    source = tmp_path / "additional"
+    source.mkdir()
+    (source / "extra.txt").write_text("additional evidence")
+    assert service.ingest_case("archive-case", source)["ingested_files"] == 1
+    assert service.check_case_integrity("archive-case")["match"] is True
+
+
+def test_import_applies_evidence_depth_limit_before_publishing(tmp_path: Path):
+    service = _service(tmp_path)
+    name = "evidence/" + "d/" * 20 + "note.txt"
+    archive = _archive(service, tmp_path / "deep.zip", [_row(name, b"data")], [(name, b"data")])
+    with pytest.raises(SecurityError, match="maximum directory depth"):
+        service.import_case_archive(archive)
+    assert service.db.get_case("archive-case") is None
+    assert not (service.config.cases_dir / "archive-case").exists()
+
+
+@pytest.mark.parametrize("limit", [1, 10_000])
+def test_import_applies_evidence_count_limit_before_publishing(tmp_path: Path, limit: int):
+    service = _service(tmp_path, policy=SecurityPolicy(max_total_files=limit))
+    contents = [(f"evidence/{index}.txt", b"x") for index in range(limit + 1)]
+    archive = _archive(service, tmp_path / "many.zip", [_row(name, data) for name, data in contents], contents)
+    with pytest.raises(SecurityError, match="manifest file limit"):
+        service.import_case_archive(archive)
+    assert service.db.get_case("archive-case") is None
+    assert not (service.config.cases_dir / "archive-case").exists()
+
+
+def test_export_accounts_for_manifest_and_preserves_destination_on_size_failure(tmp_path: Path):
+    service = _service(tmp_path, policy=SecurityPolicy(max_archive_size_bytes=1000))
+    service.create_case("source-case")
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "note.txt").write_bytes(b"A" * 850)
+    service.ingest_case("source-case", source)
+    destination = tmp_path / "existing.zip"
+    destination.write_bytes(b"preserved destination")
+    with pytest.raises(SecurityError, match="expanded archive size"):
+        service.export_case_archive("source-case", destination)
+    assert destination.read_bytes() == b"preserved destination"
 
 
 def test_incremental_ingest_keeps_the_full_index_and_original_provenance(tmp_path: Path):

@@ -39,7 +39,7 @@ def read_run_manifest(path: Path) -> dict[str, Any]:
         raise SecurityError("Run manifest must be a regular file without a symlink")
     try:
         manifest = json.loads(read_limited_text(path, 16 * 1024 * 1024))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         raise SecurityError("Run manifest could not be read as bounded JSON") from exc
     if not isinstance(manifest, dict) or type(manifest.get("manifest_version")) is not int:
         raise SecurityError("Run manifest must be an object with a manifest_version")
@@ -173,6 +173,17 @@ def hash_input_tree(input_dir: Path, max_files: int = 10_000) -> list[dict[str, 
     return sorted(rows, key=lambda row: row["path"])
 
 
+def validate_output_resource_paths(output: Path, paths: dict[str, Path | None]) -> None:
+    """Publication must never overwrite or become part of its own resources."""
+    destination = output.resolve()
+    for path in paths.values():
+        if path is None:
+            continue
+        resource = path.resolve()
+        if destination.is_relative_to(resource) or resource.is_relative_to(destination):
+            raise SecurityError("Output directory must not overlap an analysis resource path")
+
+
 def hash_analysis_resources(paths: dict[str, Path | None]) -> list[dict[str, Any]]:
     """Record rule and ATT&CK inputs as well as the case evidence."""
     resources: list[dict[str, Any]] = []
@@ -212,7 +223,7 @@ def canonical_report_sha256(report: dict[str, Any]) -> str:
     body = {key: value for key, value in report.items() if key != "generated_at"}
     try:
         payload = json.dumps(body, indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False) + "\n"
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, RecursionError) as exc:
         raise SecurityError("Report contains values that cannot be represented as finite JSON") from exc
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -221,7 +232,7 @@ def serialize_report(report: dict[str, Any]) -> str:
     """Publish only finite JSON that subsequent verification can read."""
     try:
         payload = json.dumps(report, indent=2, allow_nan=False)
-    except (ValueError, TypeError) as exc:
+    except (ValueError, TypeError, RecursionError) as exc:
         raise SecurityError("Report contains values that cannot be represented as finite JSON") from exc
     if len(payload.encode("utf-8")) > MAX_REPORT_BYTES:
         raise SecurityError("Report exceeds the supported JSON size limit (64 MiB)")

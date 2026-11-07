@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .integrity import check_inputs, check_resources, check_review_log
-from .manifest import read_run_manifest
+from .manifest import read_run_manifest, validate_output_resource_paths
 from .pipeline import PipelineConfig, run_case
 from .reviews import ANALYST_REVIEW_LOG, ReviewError, apply_review_log
 from .security import SecurityError
@@ -53,6 +53,9 @@ def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict
         raise SecurityError("Replay output must not overwrite the original run directory")
     if destination.resolve().is_relative_to(input_dir.resolve()):
         raise SecurityError("Replay output must be outside the evidence directory")
+    validate_output_resource_paths(destination, {
+        kind: Path(value) if value else None for kind, value in manifest.get("paths", {}).items()
+    })
     output_match = False
     prompt_match = False
     seed_match = False

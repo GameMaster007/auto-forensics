@@ -83,7 +83,7 @@ def verify_run(manifest_path: Path, *, input_dir: Path | None = None) -> dict[st
         actual_sha = canonical_report_sha256(report)
         report_match = actual_sha == manifest["output"]["sha256"].lower()
         citations_match = _check_citation_files(report["findings"], manifest["input_files"])
-    except (OSError, ValueError, TypeError) as exc:
+    except (OSError, ValueError, TypeError, RecursionError) as exc:
         errors.append(str(exc))
     warnings = []
     if manifest.get("tool_version") != __version__:

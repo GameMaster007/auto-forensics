@@ -468,6 +468,12 @@ def run_case(config: PipelineConfig) -> CaseReport:
     config = replace(config, input_dir=config.input_dir.resolve(), output_dir=config.output_dir.resolve())
     if config.output_dir.is_relative_to(config.input_dir):
         raise SecurityError("The output directory must be outside the evidence directory")
+    from .manifest import validate_output_resource_paths
+
+    validate_output_resource_paths(config.output_dir, {
+        "rules_dir": config.rules_dir, "sigma_rules_dir": config.sigma_rules_dir,
+        "attack_stix_path": config.attack_stix_path,
+    })
     with directory_lock(config.output_dir):
         review_path = config.output_dir / "analyst_reviews.jsonl"
         if review_path.exists() or review_path.is_symlink():

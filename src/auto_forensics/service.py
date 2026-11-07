@@ -22,12 +22,14 @@ from .db import Database
 from .db_backend import DatabaseBackend
 from .db_sqlalchemy import SQLAlchemyDatabase
 from .file_ops import directory_lock
+from .integrity import compare_inventory
 from .ioc_enrichment import EnrichmentConfig, enabled_providers, enrich_ioc
+from .manifest import hash_input_tree
 from .models import IOC, IOCEnrichment
 from .pipeline import PipelineConfig, run_case
 from .plugins import PluginRegistry
 from .reviews import ReviewError, record_review_locked
-from .security import SecurityError, sha256_file, stays_in_tree, validate_case_id
+from .security import SecurityError, bounded_tree_paths, sha256_file, stays_in_tree, validate_case_id
 
 
 def _case_operation(method: Callable[..., Any]) -> Callable[..., Any]:
@@ -198,7 +200,7 @@ class AutoForensicsService:
         evidence_root = Path(case["evidence_dir"])
         for relative, row in previous.items():
             path = evidence_root / relative
-            if not stays_in_tree(path, evidence_root) or sha256_file(path) != row["sha256"]:
+            if not stays_in_tree(path, evidence_root) or sha256_file(path) != row["sha256"].lower():
                 raise SecurityError(f"Stored evidence no longer matches its custody hash: {relative}")
         self.db.set_case_status(case_id, "ingesting", None)
         try:
@@ -468,25 +470,9 @@ class AutoForensicsService:
         )
         enrichments = self._enrich_iocs_with_cache(iocs)
 
-        case = self.require_case(case_id)
-        output_dir = Path(case["output_dir"])
-        report_path = output_dir / "case_report.json"
-        payload: dict[str, Any] = {}
-        if report_path.exists():
-            try:
-                raw = json.loads(report_path.read_text(encoding="utf-8"))
-                if isinstance(raw, dict):
-                    payload = raw
-            except json.JSONDecodeError:
-                payload = {}
-
-        payload["ioc_enrichments"] = self._serialize_enrichments(enrichments)
-        summary_obj = payload.get("summary")
-        if not isinstance(summary_obj, dict):
-            summary_obj = {}
-        summary_obj["ioc_enrichment_count"] = len(enrichments)
-        payload["summary"] = summary_obj
-        report_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        # Provider results are mutable cache data, exposed in the case overview.
+        # As in synchronous analysis, preserve the reproducible, hashed report
+        # and any analyst decisions published while provider requests ran.
 
         self.db.append_audit_log(
             action="case_ioc_enriched",
@@ -929,12 +915,14 @@ class AutoForensicsService:
             rows: list[dict[str, Any]] = []
             names: set[str] = set()
             total_bytes = 0
-            for path in sorted(case_root.rglob("*")):
+            for path in sorted(bounded_tree_paths(case_root, max_entries=50_032, max_depth=22)):
                 relative = path.relative_to(case_root)
                 if relative.parts[0].startswith(".af-"):
                     continue
                 if path.is_symlink():
                     raise SecurityError("Case export refuses symlinks")
+                if not path.is_dir() and not path.is_file():
+                    raise SecurityError("Case export refuses special files")
                 if not stays_in_tree(path, case_root):
                     continue
                 name = archive_relative_path(relative.as_posix())
@@ -953,6 +941,16 @@ class AutoForensicsService:
         temporary: Path | None = None
         with directory_lock(case_root), directory_lock(Path(case["output_dir"])):
             files = inventory()
+            expected_evidence = [{"path": row["rel_path"], "sha256": row["sha256"], "size_bytes": row["size_bytes"]}
+                                 for row in self.db.get_artifacts(case_id)]
+            archived_evidence = [{"path": row["rel_path"][len("evidence/"):], "sha256": row["sha256"], "size_bytes": row["size_bytes"]}
+                                 for row in files if row["rel_path"].startswith("evidence/")]
+            # Bind the very bytes written to the ZIP to the custody baseline;
+            # a separate successful disk check cannot authorize another snapshot.
+            if any(compare_inventory(expected_evidence, archived_evidence).values()):
+                raise SecurityError("Case evidence does not match its custody index; archive was not exported")
+            if any(custody_changes(self.db, case).values()):
+                raise SecurityError("Case evidence does not match its custody index; archive was not exported")
             manifest = {
                 "archive_version": 2,
                 "integrity_algorithm": "hmac-sha256" if self.config.api_key_hash else "sha256",
@@ -962,11 +960,14 @@ class AutoForensicsService:
                 "files": files,
             }
             manifest["signature"] = self._archive_signature(manifest)
+            manifest_bytes = json.dumps(manifest, indent=2).encode("utf-8")
+            if len(manifest_bytes) > 4 * 1024 * 1024 or len(manifest_bytes) + sum(row["size_bytes"] for row in files) > policy.max_archive_size_bytes:
+                raise SecurityError("Case and manifest exceed the expanded archive size limit")
             try:
                 with tempfile.NamedTemporaryFile(prefix=".af-export-", suffix=".zip", dir=destination_zip.parent, delete=False) as handle:
                     temporary = Path(handle.name)
                 with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-                    archive.writestr("manifest.json", json.dumps(manifest, indent=2))
+                    archive.writestr("manifest.json", manifest_bytes)
                     for item in files:
                         source_path = case_root / item["rel_path"]
                         if not stays_in_tree(source_path, case_root):
@@ -984,6 +985,10 @@ class AutoForensicsService:
                             raise SecurityError("Case files changed during export")
                 if inventory() != files:
                     raise SecurityError("Case files changed during export")
+                if temporary.stat().st_size > policy.max_archive_size_bytes:
+                    raise SecurityError("Archive exceeds the compressed size limit")
+                if any(custody_changes(self.db, case).values()):
+                    raise SecurityError("Case custody changed during export")
                 os.replace(temporary, destination_zip)
             finally:
                 if temporary is not None:
@@ -1016,33 +1021,38 @@ class AutoForensicsService:
             output_dir = case_root / "output"
             for directory in (staging / "evidence", staging / "output"):
                 directory.mkdir(exist_ok=True)
+            # Apply the same traversal bounds used by ingest, analysis, and
+            # custody checks before any imported case becomes visible.
+            hash_input_tree(staging / "evidence", max_files=min(self.config.security_policy.max_total_files, 10_000))
             with directory_lock(case_root):
                 if self.db.get_case(case_id) or case_root.exists():
                     raise SecurityError(f"Case already exists: {case_id}")
-                os.rename(staging, case_root)
-                try:
-                    self.db.create_case(case_id, evidence_dir=evidence_dir, output_dir=output_dir)
-                except Exception:
-                    shutil.rmtree(case_root)
-                    raise
                 artifacts = [
                     {
                         "rel_path": str(Path(row["rel_path"]).relative_to("evidence")),
                         "artifact_type": Path(row["rel_path"]).suffix.lower().lstrip("."),
-                        "size_bytes": row["size_bytes"], "sha256": row["sha256"],
+                        "size_bytes": row["size_bytes"], "sha256": row["sha256"].lower(),
                         "metadata": {"source_archive": str(archive_path)},
                     }
                     for row in manifest["files"] if Path(row["rel_path"]).parts[0] == "evidence"
                 ]
-                self.db.replace_artifacts(case_id, artifacts)
-                self.db.append_evidence_hash_log(case_id, artifacts)
-            self.db.append_audit_log(
-                action="case_imported",
-                actor="system",
-                details={"archive": str(archive_path), "source_case_id": archive_case_id},
-                case_id=case_id,
-            )
-            self.db.set_case_status(case_id, "ready")
+                os.rename(staging, case_root)
+                try:
+                    self.db.import_case_records(
+                        case_id, evidence_dir, output_dir, artifacts,
+                        {"archive": str(archive_path), "source_case_id": archive_case_id},
+                    )
+                except Exception as exc:
+                    # A lost commit acknowledgement is not proof of rollback.
+                    # Preserve evidence if a fresh read cannot confirm absence.
+                    try:
+                        committed = self.db.get_case(case_id)
+                    except Exception:
+                        raise SecurityError("Import database outcome is uncertain; case files were preserved for recovery") from exc
+                    if committed is not None:
+                        raise SecurityError("Import may have committed; case files were preserved. Check case integrity before retrying") from exc
+                    shutil.rmtree(case_root)
+                    raise
             return {
                 "case_id": case_id,
                 "archive": str(archive_path),

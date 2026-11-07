@@ -218,7 +218,7 @@ def read_review_log(path: Path) -> list[dict[str, Any]]:
             continue
         try:
             item = json.loads(line)
-        except json.JSONDecodeError as exc:
+        except (ValueError, RecursionError) as exc:
             raise ReviewError("analyst review log has a line that is not JSON") from exc
         if not isinstance(item, dict):
             raise ReviewError("analyst review log has a line that is not a record")
@@ -256,7 +256,10 @@ def _validate_entry(entry: dict[str, Any]) -> None:
 
 def load_case_report(path: Path) -> CaseReport:
     """Load ``case_report.json`` back into a report."""
-    raw = json.loads(read_limited_text(path, MAX_REPORT_BYTES))
+    try:
+        raw = json.loads(read_limited_text(path, MAX_REPORT_BYTES))
+    except (ValueError, RecursionError) as exc:
+        raise ReviewError("case report could not be read as bounded JSON") from exc
     return CaseReport(
         case_id=str(raw.get("case_id") or ""),
         generated_at=str(raw.get("generated_at") or ""),

@@ -267,7 +267,27 @@ class SQLAlchemyDatabase:
             primary_key = set(self.sa.inspect(con).get_pk_constraint("findings")["constrained_columns"])
             statements = () if step.name == "scope_finding_ids_to_case" and primary_key == {"case_id", "finding_id"} else step.sql_statements
             if step.name == "scope_finding_ids_to_case" and statements:
-                validate_finding_rebuild({item["name"] for item in self.sa.inspect(con).get_columns("findings")})
+                inspector = self.sa.inspect(con)
+                incoming = any(
+                    foreign_key.get("referred_table", "").lower() == "findings"
+                    for table in inspector.get_table_names()
+                    for foreign_key in inspector.get_foreign_keys(table)
+                )
+                if self.engine.dialect.name == "sqlite":
+                    triggers = con.exec_driver_sql("SELECT 1 FROM sqlite_master WHERE type='trigger' AND tbl_name='findings'").first()
+                else:
+                    triggers = con.exec_driver_sql(
+                        "SELECT 1 FROM information_schema.triggers WHERE event_object_table='findings' AND event_object_schema=current_schema()"
+                    ).first()
+                foreign_keys = inspector.get_foreign_keys("findings")
+                extra_schema = bool(inspector.get_check_constraints("findings") or inspector.get_unique_constraints("findings") or triggers)
+                extra_schema = extra_schema or any(
+                    key.get("referred_schema") not in {None, inspector.default_schema_name} for key in foreign_keys
+                )
+                validate_finding_rebuild(
+                    {item["name"] for item in inspector.get_columns("findings")}, incoming_references=incoming,
+                    indexes=inspector.get_indexes("findings"), foreign_keys=foreign_keys, extra_constraints=extra_schema,
+                )
             for statement in statements:
                 column = added_column(statement)
                 if column and column[1] in {item["name"] for item in self.sa.inspect(con).get_columns(column[0])}:
@@ -308,6 +328,31 @@ class SQLAlchemyDatabase:
                     last_error=None,
                 )
             )
+
+    def import_case_records(
+        self, case_id: str, evidence_dir: Path, output_dir: Path,
+        artifacts: list[dict[str, Any]], provenance: dict[str, Any],
+    ) -> None:
+        """Commit the imported identity, custody baseline, and audit together."""
+        now = utc_now_iso()
+        with self.engine.begin() as con:
+            con.execute(self.cases.insert().values(
+                case_id=case_id, created_at=now, updated_at=now, status="ready",
+                evidence_dir=str(evidence_dir), output_dir=str(output_dir), last_error=None,
+            ))
+            if artifacts:
+                con.execute(self.artifacts.insert(), [{
+                    "case_id": case_id, "rel_path": item["rel_path"], "artifact_type": item["artifact_type"],
+                    "size_bytes": item["size_bytes"], "sha256": item["sha256"], "ingested_at": now,
+                    "metadata_json": json.dumps(item.get("metadata", {})),
+                } for item in artifacts])
+                con.execute(self.evidence_hash_log.insert(), [{
+                    "case_id": case_id, "rel_path": item["rel_path"], "sha256": item["sha256"],
+                    "size_bytes": item["size_bytes"], "logged_at": now,
+                } for item in artifacts])
+            con.execute(self.audit_log.insert().values(
+                case_id=case_id, action="case_imported", actor="system", details_json=json.dumps(provenance), created_at=now,
+            ))
 
     def list_cases(self) -> list[dict[str, Any]]:
         stmt = self.sa.select(self.cases).order_by(self.cases.c.updated_at.desc())
@@ -578,34 +623,24 @@ class SQLAlchemyDatabase:
 
     def upsert_ioc_enrichment_cache(self, ioc_type: str, value: str, enrichment: IOCEnrichment) -> None:
         now = enrichment.fetched_at or utc_now_iso()
+        values = {
+            "ioc_type": ioc_type, "value": value, "provider": enrichment.provider,
+            "verdict": enrichment.verdict, "confidence": enrichment.confidence,
+            "details_json": json.dumps(enrichment.details), "fetched_at": now,
+        }
+        # Cache entries are shared between cases; a case lock cannot make a
+        # separate UPDATE/INSERT pair atomic for concurrent provider results.
+        if self.engine.dialect.name == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert
+        else:
+            from sqlalchemy.dialects.sqlite import insert
+        statement = insert(self.ioc_enrichment_cache).values(**values)
+        statement = statement.on_conflict_do_update(
+            index_elements=["ioc_type", "value", "provider"],
+            set_={key: getattr(statement.excluded, key) for key in ("verdict", "confidence", "details_json", "fetched_at")},
+        )
         with self.engine.begin() as con:
-            update_stmt = (
-                self.ioc_enrichment_cache.update()
-                .where(
-                    self.ioc_enrichment_cache.c.ioc_type == ioc_type,
-                    self.ioc_enrichment_cache.c.value == value,
-                    self.ioc_enrichment_cache.c.provider == enrichment.provider,
-                )
-                .values(
-                    verdict=enrichment.verdict,
-                    confidence=enrichment.confidence,
-                    details_json=json.dumps(enrichment.details),
-                    fetched_at=now,
-                )
-            )
-            result = con.execute(update_stmt)
-            if int(result.rowcount or 0) == 0:
-                con.execute(
-                    self.ioc_enrichment_cache.insert().values(
-                        ioc_type=ioc_type,
-                        value=value,
-                        provider=enrichment.provider,
-                        verdict=enrichment.verdict,
-                        confidence=enrichment.confidence,
-                        details_json=json.dumps(enrichment.details),
-                        fetched_at=now,
-                    )
-                )
+            con.execute(statement)
 
     def get_case_ioc_enrichments(self, case_id: str) -> list[dict[str, Any]]:
         stmt = (
@@ -888,6 +923,7 @@ class SQLAlchemyDatabase:
                 self.findings.c.origin,
                 self.findings.c.review_status,
                 self.findings.c.worker,
+                self.findings.c.details_json,
             )
             .where(
                 self.findings.c.case_id == case_id,

@@ -127,6 +127,8 @@ def test_finding_details_and_review_projection_round_trip_without_cross_case_upd
     with pytest.raises(ValueError, match="not indexed"):
         db.update_finding_reviews("case-one", [original, replace(original, finding_id="missing")])
     assert db.get_findings("case-one")[0] == after
+    searched = db.search_case("case-one", "Synthetic")["findings"][0]
+    assert {key: searched[key] for key in asdict(reviewed)} == asdict(reviewed)
 
 
 @pytest.mark.parametrize("raw", ["{bad", "[]", "null", 12])
@@ -319,6 +321,108 @@ def test_unrecognized_legacy_columns_are_preserved_by_refusing_the_rebuild(tmp_p
     with sqlite3.connect(path) as con:
         assert con.execute("SELECT external_annotation FROM findings").fetchone()[0] == "preserve custom data"
         assert con.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 5
+
+
+@pytest.mark.parametrize("backend", ["sqlite", "sqlalchemy"])
+def test_legacy_rebuild_refuses_to_cascade_delete_external_annotations(tmp_path: Path, backend: str):
+    path = tmp_path / "external-notes.db"
+    _legacy_database(path)
+    with sqlite3.connect(path) as con:
+        con.execute("PRAGMA foreign_keys=ON")
+        con.execute("CREATE TABLE external_notes (finding_id TEXT REFERENCES findings(finding_id) ON DELETE CASCADE, note TEXT)")
+        con.execute("INSERT INTO external_notes VALUES ('same-stable-id', 'Preserve annotation')")
+    with pytest.raises(SchemaCompatibilityError, match="dependent data"):
+        Database(path) if backend == "sqlite" else SQLAlchemyDatabase(f"sqlite:///{path}")
+    with sqlite3.connect(path) as con:
+        assert con.execute("SELECT * FROM external_notes").fetchall() == [("same-stable-id", "Preserve annotation")]
+        assert con.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 5
+        assert con.execute("SELECT title FROM findings").fetchone()[0] == "Preserve this finding"
+
+
+def test_shared_ioc_cache_upsert_is_atomic(database_backend):
+    import threading
+
+    from auto_forensics.models import IOCEnrichment
+
+    db = database_backend
+    barrier = threading.Barrier(2)
+    # Force the former UPDATE/INSERT implementation to observe the absent
+    # key twice; an atomic INSERT has no separate UPDATE to pause.
+    def pause_after_update(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith("UPDATE ioc_enrichment_cache SET"):
+            barrier.wait(timeout=5)
+
+    sqlalchemy = isinstance(db, SQLAlchemyDatabase)
+    if sqlalchemy:
+        db.sa.event.listen(db.engine, "after_cursor_execute", pause_after_update)
+    def write(index):
+        db.upsert_ioc_enrichment_cache("domain", "synthetic.test", IOCEnrichment(
+            str(index), "ioc", "fixture", "unknown", 0.5, details={"writer": index},
+        ))
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(write, range(2)))
+    finally:
+        if sqlalchemy:
+            db.sa.event.remove(db.engine, "after_cursor_execute", pause_after_update)
+    cached = db.get_cached_ioc_enrichment("domain", "synthetic.test", "fixture", ttl_minutes=60)
+    assert cached is not None and cached.details["writer"] in {0, 1}
+
+
+@pytest.mark.parametrize("table", ["artifacts", "evidence_hash_log", "audit_log"])
+def test_import_database_failure_rolls_back_custody_and_allows_retry(database_backend, tmp_path: Path, table: str):
+    from test_archive_integrity import _archive, _row, _service
+
+    db = database_backend
+    service = _service(tmp_path)
+    service.db = db
+    payload = b"synthetic imported evidence"
+    archive = _archive(service, tmp_path / "import.zip", [_row("evidence/note.txt", payload)], [("evidence/note.txt", payload)])
+    plain = isinstance(db, Database)
+    def reject_insert(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith(f"INSERT INTO {table} "):
+            raise RuntimeError("injected import persistence failure")
+    if plain:
+        with db.connect() as con:
+            con.execute(f"CREATE TRIGGER refuse_import BEFORE INSERT ON {table} BEGIN SELECT RAISE(ABORT, 'injected import persistence failure'); END")
+    else:
+        db.sa.event.listen(db.engine, "before_cursor_execute", reject_insert)
+    try:
+        with pytest.raises(Exception, match="injected import persistence failure"):
+            service.import_case_archive(archive)
+        assert db.get_case("archive-case") is None
+        assert db.get_artifacts("archive-case") == []
+        assert db.get_evidence_hash_log("archive-case") == []
+        assert not (service.config.cases_dir / "archive-case").exists()
+    finally:
+        if plain:
+            with db.connect() as con:
+                con.execute("DROP TRIGGER refuse_import")
+        else:
+            db.sa.event.remove(db.engine, "before_cursor_execute", reject_insert)
+    service.import_case_archive(archive)
+    assert service.check_case_integrity("archive-case")["match"] is True
+    assert db.get_case("archive-case")["status"] == "ready"
+    assert db.get_audit_log("archive-case")[0]["action"] == "case_imported"
+
+
+def test_import_preserves_evidence_after_lost_commit_acknowledgement(database_backend, tmp_path: Path, monkeypatch):
+    from auto_forensics.security import SecurityError
+    from test_archive_integrity import _archive, _row, _service
+
+    service = _service(tmp_path)
+    service.db = database_backend
+    payload = b"synthetic imported evidence"
+    archive = _archive(service, tmp_path / "import.zip", [_row("evidence/note.txt", payload)], [("evidence/note.txt", payload)])
+    original = service.db.import_case_records
+    def commit_then_raise(*args, **kwargs):
+        original(*args, **kwargs)
+        raise RuntimeError("lost commit acknowledgement")
+    monkeypatch.setattr(service.db, "import_case_records", commit_then_raise)
+    with pytest.raises(SecurityError, match="may have committed"):
+        service.import_case_archive(archive)
+    assert (service.config.cases_dir / "archive-case/evidence/note.txt").read_bytes() == payload
+    assert service.check_case_integrity("archive-case")["match"] is True
 
 
 @pytest.mark.parametrize("backend", ["sqlite", "sqlalchemy"])

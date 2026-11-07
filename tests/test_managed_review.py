@@ -72,6 +72,33 @@ def test_managed_reviews_update_all_views_and_replay(managed_service):
     assert replay_manifest(manifest)["match"] is True
 
 
+def test_async_enrichment_preserves_concurrent_review_and_hashed_outputs(managed_service, monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    service = managed_service
+    output = Path(service.require_case("managed-case")["output_dir"])
+    entered, release = threading.Event(), threading.Event()
+    def paused_enrichment(iocs):
+        entered.set()
+        assert release.wait(timeout=10)
+        return []
+    monkeypatch.setattr(service, "_enrich_iocs_with_cache", paused_enrichment)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(service._run_enrichment_for_case, "managed-case", "enrich-review-race")
+        try:
+            assert entered.wait(timeout=10)
+            service.review_finding("managed-case", finding_id=_finding(service)["finding_id"], decision="accept", actor="Ada")
+            reviewed = {path.name: path.read_bytes() for path in output.iterdir() if path.is_file()}
+        finally:
+            release.set()
+        assert future.result(timeout=10)["ioc_enrichment_count"] == 0
+    assert {path.name: path.read_bytes() for path in output.iterdir() if path.is_file()} == reviewed
+    assert _finding(service)["review_status"] == "accepted"
+    assert service.check_case_integrity("managed-case")["match"] is True
+    assert replay_manifest(output / "run_manifest.json")["match"] is True
+
+
 def test_standalone_reviews_are_detected_and_sync_does_not_rerun_or_change_report(managed_service, monkeypatch):
     service = managed_service
     finding = _finding(service)

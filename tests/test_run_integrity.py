@@ -11,7 +11,7 @@ import pytest
 
 from auto_forensics.cli import main
 from auto_forensics.integrity import verify_run
-from auto_forensics.manifest import hash_input_tree, read_run_manifest
+from auto_forensics.manifest import canonical_report_sha256, hash_input_tree, read_run_manifest, serialize_report
 from auto_forensics.pipeline import PipelineConfig, run_case
 from auto_forensics.plugins import PluginRegistry
 from auto_forensics.replay import replay_manifest
@@ -35,6 +35,73 @@ def _run(tmp_path: Path, *, max_text_bytes: int = 4 * 1024 * 1024, rules: bool =
         max_text_bytes=max_text_bytes, sigma_rules_dir=rules_dir,
     ))
     return source, output / "run_manifest.json"
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_replay_cannot_publish_inside_recorded_resources(tmp_path: Path, nested: bool):
+    _, manifest = _run(tmp_path, rules=True)
+    rules = tmp_path / "rules"
+    original = {path.name: path.read_bytes() for path in rules.iterdir()}
+    destination = rules / "new-output" if nested else rules
+    with pytest.raises(SecurityError, match="analysis resource"):
+        replay_manifest(manifest, destination)
+    assert {path.name: path.read_bytes() for path in rules.iterdir()} == original
+    assert verify_run(manifest)["match"] is True
+
+
+@pytest.mark.parametrize("kind", ["rules_dir", "sigma_rules_dir", "attack_stix_path"])
+def test_pipeline_rejects_overlapping_resource_output_before_any_publication(tmp_path: Path, kind: str):
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    (evidence / "sample.txt").write_text("synthetic evidence")
+    output = tmp_path / "output"
+    resource = output / "case_report.json" if kind == "attack_stix_path" else output
+    config = PipelineConfig("resource-case", evidence, output, llm_provider="off", **{kind: resource})
+    with pytest.raises(SecurityError, match="analysis resource"):
+        run_case(config)
+    assert not output.exists()
+    assert not (tmp_path / ".af-output.lock").exists()
+
+
+def _deep_json() -> str:
+    depth = max(10_000, sys.getrecursionlimit() + 100)
+    return "[" * depth + "0" + "]" * depth
+
+
+def test_deeply_nested_tampered_report_returns_integrity_failure(tmp_path: Path):
+    _, manifest = _run(tmp_path)
+    (manifest.parent / "case_report.json").write_text(
+        '{"case_id":"integrity-demo","findings":[],"extra":' + _deep_json() + "}"
+    )
+    result = verify_run(manifest)
+    assert result["match"] is False and result["report_match"] is False
+    assert result["errors"]
+
+
+def test_deeply_nested_manifest_and_review_log_have_domain_errors(tmp_path: Path):
+    from auto_forensics.reviews import ReviewError, load_case_report, read_review_log
+
+    path = tmp_path / "run_manifest.json"
+    path.write_text(_deep_json())
+    with pytest.raises(SecurityError, match="bounded JSON"):
+        read_run_manifest(path)
+    path = tmp_path / "analyst_reviews.jsonl"
+    path.write_text(_deep_json() + "\n")
+    with pytest.raises(ReviewError, match="not JSON"):
+        read_review_log(path)
+    path = tmp_path / "case_report.json"
+    path.write_text(_deep_json())
+    with pytest.raises(ReviewError, match="bounded JSON"):
+        load_case_report(path)
+
+
+@pytest.mark.parametrize("operation", [canonical_report_sha256, serialize_report])
+def test_deep_report_serialization_has_a_domain_error(operation):
+    nested = []
+    for _ in range(sys.getrecursionlimit() + 100):
+        nested = [nested]
+    with pytest.raises(SecurityError, match="finite JSON"):
+        operation({"extra": nested})
 
 
 def test_verify_is_read_only_and_reports_specific_input_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

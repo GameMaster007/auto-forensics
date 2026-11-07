@@ -101,6 +101,8 @@ resource hashes. Version 1 manifests remain readable with a warning
 about those missing checks. Replay stops before executing when evidence
 or recorded resources differ. Output must stay outside the evidence
 directory, and replay refuses to overwrite the original run directory.
+Run and replay output must also stay disjoint from configured rule and
+ATT&CK resource paths, including paths that do not yet exist.
 Repeated default replays use fresh `replay`, `replay-2`, … directories.
 The evidence inventory fails explicitly above 10,000 files or depth 20;
 it does not silently truncate the manifest. A change detected while a
@@ -141,6 +143,15 @@ sender. Legacy archives that meet the path and size rules remain readable. API e
 confined to `$AUTO_FORENSICS_HOME/exports` (relative names are accepted),
 and API imports honor the configured ingest roots. CLI export accepts
 an explicit destination outside the case itself.
+Export binds the archived evidence inventory to the managed custody
+index and refuses modified, missing, or unindexed evidence. Both compressed
+and expanded archive limits include the manifest. Import applies the
+same evidence count and depth bounds as analysis before publication.
+Imported case records, custody hashes, and their audit entry commit in
+one database transaction. A confirmed failure removes the new case
+directory; an uncertain database commit preserves evidence and reports
+the recovery condition. A process crash between filesystem publication
+and database commit still requires operator recovery.
 
 An analyst records a decision on that same output directory. The
 default status stays `analyst-unverified` until this command runs:
