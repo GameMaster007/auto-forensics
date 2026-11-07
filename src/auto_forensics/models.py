@@ -31,6 +31,13 @@ class ArtifactEvent:
 
 
 @dataclass(slots=True)
+class BinaryStringMatch:
+    keyword: str
+    offset: int
+    encoding: str
+
+
+@dataclass(slots=True)
 class BinaryFeature:
     path: str
     size_bytes: int
@@ -41,6 +48,10 @@ class BinaryFeature:
     import_hints: list[str] = field(default_factory=list)
     suspicious_score: float = 0.0
     rationale: list[str] = field(default_factory=list)
+    string_matches: list[BinaryStringMatch] = field(default_factory=list)
+    string_match_count: int = 0
+    string_matches_truncated: bool = False
+    strings_scanned_bytes: int = 0
 
 
 @dataclass(slots=True)

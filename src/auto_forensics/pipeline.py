@@ -17,6 +17,7 @@ from .artifacts import discover_artifacts
 from .attack_mapper import apply_attack_mapping, build_attack_navigator_layer, load_attack_techniques
 from .case_store import MemoryCaseStore
 from .citations import (
+    CitationKey,
     catalog_from_citations,
     citation_for_binary,
     citation_from_event,
@@ -173,6 +174,12 @@ def _to_markdown(report: CaseReport) -> str:
         lines.append(f"  - SHA256: `{binary.sha256}`")
         lines.append(f"  - Entropy: `{binary.entropy}`")
         lines.append(f"  - Suspicious score: `{binary.suspicious_score}`")
+        if binary.strings_scanned_bytes:
+            lines.append(f"  - Keyword scan: {binary.strings_scanned_bytes} bytes, {binary.string_match_count} matches")
+            for match in binary.string_matches[:10]:
+                lines.append(f"  - String `{match.keyword}` at byte {match.offset} ({match.encoding})")
+            if binary.string_matches_truncated or len(binary.string_matches) > 10:
+                lines.append("  - Additional string locations are listed or marked truncated in the JSON report.")
         if binary.rationale:
             lines.append(f"  - Rationale: {'; '.join(binary.rationale)}")
     lines.append("")
@@ -419,7 +426,7 @@ def _evidence_catalog(
     input_dir: Path,
     artifacts: list[ArtifactEvent],
     binary_features: list[BinaryFeature],
-) -> dict[tuple[str, str], Citation]:
+) -> dict[CitationKey, Citation]:
     pointers: list[Citation] = []
     for event in artifacts:
         pointer = citation_from_event(event)
@@ -520,7 +527,12 @@ def _run_case(config: PipelineConfig) -> CaseReport:
 
     def analyze_binaries(found: list[Path]) -> list[BinaryFeature]:
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="af-binary") as pool:
-            return list(pool.map(plugin_registry.analyze_binary, found))
+            features = list(pool.map(plugin_registry.analyze_binary, found))
+        for path, feature in zip(found, features):
+            # The framework owns source provenance, including distinct files
+            # that share a basename or the same content hash.
+            feature.path = str(path.relative_to(config.input_dir))
+        return features
 
     def yara_scan(candidates: list[Path]) -> tuple[list[Finding], list[TimelineEvent]]:
         return scan_paths_with_yara(candidates, config.rules_dir)

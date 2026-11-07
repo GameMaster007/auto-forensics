@@ -27,8 +27,8 @@ from .models import ArtifactEvent, Citation, Finding
 from .security import sha256_file, stays_in_tree
 
 MAX_VERIFY_BYTES = 8 * 1024 * 1024
-# Same window ``analyze_binary`` uses for string hits. An offset-0
-# citation has to see a keyword found in that window.
+# Whole-file citations use a bounded prefix. Located keyword citations
+# can read a small window at their recorded offset anywhere in the file.
 MAX_BINARY_VERIFY_BYTES = 32 * 1024 * 1024
 _OFFSET_WINDOW = 8192
 _TEXT_PARSERS = {
@@ -252,7 +252,11 @@ def read_cited_text(input_dir: Path, citation: Citation) -> tuple[str | None, st
         window = handle.read(cap)
     if start and not window and start >= path.stat().st_size:
         return None, REASON_UNREADABLE
-    return window.decode("utf-8", errors="replace"), ""
+    # Located UTF-16LE strings start on their first character, even at an
+    # odd file offset. Decode one representation, avoiding claims formed
+    # by concatenating unrelated decoding alternatives.
+    encoding = "utf-16le" if len(window) >= 4 and window[1] == 0 and window[3] == 0 and 32 <= window[0] <= 126 and 32 <= window[2] <= 126 else "utf-8"
+    return window.decode(encoding, errors="replace"), ""
 
 
 def locate_source(input_dir: Path, source_file: str, sha256: str = "") -> Path | None:

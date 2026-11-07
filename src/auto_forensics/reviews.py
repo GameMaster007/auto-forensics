@@ -19,6 +19,7 @@ from .file_ops import directory_lock
 from .models import (
     IOC,
     BinaryFeature,
+    BinaryStringMatch,
     CaseReport,
     Citation,
     Finding,
@@ -256,7 +257,7 @@ def load_case_report(path: Path) -> CaseReport:
     return CaseReport(
         case_id=str(raw.get("case_id") or ""),
         generated_at=str(raw.get("generated_at") or ""),
-        binary_features=[_from_dict(BinaryFeature, item) for item in raw.get("binary_features") or []],
+        binary_features=[_binary_from_dict(item) for item in raw.get("binary_features") or []],
         findings=[_finding_from_dict(item) for item in raw.get("findings") or []],
         timeline=[_from_dict(TimelineEvent, item) for item in raw.get("timeline") or []],
         summary=dict(raw.get("summary") or {}),
@@ -273,6 +274,12 @@ def _finding_from_dict(item: dict[str, Any]) -> Finding:
     return Finding(**payload)
 
 
+def _binary_from_dict(item: dict[str, Any]) -> BinaryFeature:
+    payload = {key: value for key, value in item.items() if key in _FIELD_NAMES[BinaryFeature]}
+    payload["string_matches"] = [_from_dict(BinaryStringMatch, match) for match in item.get("string_matches") or []]
+    return BinaryFeature(**payload)
+
+
 def _from_dict(cls: type, item: dict[str, Any]) -> Any:
     names = _FIELD_NAMES[cls]
     return cls(**{key: value for key, value in item.items() if key in names})
@@ -280,7 +287,7 @@ def _from_dict(cls: type, item: dict[str, Any]) -> Any:
 
 _FIELD_NAMES = {
     cls: {item.name for item in fields(cls)}
-    for cls in (Finding, Citation, BinaryFeature, TimelineEvent, IOC, IOCEnrichment)
+    for cls in (Finding, Citation, BinaryFeature, BinaryStringMatch, TimelineEvent, IOC, IOCEnrichment)
 }
 
 

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 from .api import main as api_main
+from .binary_analysis import analyze_binary
 from .config import AppConfig
 from .integrity import verify_run
 from .pipeline import PipelineConfig, run_case
@@ -106,6 +108,9 @@ def build_parser() -> argparse.ArgumentParser:
     check_case.add_argument("--case-id", required=True)
     sync_report = sub.add_parser("sync-report", help="Restore findings and timeline database views from a verified saved report.")
     sync_report.add_argument("--case-id", required=True)
+
+    inspect_binary = sub.add_parser("inspect-binary", help="Read hashes, entropy, imports, and located keywords without executing a binary.")
+    inspect_binary.add_argument("path", type=Path)
 
     export_case = sub.add_parser("export", help="Export case as an integrity-checked zip archive.")
     export_case.add_argument("--case-id", required=True, help="Case identifier.")
@@ -302,6 +307,10 @@ def main() -> None:
 
         if args.command == "sync-report":
             print(json.dumps(ensure_service().sync_case_report(args.case_id), indent=2))
+            return
+
+        if args.command == "inspect-binary":
+            print(json.dumps(asdict(analyze_binary(args.path)), indent=2))
             return
     except ReviewError as exc:
         raise SystemExit(f"Review refused: {exc}") from exc

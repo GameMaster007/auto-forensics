@@ -209,6 +209,22 @@ hosts and model-generated process hints do not supply observed process
 candidates. Packet beacon timing is grouped separately for each source
 IP, destination IP, destination port, and protocol.
 
+`auto-forensics inspect-binary PATH` inspects one local file without
+creating a case or executing it. Hashes, byte frequencies, and fixed
+keyword locations are collected in one streaming pass over the entire
+file. The scan recognizes ASCII and UTF-16LE keywords, including matches
+across chunk boundaries, and records offsets and encodings. It keeps at
+most 256 locations while retaining the first match for every detected
+keyword/encoding pair; total counts and truncation are explicit. PE
+import inspection is an additional optional parse. Keywords and entropy
+are triage signals that still require analyst interpretation.
+
+Case reports include these locations, and binary drafts cite the first
+location of their representative keyword. The verifier re-reads that
+window using the corresponding ASCII/UTF-16LE representation. Nested
+binary paths are relative to the evidence root; separate sources with
+the same filename or hash retain separate citation identities.
+
 `--llm off` uses the same citation rule with a score-based heuristic
 and no draft wording from the mock. `--llm ollama` calls a local
 Ollama-compatible endpoint at temperature 0. If that endpoint is down,

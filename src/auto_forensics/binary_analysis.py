@@ -4,9 +4,12 @@ import hashlib
 import logging
 import math
 import re
+import stat
+from collections import Counter
 from pathlib import Path
 
-from .models import BinaryFeature
+from .models import BinaryFeature, BinaryStringMatch
+from .security import SecurityError
 
 logger = logging.getLogger(__name__)
 
@@ -39,17 +42,13 @@ PE_IMPORT_KEYWORDS = {
     "RegSetValueExA",
 }
 
-ASCII_STRINGS_PATTERN = re.compile(rb"[ -~]{5,}")
-
-
-def _hash_file(path: Path) -> tuple[str, str]:
-    sha256 = hashlib.sha256()
-    md5 = hashlib.md5()
-    with path.open("rb") as f:
-        while chunk := f.read(1024 * 1024):
-            sha256.update(chunk)
-            md5.update(chunk)
-    return sha256.hexdigest(), md5.hexdigest()
+_STRING_ENCODINGS = ("ascii", "utf-16le")
+_STRING_PATTERNS = {
+    encoding: re.compile(b"|".join(re.escape(keyword.encode(encoding)) for keyword in SUSPICIOUS_KEYWORDS), re.IGNORECASE)
+    for encoding in _STRING_ENCODINGS
+}
+_STRING_OVERLAP = max(len(keyword.encode(encoding)) for encoding in _STRING_ENCODINGS for keyword in SUSPICIOUS_KEYWORDS) - 1
+MAX_STRING_MATCHES = 256
 
 
 def shannon_entropy(data: bytes) -> float:
@@ -68,36 +67,54 @@ def shannon_entropy(data: bytes) -> float:
     return round(entropy, 4)
 
 
-def _streaming_entropy(path: Path, chunk_size: int = 1024 * 1024) -> tuple[float, int]:
-    """Compute Shannon entropy by streaming the file in chunks. Returns (entropy, total_bytes)."""
-    buckets = [0] * 256
+def _scan_binary(path: Path, chunk_size: int = 1024 * 1024) -> tuple[str, str, float, int, list[BinaryStringMatch], int]:
+    """Hash, count entropy, and locate fixed ASCII/UTF-16LE keywords in one pass.
+
+    Keep bounded locations, reserving space for the first occurrence of
+    every keyword/encoding pair even when a different keyword is repeated
+    many times earlier in the file. No binary code is executed.
+    """
+    if chunk_size < 1:
+        raise ValueError("Binary scan chunk size must be positive")
+    sha256 = hashlib.sha256()
+    md5 = hashlib.md5(usedforsecurity=False)
+    buckets: Counter[int] = Counter()
     total = 0
-    with path.open("rb") as f:
-        while chunk := f.read(chunk_size):
+    first: dict[tuple[str, str], BinaryStringMatch] = {}
+    samples: list[BinaryStringMatch] = []
+    match_count = 0
+    carry = b""
+    sample_limit = MAX_STRING_MATCHES - len(SUSPICIOUS_KEYWORDS) * len(_STRING_ENCODINGS)
+    with path.open("rb") as handle:
+        while chunk := handle.read(chunk_size):
+            sha256.update(chunk)
+            md5.update(chunk)
+            buckets.update(chunk)
+            window = carry + chunk
+            base_offset = total - len(carry)
+            for encoding, pattern in _STRING_PATTERNS.items():
+                for match in pattern.finditer(window):
+                    if match.end() <= len(carry):
+                        continue
+                    keyword = match.group().decode(encoding).lower()
+                    location = BinaryStringMatch(keyword, base_offset + match.start(), encoding)
+                    match_count += 1
+                    first.setdefault((keyword, encoding), location)
+                    if len(samples) < sample_limit:
+                        samples.append(location)
+            carry = window[-_STRING_OVERLAP:]
             total += len(chunk)
-            for b in chunk:
-                buckets[b] += 1
-    if total == 0:
-        return 0.0, 0
     entropy = 0.0
-    for count in buckets:
-        if count == 0:
-            continue
+    for count in buckets.values():
         p = count / total
         entropy -= p * math.log2(p)
-    return round(entropy, 4), total
-
-
-def _extract_strings(raw: bytes, limit: int = 4000) -> list[str]:
-    values = [m.group().decode("ascii", errors="ignore") for m in ASCII_STRINGS_PATTERN.finditer(raw)]
-    return values[:limit]
-
-
-# Maximum bytes to load into memory for string extraction. Keeps RSS bounded for large binaries.
-_STRING_EXTRACT_CAP = 32 * 1024 * 1024  # 32 MB
+    unique = {(item.keyword, item.offset, item.encoding): item for item in [*samples, *first.values()]}
+    matches = sorted(unique.values(), key=lambda item: (item.offset, item.encoding, item.keyword))
+    return sha256.hexdigest(), md5.hexdigest(), round(entropy, 4), total, matches, match_count
 
 
 def _extract_pe_import_hints(path: Path) -> list[str]:
+    pe = None
     try:
         import pefile  # type: ignore
     except ImportError:
@@ -120,23 +137,23 @@ def _extract_pe_import_hints(path: Path) -> list[str]:
     except Exception as exc:
         logger.debug("PE import analysis failed for %s: %s", path, exc)
         return []
+    finally:
+        if pe is not None:
+            pe.close()
 
 
 def analyze_binary(path: Path) -> BinaryFeature:
-    sha256, md5 = _hash_file(path)
-
-    # Stream entropy to avoid loading multi-hundred-MB files into memory.
-    entropy, _ = _streaming_entropy(path)
-
-    # Only read up to _STRING_EXTRACT_CAP bytes for string extraction.
-    size_bytes = path.stat().st_size
-    read_cap = min(size_bytes, _STRING_EXTRACT_CAP)
-    with path.open("rb") as f:
-        raw = f.read(read_cap)
-    strings = _extract_strings(raw)
-    lc = [s.lower() for s in strings]
-    hits = sorted({k for k in SUSPICIOUS_KEYWORDS if any(k in s for s in lc)})
+    before = path.stat()
+    if not stat.S_ISREG(before.st_mode):
+        raise SecurityError("Binary analysis requires a regular file")
+    sha256, md5, entropy, size_bytes, matches, match_count = _scan_binary(path)
+    hits = sorted({match.keyword for match in matches})
     import_hints = _extract_pe_import_hints(path)
+    after = path.stat()
+    if size_bytes != after.st_size or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+        after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+    ):
+        raise SecurityError("Binary changed during analysis; refusing inconsistent features")
 
     score = 0.0
     rationale: list[str] = []
@@ -169,4 +186,8 @@ def analyze_binary(path: Path) -> BinaryFeature:
         import_hints=import_hints,
         suspicious_score=round(score, 2),
         rationale=rationale,
+        string_matches=matches,
+        string_match_count=match_count,
+        string_matches_truncated=match_count > len(matches),
+        strings_scanned_bytes=size_bytes,
     )
