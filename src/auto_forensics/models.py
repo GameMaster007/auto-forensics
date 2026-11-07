@@ -233,7 +233,7 @@ def decode_finding_row(row: dict[str, Any]) -> dict[str, Any]:
     for name in FINDING_DETAIL_FIELDS:
         value = details.get(name)
         if name in {"confidence_low", "confidence_high"}:
-            item[name] = value if type(value) in {int, float} and 0 <= value <= 1 and math.isfinite(value) else None
+            item[name] = value if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1 and math.isfinite(value) else None
         elif name == "ioc_refs":
             item[name] = [reference for reference in value if isinstance(reference, str)] if isinstance(value, list) else []
         elif name == "analyst_verified":

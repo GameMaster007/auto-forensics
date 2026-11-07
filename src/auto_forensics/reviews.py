@@ -288,7 +288,7 @@ def _from_dict(cls: type, item: dict[str, Any]) -> Any:
     return cls(**{key: value for key, value in item.items() if key in names})
 
 
-_FIELD_NAMES = {
+_FIELD_NAMES: dict[type, set[str]] = {
     cls: {item.name for item in fields(cls)}
     for cls in (Finding, Citation, BinaryFeature, BinaryStringMatch, TimelineEvent, IOC, IOCEnrichment)
 }

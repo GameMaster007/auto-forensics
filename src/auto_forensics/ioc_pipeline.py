@@ -192,9 +192,9 @@ def extract_iocs(
             continue
         chunks: list[str] = [event.description]
         for key in ("query", "host", "source_host", "source_ip", "tls_sni", "dst_ip", "src_ip", "path", "command"):
-            value = event.related.get(key)
-            if value:
-                chunks.append(str(value))
+            field_value = event.related.get(key)
+            if field_value:
+                chunks.append(str(field_value))
         for ioc_type, values in _extract_from_text(" ".join(chunks)).items():
             for item in values:
                 _add_ioc(out, ioc_type, item, source=f"timeline:{event.event_type}", metadata={"citations": [asdict(citation)]})
