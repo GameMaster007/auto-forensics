@@ -352,19 +352,23 @@ def test_sqlite_backends_can_reopen_each_others_database_without_reapplying_migr
     reopened.engine.dispose()
 
 
-def test_a_newer_sqlite_schema_is_not_downgraded(tmp_path: Path):
+@pytest.mark.parametrize("marker", ["history", "pragma", "both"])
+def test_a_newer_sqlite_schema_is_not_downgraded(tmp_path: Path, marker: str):
     path = tmp_path / "newer.db"
     db = Database(path)
     db.create_case("preserved-case", tmp_path / "evidence", tmp_path / "output")
     with db.connect() as con:
-        con.execute("UPDATE schema_migrations SET version=999 WHERE version=?", (LATEST_SCHEMA_VERSION,))
-        con.execute("PRAGMA user_version=999")
+        if marker in {"history", "both"}:
+            con.execute("UPDATE schema_migrations SET version=999 WHERE version=?", (LATEST_SCHEMA_VERSION,))
+        if marker in {"pragma", "both"}:
+            con.execute("PRAGMA user_version=999")
     for factory in (lambda: Database(path), lambda: SQLAlchemyDatabase(f"sqlite:///{path}")):
         with pytest.raises(SchemaVersionError, match="refusing a downgrade"):
             factory()
     with sqlite3.connect(path) as con:
         assert con.execute("SELECT case_id FROM cases").fetchone()[0] == "preserved-case"
-        assert con.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 999
+        assert con.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == (999 if marker != "pragma" else LATEST_SCHEMA_VERSION)
+        assert con.execute("PRAGMA user_version").fetchone()[0] == (999 if marker != "history" else LATEST_SCHEMA_VERSION)
 
 
 @pytest.mark.parametrize("database_backend", ["postgres"], indirect=True)

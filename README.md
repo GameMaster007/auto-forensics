@@ -188,6 +188,12 @@ contains `decision`, `actor`, optional `note`, and optional `override`.
 These routes use the existing API-key policy. Conflicting reviews or
 failed integrity checks return HTTP 409.
 
+Blocking analysis, import/export, and database operations run outside
+the API event loop, so health checks and status streams can remain
+responsive. Concurrent background requests for the same active job
+accept one submission. Server shutdown drains accepted jobs before
+closing database connections.
+
 Database migrations are transactional on SQLite and PostgreSQL. Finding
 IDs are scoped to a case, so analyzing the same artifact in another
 case does not overwrite it. Full technique, confidence-range, machine

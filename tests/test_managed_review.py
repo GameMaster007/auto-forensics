@@ -46,10 +46,7 @@ def managed_service(tmp_path: Path, request, offline_enrichment: None):
     try:
         yield service
     finally:
-        service._analysis_executor.shutdown(wait=True)
-        service._enrichment_executor.shutdown(wait=True)
-        if hasattr(service.db, "engine"):
-            service.db.engine.dispose()
+        service.close()
 
 
 def _finding(service: AutoForensicsService) -> dict:

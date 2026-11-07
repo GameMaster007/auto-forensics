@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -197,13 +198,33 @@ class Database:
 
     def init_schema(self) -> None:
         with self.connect() as con:
-            if str(con.execute("PRAGMA journal_mode").fetchone()[0]).lower() != "wal":
-                con.execute("PRAGMA journal_mode=WAL")
+            self._enable_wal(con)
             con.execute("BEGIN IMMEDIATE")
             for statement in SCHEMA_SQL.split(";"):
                 if statement.strip() and not statement.strip().upper().startswith("PRAGMA "):
                     con.execute(statement)
             self.run_migrations(con)
+
+    @staticmethod
+    def _enable_wal(con: sqlite3.Connection) -> None:
+        # Changing journal mode can return SQLITE_BUSY immediately even
+        # with the connection's busy timeout. Another initializer may be
+        # making the same change. Retry only that contention, before DDL.
+        deadline = time.monotonic() + 5.0
+        delay = 0.01
+        while True:
+            try:
+                if str(con.execute("PRAGMA journal_mode").fetchone()[0]).lower() != "wal":
+                    con.execute("PRAGMA journal_mode=WAL")
+                return
+            except sqlite3.OperationalError as exc:
+                code = getattr(exc, "sqlite_errorcode", None)
+                busy = (code is not None and code & 0xFF in {5, 6}) or str(exc) in {"database is locked", "database table is locked"}
+                remaining = deadline - time.monotonic()
+                if not busy or remaining <= 0:
+                    raise
+                time.sleep(min(delay, remaining))
+                delay = min(delay * 2, 0.1)
 
     def get_schema_version(self) -> int:
         with self.connect() as con:

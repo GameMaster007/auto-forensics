@@ -255,6 +255,8 @@ class SQLAlchemyDatabase:
 
     def _run_migrations(self, con: Any) -> dict[str, Any]:
         current = int(con.execute(self.sa.select(self.sa.func.max(self.schema_migrations.c.version))).scalar_one_or_none() or 0)
+        if self.engine.dialect.name == "sqlite":
+            current = max(current, int(con.exec_driver_sql("PRAGMA user_version").scalar_one()))
         if current > LATEST_SCHEMA_VERSION:
             raise SchemaVersionError("Database schema is newer than this program; refusing a downgrade")
         applied: list[dict[str, Any]] = []

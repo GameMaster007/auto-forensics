@@ -39,6 +39,19 @@ def _case_operation(method: Callable[..., Any]) -> Callable[..., Any]:
     return locked
 
 
+def _background_submission(method: Callable[..., Any]) -> Callable[..., Any]:
+    @wraps(method)
+    def submit(self: AutoForensicsService, *args: Any, **kwargs: Any) -> Any:
+        # Serialize the check/create/submit sequence, including shutdown.
+        # Status callbacks use their own locks and can run immediately.
+        with self._submission_lock:
+            if self._closed:
+                raise SecurityError("Service is shutting down; no new background jobs are accepted")
+            return method(self, *args, **kwargs)
+
+    return submit
+
+
 class AutoForensicsService:
     """Case lifecycle: create, ingest, analyse, and report.
 
@@ -71,7 +84,22 @@ class AutoForensicsService:
         self._enrichment_job_ids: dict[str, str] = {}
         self._analysis_lock = threading.Lock()
         self._enrichment_lock = threading.Lock()
+        self._submission_lock = threading.Lock()
+        self._shutdown_lock = threading.Lock()
+        self._closed = False
         self.cleanup_job_history(retention_days=self.config.job_retention_days)
+
+    def close(self) -> None:
+        """Drain accepted jobs before disposing database connections; idempotent."""
+        with self._shutdown_lock:
+            if self._closed:
+                return
+            with self._submission_lock:
+                self._closed = True
+            self._analysis_executor.shutdown(wait=True)
+            self._enrichment_executor.shutdown(wait=True)
+            if isinstance(self.db, SQLAlchemyDatabase):
+                self.db.engine.dispose()
 
     def run_db_migrations(self) -> dict[str, Any]:
         return self.db.run_migrations()
@@ -476,6 +504,7 @@ class AutoForensicsService:
         )
         return result
 
+    @_background_submission
     def enrich_case_iocs_async(self, case_id: str) -> dict[str, Any]:
         case_id = validate_case_id(case_id)
         self.require_case(case_id)
@@ -576,6 +605,7 @@ class AutoForensicsService:
             "error": case.get("last_error"),
         }
 
+    @_background_submission
     def analyze_case_async(self, case_id: str, enable_llama: bool = True) -> dict[str, Any]:
         case_id = validate_case_id(case_id)
         self.require_case(case_id)

@@ -309,6 +309,9 @@ def main() -> None:
         raise SystemExit(f"Security validation failed: {exc}") from exc
     except OSError as exc:
         raise SystemExit(f"File operation failed: {exc}") from exc
+    finally:
+        if service is not None:
+            service.close()
 
     raise SystemExit(f"Unknown command: {args.command}")
 
