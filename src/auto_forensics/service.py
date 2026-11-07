@@ -852,6 +852,9 @@ class AutoForensicsService:
     def add_case_note(self, case_id: str, content: str, author: str = "analyst") -> dict[str, Any]:
         case_id = validate_case_id(case_id)
         self.require_case(case_id)
+        if any(not isinstance(value, str) or "\x00" in value for value in (content, author)):
+            raise SecurityError("Case-note author and content must be text without NUL characters")
+        validate_json_nesting({"author": author, "content": content})
         note = self.db.add_analyst_note(case_id, author=author, content=content)
         self.db.append_audit_log(
             action="note_added",

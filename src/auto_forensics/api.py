@@ -65,7 +65,7 @@ class CaseCreateRequest(BaseModel):
 
 
 class IngestRequest(BaseModel):
-    source_dir: str = Field(min_length=1, max_length=4096)
+    source_dir: str = Field(min_length=1, max_length=4096, pattern=r"^[^\x00]+$")
 
 
 class AnalyzeRequest(BaseModel):
@@ -73,16 +73,16 @@ class AnalyzeRequest(BaseModel):
 
 
 class NoteCreateRequest(BaseModel):
-    content: str = Field(min_length=1, max_length=10000)
-    author: str = Field(default="analyst", min_length=1, max_length=128)
+    content: str = Field(min_length=1, max_length=10000, pattern=r"^[^\x00]+$")
+    author: str = Field(default="analyst", min_length=1, max_length=128, pattern=r"^[^\x00]+$")
 
 
 class CaseExportRequest(BaseModel):
-    destination_path: str = Field(min_length=1, max_length=4096)
+    destination_path: str = Field(min_length=1, max_length=4096, pattern=r"^[^\x00]+$")
 
 
 class CaseImportRequest(BaseModel):
-    archive_path: str = Field(min_length=1, max_length=4096)
+    archive_path: str = Field(min_length=1, max_length=4096, pattern=r"^[^\x00]+$")
     case_id_override: str | None = Field(default=None, min_length=2, max_length=64)
 
 
@@ -92,7 +92,7 @@ class JobCleanupRequest(BaseModel):
 
 class FindingReviewRequest(BaseModel):
     decision: Literal["accept", "reject", "annotate"]
-    actor: str = Field(min_length=1, max_length=120)
+    actor: str = Field(min_length=1, max_length=120, pattern=r"^[^\x00]+$")
     note: str = Field(default="", max_length=2000)
     override: bool = False
 

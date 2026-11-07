@@ -57,6 +57,21 @@ def _create_case_with_artifacts(client, tmp_path: Path, case_id: str) -> None:
     assert ingested.status_code == 200
 
 
+@pytest.mark.parametrize("operation,field", [("ingest", "source_dir"), ("export", "destination_path"), ("import", "archive_path")])
+@pytest.mark.parametrize("value", ["\x00start", "end\x00", "nested\x00path"])
+def test_filesystem_api_paths_reject_nul_before_any_case_mutation(tmp_path, operation, field, value):
+    pytest.importorskip("fastapi")
+    TestClient = pytest.importorskip("fastapi.testclient").TestClient
+    with TestClient(create_app(_config(tmp_path)), base_url="http://127.0.0.1", raise_server_exceptions=False) as client:
+        assert client.post("/api/cases", json={"case_id": "nul-path-case"}).status_code == 200
+        before = client.get("/api/cases/nul-path-case").json()
+        route = "/api/cases/import" if operation == "import" else f"/api/cases/nul-path-case/{operation}"
+        response = client.post(route, json={field: value})
+        assert response.status_code == 422
+        assert response.json()["error"] == "validation_error"
+        assert client.get("/api/cases/nul-path-case").json() == before
+
+
 def test_html_report_has_evidence_with_strict_csp_and_without_scripts(tmp_path: Path, offline_enrichment: None):
     from html.parser import HTMLParser
 

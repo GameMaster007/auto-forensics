@@ -362,6 +362,12 @@ def _clean_actor(value: str) -> str:
     text = " ".join(value.split())
     if not text or len(text) > 120:
         raise ReviewError("actor is required")
+    if "\x00" in text:
+        raise ReviewError("actor cannot contain NUL characters")
+    try:
+        text.encode("utf-8")
+    except UnicodeError as exc:
+        raise ReviewError("actor must be valid Unicode text") from exc
     return text
 
 
