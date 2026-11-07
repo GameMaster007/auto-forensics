@@ -393,6 +393,9 @@ class AutoForensicsService:
 
     def get_case_enrichment_status(self, case_id: str) -> dict[str, Any]:
         case_id = validate_case_id(case_id)
+        db_job = self.db.get_case_latest_job(case_id, job_type="enrichment")
+        if db_job is not None:
+            return db_job
         with self._enrichment_lock:
             cached = self._enrichment_status.get(case_id)
             if cached:
@@ -408,10 +411,6 @@ class AutoForensicsService:
                     "message": "IOC enrichment in progress",
                     "error": None,
                 }
-
-        db_job = self.db.get_case_latest_job(case_id, job_type="enrichment")
-        if db_job is not None:
-            return db_job
 
         case = self.db.get_case(case_id)
         if not case:
@@ -555,6 +554,11 @@ class AutoForensicsService:
 
     def get_case_status(self, case_id: str) -> dict[str, Any]:
         case_id = validate_case_id(case_id)
+        # A different service worker may have started a newer job. A local
+        # completed-status cache must never hide the shared database's job.
+        db_job = self.db.get_case_latest_job(case_id, job_type="analysis")
+        if db_job is not None:
+            return db_job
         with self._analysis_lock:
             cached = self._analysis_status.get(case_id)
             if cached:
@@ -570,10 +574,6 @@ class AutoForensicsService:
                     "message": "Analysis in progress",
                     "error": None,
                 }
-
-        db_job = self.db.get_case_latest_job(case_id, job_type="analysis")
-        if db_job is not None:
-            return db_job
 
         case = self.db.get_case(case_id)
         if not case:

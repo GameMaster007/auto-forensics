@@ -251,9 +251,10 @@ failed integrity checks return HTTP 409.
 
 Blocking analysis, import/export, and database operations run outside
 the API event loop, so health checks and status streams can remain
-responsive. Concurrent background requests for the same active job
-accept one submission. Server shutdown drains accepted jobs before
-closing database connections.
+responsive. Concurrent background requests within a server worker for
+the same active job accept one submission. Status polling reads the latest
+shared database job even when another worker started it. Server shutdown
+drains accepted jobs before closing database connections.
 
 Database migrations are transactional on SQLite and PostgreSQL. Finding
 IDs are scoped to a case, so analyzing the same artifact in another
@@ -344,7 +345,8 @@ or acquisition time, so relocating unchanged evidence does not alter those
 timeline records.
 
 Legacy finding-key migrations refuse custom schema behavior they cannot
-preserve, including dependent foreign keys, custom constraints/indexes,
+preserve, including noncanonical column types/defaults, dependent foreign
+keys, custom constraints/indexes,
 triggers, collations, PostgreSQL policies/rules/grants, and annotations.
 The original schema and records remain intact for a reviewed manual migration.
 
