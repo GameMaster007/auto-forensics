@@ -64,6 +64,7 @@ jobs:
           tests/test_ioc_projection_integrity.py tests/test_review_log_integrity.py
           tests/test_cross_worker_status.py tests/test_report_numeric_projection.py
           tests/test_report_text_projection.py tests/test_review_text_atomicity.py
+          tests/test_search_input_integrity.py
           tests/test_postgres_optional.py -q --tb=short
 
   gitleaks:

@@ -279,7 +279,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/api/cases/{case_id}/search", response_class=JSONResponse, dependencies=[Depends(api_guard)])
-    def search_case(case_id: str, q: str = Query(min_length=1), limit: int = Query(default=100, ge=1, le=500)):
+    def search_case(case_id: str, q: str = Query(min_length=1, pattern=r"^[^\x00]+$"), limit: int = Query(default=100, ge=1, le=500)):
         try:
             return service.search_case(validate_case_id(case_id), q, limit=limit)
         except SecurityError as exc:

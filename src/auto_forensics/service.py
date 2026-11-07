@@ -872,6 +872,9 @@ class AutoForensicsService:
     def search_case(self, case_id: str, query: str, limit: int = 100) -> dict[str, Any]:
         case_id = validate_case_id(case_id)
         self.require_case(case_id)
+        if not isinstance(query, str) or "\x00" in query:
+            raise SecurityError("Search query must be text without NUL characters")
+        validate_json_nesting(query)
         cleaned = query.strip()
         if not cleaned:
             raise SecurityError("Search query cannot be empty.")
