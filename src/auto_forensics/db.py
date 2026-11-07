@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from .migrations import LATEST_SCHEMA_VERSION, MIGRATION_STEPS
+from .migrations import LATEST_SCHEMA_VERSION, MIGRATION_STEPS, SchemaVersionError, added_column
 from .models import IOC, Finding, IOCEnrichment, TimelineEvent, citations_as_json, decode_finding_row, utc_now_iso
 
 SCHEMA_SQL = """
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
 CREATE INDEX IF NOT EXISTS idx_artifacts_case ON artifacts(case_id);
 
 CREATE TABLE IF NOT EXISTS findings (
-    finding_id TEXT PRIMARY KEY,
+    finding_id TEXT NOT NULL,
     case_id TEXT NOT NULL,
     title TEXT NOT NULL,
     severity TEXT NOT NULL,
@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS findings (
     evidence_json TEXT NOT NULL,
     recommendation TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    PRIMARY KEY(case_id, finding_id),
     FOREIGN KEY(case_id) REFERENCES cases(case_id) ON DELETE CASCADE
 );
 
@@ -168,6 +169,7 @@ class Database:
     def connect(self) -> Iterator[sqlite3.Connection]:
         con = sqlite3.connect(self.path)
         con.row_factory = sqlite3.Row
+        con.execute("PRAGMA foreign_keys=ON")
         try:
             yield con
             con.commit()
@@ -179,7 +181,12 @@ class Database:
 
     def init_schema(self) -> None:
         with self.connect() as con:
-            con.executescript(SCHEMA_SQL)
+            if str(con.execute("PRAGMA journal_mode").fetchone()[0]).lower() != "wal":
+                con.execute("PRAGMA journal_mode=WAL")
+            con.execute("BEGIN IMMEDIATE")
+            for statement in SCHEMA_SQL.split(";"):
+                if statement.strip() and not statement.strip().upper().startswith("PRAGMA "):
+                    con.execute(statement)
             self.run_migrations(con)
 
     def get_schema_version(self) -> int:
@@ -204,8 +211,14 @@ class Database:
             con = sqlite3.connect(self.path)
             con.row_factory = sqlite3.Row
             close_after = True
-
+        owns_transaction = not con.in_transaction
+        savepoint = False
         try:
+            if owns_transaction:
+                con.execute("PRAGMA foreign_keys=ON")
+                con.execute("BEGIN IMMEDIATE")
+            con.execute("SAVEPOINT auto_forensics_migrations")
+            savepoint = True
             con.execute(
                 """
                 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -216,20 +229,22 @@ class Database:
                 """
             )
             row = con.execute("PRAGMA user_version").fetchone()
-            current = int(row[0]) if row else 0
+            recorded = con.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+            current = max(int(row[0]) if row else 0, int(recorded or 0))
+            if current > LATEST_SCHEMA_VERSION:
+                raise SchemaVersionError("Database schema is newer than this program; refusing a downgrade")
             applied: list[dict[str, Any]] = []
 
             for step in MIGRATION_STEPS:
                 if step.version <= current:
                     continue
-                for statement in step.sql_statements:
-                    try:
-                        con.executescript(statement)
-                    except sqlite3.OperationalError as exc:
-                        text = str(exc).lower()
-                        if "duplicate column name" in text or "already exists" in text:
-                            continue
-                        raise
+                primary_key = {row[1] for row in con.execute("PRAGMA table_info(findings)") if row[5]}
+                statements = () if step.name == "scope_finding_ids_to_case" and primary_key == {"case_id", "finding_id"} else step.sql_statements
+                for statement in statements:
+                    column = added_column(statement)
+                    if column and column[1] in {row[1] for row in con.execute(f"PRAGMA table_info({column[0]})")}:
+                        continue
+                    con.execute(statement)
                 applied_at = utc_now_iso()
                 con.execute(
                     """
@@ -242,13 +257,25 @@ class Database:
                 current = step.version
                 applied.append({"version": step.version, "name": step.name, "applied_at": applied_at})
 
-            if close_after:
+            if current >= 6 and {row[1] for row in con.execute("PRAGMA table_info(findings)") if row[5]} != {"case_id", "finding_id"}:
+                raise sqlite3.DatabaseError("Finding key schema disagrees with the recorded migration version")
+            con.execute(f"PRAGMA user_version = {current}")
+            con.execute("RELEASE SAVEPOINT auto_forensics_migrations")
+            savepoint = False
+            if owns_transaction:
                 con.commit()
             return {
                 "current_version": current,
                 "latest_version": LATEST_SCHEMA_VERSION,
                 "applied": applied,
             }
+        except Exception:
+            if savepoint:
+                con.execute("ROLLBACK TO SAVEPOINT auto_forensics_migrations")
+                con.execute("RELEASE SAVEPOINT auto_forensics_migrations")
+            if owns_transaction:
+                con.rollback()
+            raise
         finally:
             if close_after:
                 con.close()

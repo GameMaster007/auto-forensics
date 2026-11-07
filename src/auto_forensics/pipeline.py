@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import logging
 import shutil
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +75,43 @@ class PipelineConfig:
 def _severity_rank(value: str) -> int:
     mapping = {"critical": 4, "high": 3, "medium": 2, "low": 1}
     return mapping.get(value.lower(), 0)
+
+
+def _unique_finding_ids(findings: list[Finding]) -> list[Finding]:
+    """Keep exact duplicates once and disambiguate reused detector IDs.
+
+    Exported artifact IDs may be reused on different rows. Their citations
+    remain distinct, so both findings must survive without colliding in a
+    case's database or analyst review log.
+    """
+    groups: dict[str, list[Finding]] = {}
+    for finding in findings:
+        if not isinstance(finding.finding_id, str) or not finding.finding_id.strip() or len(finding.finding_id) > 128:
+            raise SecurityError("A detector returned an invalid finding identifier")
+        groups.setdefault(finding.finding_id, []).append(finding)
+    occupied = set(groups)
+    result: list[Finding] = []
+    for original, group in groups.items():
+        if len(group) == 1:
+            result.extend(group)
+            continue
+        payloads = [(json.dumps(asdict(finding), sort_keys=True, allow_nan=False), finding) for finding in group]
+        seen: set[str] = set()
+        for payload, finding in payloads:
+            if payload in seen:
+                continue
+            seen.add(payload)
+            attempt = 0
+            while True:
+                digest = hashlib.sha256(f"{original}:{attempt}:{payload}".encode("utf-8")).hexdigest()[:32]
+                candidate = f"fdg-{digest}"
+                if candidate not in occupied:
+                    break
+                attempt += 1
+            finding.finding_id = candidate
+            occupied.add(candidate)
+            result.append(finding)
+    return result
 
 
 def _build_summary(
@@ -565,6 +603,7 @@ def _run_case(config: PipelineConfig) -> CaseReport:
     findings.extend(tools.call("builtin_detectors", artifacts, binary_features, timeline))
     findings.extend(tools.call("sigma_rules", timeline))
     findings, dropped_uncited = drop_uncited(findings, catalog)
+    findings = _unique_finding_ids(findings)
     judge_mode = resolve_verifier_mode(provider, config.verifier_judge)
     judge = _claim_judge(judge_mode, workflow)
     live_llm = provider in {"ollama", "openai_compatible"}

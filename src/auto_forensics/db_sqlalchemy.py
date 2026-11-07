@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .migrations import LATEST_SCHEMA_VERSION, MIGRATION_STEPS
+from .migrations import LATEST_SCHEMA_VERSION, MIGRATION_STEPS, SchemaVersionError, added_column
 from .models import IOC, Finding, IOCEnrichment, TimelineEvent, citations_as_json, decode_finding_row, utc_now_iso
 
 
@@ -40,6 +40,13 @@ class SQLAlchemyDatabase:
             engine_kwargs["pool_timeout"] = max(1, int(pool_timeout_seconds))
             engine_kwargs["pool_recycle"] = max(60, int(pool_recycle_seconds))
         self.engine = sa.create_engine(database_url, **engine_kwargs)
+        if self.engine.dialect.name == "sqlite":
+            @sa.event.listens_for(self.engine, "connect")
+            def enable_foreign_keys(connection: Any, record: Any) -> None:
+                del record
+                cursor = connection.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
         md = sa.MetaData()
 
         self.cases = sa.Table(
@@ -70,7 +77,7 @@ class SQLAlchemyDatabase:
         self.findings = sa.Table(
             "findings",
             md,
-            sa.Column("finding_id", sa.String(128), primary_key=True),
+            sa.Column("finding_id", sa.String(128), nullable=False),
             sa.Column("case_id", sa.String(128), sa.ForeignKey("cases.case_id", ondelete="CASCADE"), nullable=False),
             sa.Column("title", sa.Text, nullable=False),
             sa.Column("severity", sa.String(32), nullable=False),
@@ -83,6 +90,7 @@ class SQLAlchemyDatabase:
             sa.Column("origin", sa.String(32), nullable=False, server_default=sa.text("'detector'")),
             sa.Column("review_status", sa.String(32), nullable=False, server_default=sa.text("'unverified'")),
             sa.Column("worker", sa.String(64), nullable=False, server_default=sa.text("'pipeline'")),
+            sa.PrimaryKeyConstraint("case_id", "finding_id"),
         )
 
         self.timeline = sa.Table(
@@ -185,8 +193,14 @@ class SQLAlchemyDatabase:
             sa.Column("updated_at", sa.Text, nullable=False),
         )
 
-        md.create_all(self.engine)
-        self.run_migrations()
+        try:
+            with self.engine.begin() as con:
+                self._lock_schema(con)
+                md.create_all(con)
+                self._run_migrations(con)
+        except Exception:
+            self.engine.dispose()
+            raise
 
     def _rows(self, result: Any) -> list[dict[str, Any]]:
         return [dict(row._mapping) for row in result]
@@ -209,32 +223,49 @@ class SQLAlchemyDatabase:
         with self.engine.begin() as con:
             return self._rows(con.execute(stmt))
 
-    def run_migrations(self) -> dict[str, Any]:
-        current = self.get_schema_version()
-        applied: list[dict[str, Any]] = []
-        with self.engine.begin() as con:
-            for step in MIGRATION_STEPS:
-                if step.version <= current:
-                    continue
-                for statement in step.sql_statements:
-                    try:
-                        con.exec_driver_sql(statement)
-                    except Exception as exc:
-                        text = str(exc).lower()
-                        if "duplicate column" in text or "already exists" in text:
-                            continue
-                        raise
-                applied_at = utc_now_iso()
-                con.execute(
-                    self.schema_migrations.insert().values(
-                        version=step.version,
-                        name=step.name,
-                        applied_at=applied_at,
-                    )
-                )
-                current = step.version
-                applied.append({"version": step.version, "name": step.name, "applied_at": applied_at})
+    def _lock_schema(self, con: Any) -> None:
+        if self.engine.dialect.name == "sqlite":
+            con.exec_driver_sql("BEGIN IMMEDIATE")
+        elif self.engine.dialect.name == "postgresql":
+            # One transaction-scoped application lock per database prevents
+            # concurrent workers from applying the same schema migration.
+            con.exec_driver_sql("SELECT pg_advisory_xact_lock(4707763809633354309)")
 
+    def run_migrations(self) -> dict[str, Any]:
+        with self.engine.begin() as con:
+            self._lock_schema(con)
+            return self._run_migrations(con)
+
+    def _run_migrations(self, con: Any) -> dict[str, Any]:
+        current = int(con.execute(self.sa.select(self.sa.func.max(self.schema_migrations.c.version))).scalar_one_or_none() or 0)
+        if current > LATEST_SCHEMA_VERSION:
+            raise SchemaVersionError("Database schema is newer than this program; refusing a downgrade")
+        applied: list[dict[str, Any]] = []
+        for step in MIGRATION_STEPS:
+            if step.version <= current:
+                continue
+            primary_key = set(self.sa.inspect(con).get_pk_constraint("findings")["constrained_columns"])
+            statements = () if step.name == "scope_finding_ids_to_case" and primary_key == {"case_id", "finding_id"} else step.sql_statements
+            for statement in statements:
+                column = added_column(statement)
+                if column and column[1] in {item["name"] for item in self.sa.inspect(con).get_columns(column[0])}:
+                    continue
+                con.exec_driver_sql(statement)
+            applied_at = utc_now_iso()
+            con.execute(
+                self.schema_migrations.insert().values(
+                    version=step.version,
+                    name=step.name,
+                    applied_at=applied_at,
+                )
+            )
+            current = step.version
+            applied.append({"version": step.version, "name": step.name, "applied_at": applied_at})
+
+        if current >= 6 and set(self.sa.inspect(con).get_pk_constraint("findings")["constrained_columns"]) != {"case_id", "finding_id"}:
+            raise RuntimeError("Finding key schema disagrees with the recorded migration version")
+        if self.engine.dialect.name == "sqlite":
+            con.exec_driver_sql(f"PRAGMA user_version = {current}")
         return {
             "current_version": current,
             "latest_version": LATEST_SCHEMA_VERSION,

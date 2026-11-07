@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 
@@ -8,6 +9,10 @@ class MigrationStep:
     version: int
     name: str
     sql_statements: tuple[str, ...]
+
+
+class SchemaVersionError(RuntimeError):
+    """This program cannot safely modify a database created by newer code."""
 
 
 MIGRATION_STEPS: tuple[MigrationStep, ...] = (
@@ -63,7 +68,55 @@ MIGRATION_STEPS: tuple[MigrationStep, ...] = (
         name="add_finding_worker",
         sql_statements=("ALTER TABLE findings ADD COLUMN worker TEXT NOT NULL DEFAULT 'pipeline'",),
     ),
+    MigrationStep(
+        version=6,
+        name="scope_finding_ids_to_case",
+        sql_statements=(
+            """
+            CREATE TABLE findings_case_scoped (
+                finding_id TEXT NOT NULL,
+                case_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                confidence DOUBLE PRECISION NOT NULL,
+                tactic TEXT NOT NULL,
+                evidence_json TEXT NOT NULL,
+                recommendation TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                citations_json TEXT NOT NULL DEFAULT '[]',
+                origin TEXT NOT NULL DEFAULT 'detector',
+                review_status TEXT NOT NULL DEFAULT 'unverified',
+                worker TEXT NOT NULL DEFAULT 'pipeline',
+                PRIMARY KEY(case_id, finding_id),
+                FOREIGN KEY(case_id) REFERENCES cases(case_id) ON DELETE CASCADE
+            )
+            """,
+            """
+            INSERT INTO findings_case_scoped (
+                finding_id, case_id, title, severity, confidence, tactic,
+                evidence_json, recommendation, created_at, citations_json,
+                origin, review_status, worker
+            ) SELECT finding_id, case_id, title, severity, confidence, tactic,
+                evidence_json, recommendation, created_at, citations_json,
+                origin, review_status, worker FROM findings
+            """,
+            "DROP TABLE findings",
+            "ALTER TABLE findings_case_scoped RENAME TO findings",
+            "CREATE INDEX idx_findings_case ON findings(case_id)",
+            "CREATE INDEX idx_findings_case_title ON findings(case_id, title)",
+        ),
+    ),
 )
 
 
 LATEST_SCHEMA_VERSION = MIGRATION_STEPS[-1].version if MIGRATION_STEPS else 0
+
+
+def added_column(statement: str) -> tuple[str, str] | None:
+    """Recognize our ADD COLUMN steps so existing columns can be skipped safely.
+
+    Catching a duplicate-column exception leaves PostgreSQL's transaction
+    aborted. Inspect the schema before executing instead.
+    """
+    match = re.match(r"\s*ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+(\w+)", statement, re.IGNORECASE)
+    return (match[1], match[2]) if match else None

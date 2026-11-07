@@ -27,6 +27,12 @@ CI installs `".[dev,db,sigma,server]"` so the API, database, and Sigma
 tests run too. Use those extras locally for the same coverage. Enrichment
 job tests use a local response fixture and do not query a live service.
 
+PostgreSQL migration tests use an isolated schema per test when
+`AUTO_FORENSICS_TEST_POSTGRES_URL` points to a disposable test database.
+CI provides that database in a PostgreSQL service container. Tests cover
+existing SQLite/PostgreSQL schemas, case-scoped finding IDs, foreign keys,
+and rollback after a deliberately failed table rebuild.
+
 The offline demo needs no API key:
 
 ```bash

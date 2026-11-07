@@ -4,6 +4,14 @@
 
 ### Integrity fixes
 
+- Scope durable finding IDs to each case, preserving existing rows in a
+  transactional compatibility migration. Failed table rebuilds roll back.
+- Preserve distinct cited rows when a detector reuses an ID within one
+  case; disambiguate them deterministically and deduplicate exact repeats.
+- Enable SQLite foreign keys on each connection, serialize schema setup,
+  avoid PostgreSQL duplicate-column transaction failures, and refuse
+  database downgrades. Add PostgreSQL-backed CI migration coverage.
+
 - Add a read-only `verify` command with explicit evidence change lists,
   report hash checks, citation file checks, and optional relocated inputs.
 - Record parser limits and rule/STIX hashes in manifest version 2;
