@@ -875,7 +875,7 @@ class Database:
                 SELECT job_id, case_id, job_type, state, progress, message, error, result_json, created_at, updated_at
                 FROM analysis_jobs
                 WHERE case_id = ? AND job_type = ?
-                ORDER BY updated_at DESC
+                ORDER BY created_at DESC, updated_at DESC, job_id DESC
                 LIMIT 1
                 """,
                 (case_id, job_type),

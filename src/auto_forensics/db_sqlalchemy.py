@@ -900,7 +900,7 @@ class SQLAlchemyDatabase:
                 self.analysis_jobs.c.updated_at,
             )
             .where(self.analysis_jobs.c.case_id == case_id, self.analysis_jobs.c.job_type == job_type)
-            .order_by(self.analysis_jobs.c.updated_at.desc())
+            .order_by(self.analysis_jobs.c.created_at.desc(), self.analysis_jobs.c.updated_at.desc(), self.analysis_jobs.c.job_id.desc())
             .limit(1)
         )
         with self.engine.begin() as con:

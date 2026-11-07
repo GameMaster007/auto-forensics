@@ -53,6 +53,11 @@ def test_completed_worker_cache_cannot_hide_new_shared_job(database_backend, tmp
         observed = getattr(first, getter)(case_id)
         assert observed["job_id"] == new["job_id"] != old["job_id"]
         assert observed["state"] == "running"
+        # A late completion/heartbeat from the older worker must not become the
+        # "latest" job merely because its updated_at is now the newest value.
+        setter = first._set_analysis_status if kind == "analysis" else first._set_enrichment_status
+        setter(case_id, old["job_id"], "complete", 100, "Older completion observed late")
+        assert getattr(first, getter)(case_id)["job_id"] == new["job_id"]
         release.set()
         getattr(second, jobs)[case_id].result(timeout=10)
         final = getattr(first, getter)(case_id)
