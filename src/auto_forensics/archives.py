@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable
 
 from .manifest import REPORT_ARTIFACT_NAMES, valid_digest
-from .security import SecurityError, SecurityPolicy
+from .security import SecurityError, SecurityPolicy, validate_json_nesting
 
 _WINDOWS_DEVICES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} | {
     f"{prefix}{digit}" for prefix in ("COM", "LPT") for digit in "123456789¹²³"
@@ -101,6 +101,7 @@ def extract_verified_archive(
             if "manifest.json" not in members:
                 raise SecurityError("Archive missing manifest.json")
             manifest = json.loads(archive.read(members["manifest.json"]).decode("utf-8"))
+            validate_json_nesting(manifest)
             if not isinstance(manifest, dict):
                 raise SecurityError("Invalid archive manifest")
             verify_signature(manifest)

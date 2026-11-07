@@ -8,7 +8,7 @@ from dataclasses import MISSING, fields
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from .models import IOC, BinaryFeature, BinaryStringMatch, CaseReport, Citation, Finding, IOCEnrichment, TimelineEvent
-from .security import SecurityError
+from .security import SecurityError, validate_json_nesting
 
 _RECORDS = (CaseReport, Finding, Citation, BinaryFeature, BinaryStringMatch, TimelineEvent, IOC, IOCEnrichment)
 _HINTS = {record: get_type_hints(record) for record in _RECORDS}
@@ -57,6 +57,7 @@ def validate_report_data(raw: Any) -> None:
     Hash validity does not imply field validity: a producer can checksum an
     object that cannot safely become a Finding or a database parameter.
     """
+    validate_json_nesting(raw)
     if not isinstance(raw, dict):
         raise SecurityError("Published report must be an object")
     payload = dict(raw)

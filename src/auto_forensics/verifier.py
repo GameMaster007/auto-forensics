@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .models import ArtifactEvent, Citation, Finding
-from .security import bounded_tree_paths, sha256_file, stays_in_tree
+from .security import bounded_tree_paths, sha256_file, stays_in_tree, validate_json_nesting
 
 MAX_VERIFY_BYTES = 8 * 1024 * 1024
 # Whole-file citations use a bounded prefix. Located keyword citations
@@ -302,7 +302,8 @@ def _read_row(path: Path, row: int) -> str | None:
     if path.suffix.lower() == ".json":
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
+            validate_json_nesting(raw)
+        except (OSError, ValueError, RecursionError):
             raw = None
         if isinstance(raw, list):
             records = [item for item in raw if isinstance(item, dict)]
@@ -362,7 +363,8 @@ def _json_object_line(line: str) -> dict | None:
         return None
     try:
         value = json.loads(stripped)
-    except json.JSONDecodeError:
+        validate_json_nesting(value)
+    except (ValueError, RecursionError):
         return None
     if isinstance(value, dict):
         return value

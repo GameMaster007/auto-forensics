@@ -13,6 +13,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from .security import validate_json_nesting
+
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -203,15 +205,12 @@ def finding_details_as_json(finding: Finding) -> str:
 
 
 def decode_json_object(raw: Any) -> dict[str, Any]:
-    if isinstance(raw, dict):
-        return dict(raw)
-    if not isinstance(raw, str):
-        return {}
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+        validate_json_nesting(parsed)
     except (ValueError, RecursionError):
         return {}
-    return parsed if isinstance(parsed, dict) else {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
 
 
 def decode_finding_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -221,9 +220,9 @@ def decode_finding_row(row: dict[str, Any]) -> dict[str, Any]:
     bad row cannot hide the rest of the case.
     """
     item = dict(row)
-    item["evidence"] = _decode_json_list(item.pop("evidence_json", "[]"))
+    item["evidence"] = decode_json_list(item.pop("evidence_json", "[]"))
     if "citations_json" in item:
-        item["citations"] = _decode_json_list(item.pop("citations_json"))
+        item["citations"] = decode_json_list(item.pop("citations_json"))
     else:
         item["citations"] = []
     item["origin"] = str(item.get("origin") or "detector")
@@ -243,13 +242,10 @@ def decode_finding_row(row: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
-def _decode_json_list(raw: Any) -> list[Any]:
-    if isinstance(raw, list):
-        return raw
-    if not isinstance(raw, str):
-        return []
+def decode_json_list(raw: Any) -> list[Any]:
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+        validate_json_nesting(parsed)
     except (ValueError, RecursionError):
         return []
     return parsed if isinstance(parsed, list) else []

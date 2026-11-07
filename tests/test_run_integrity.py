@@ -104,6 +104,29 @@ def test_deep_report_serialization_has_a_domain_error(operation):
         operation({"extra": nested})
 
 
+def test_json_nesting_limit_is_explicit_and_independent_of_python_recursion_limit():
+    from auto_forensics.security import validate_json_nesting
+
+    value = 0
+    for _ in range(128):
+        value = [value]
+    validate_json_nesting(value)
+    with pytest.raises(SecurityError, match="maximum depth"):
+        validate_json_nesting([value])
+
+
+def test_bad_jsonl_records_do_not_hide_a_later_valid_tool_record(tmp_path: Path):
+    from auto_forensics.artifacts import load_json_artifacts
+
+    path = tmp_path / "events.jsonl"
+    path.write_text('{"RuleTitle":"Bad","EventID":1,"Timestamp":"2026-01-01T00:00:00Z","extra":' + _deep_json() + '}\n' + json.dumps({
+        "RuleTitle": "Valid later record", "EventID": 1, "Timestamp": "2026-01-01T00:00:00Z",
+    }) + "\n")
+    events = load_json_artifacts(path)
+    assert len(events) == 1 and events[0].description == "Valid later record"
+    assert events[0].metadata["row"] == 2
+
+
 @pytest.mark.parametrize("review_target", ["source", "destination"])
 def test_replay_excludes_review_writers_until_log_restoration_finishes(tmp_path: Path, monkeypatch, review_target: str):
     import auto_forensics.replay as replay

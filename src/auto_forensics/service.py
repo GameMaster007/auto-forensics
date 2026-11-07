@@ -282,12 +282,12 @@ class AutoForensicsService:
 
     def _enrich_iocs_with_cache(self, iocs: list[IOC]) -> list[IOCEnrichment]:
         cfg = self._enrichment_config()
-        providers = enabled_providers(cfg)
-        if not providers:
+        if not enabled_providers(cfg):
             return []
 
         output: list[IOCEnrichment] = []
         for ioc in iocs:
+            providers = enabled_providers(cfg, ioc)
             cached_providers: set[str] = set()
             for provider in providers:
                 cached = self.db.get_cached_ioc_enrichment(
@@ -305,7 +305,7 @@ class AutoForensicsService:
             if len(cached_providers) == len(providers):
                 continue
 
-            for fresh in enrich_ioc(ioc, cfg):
+            for fresh in enrich_ioc(ioc, cfg, providers=set(providers) - cached_providers):
                 if fresh.provider in cached_providers:
                     continue
                 self.db.upsert_ioc_enrichment_cache(ioc.ioc_type, ioc.value, fresh)

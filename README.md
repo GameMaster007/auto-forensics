@@ -126,6 +126,8 @@ Replay holds the source and destination locks through review restoration,
 so a concurrent analyst decision cannot be replaced between replay stages.
 Imported reports must have valid field types and unique finding/IOC IDs
 before verification, review, or database synchronization can use them.
+JSON inputs and saved records have a maximum nesting depth of 128;
+nonfinite JSON numbers are refused consistently across Python versions.
 
 Managed ingestion is additive. A second ingest keeps the existing
 custody index and original provenance, stages new files before copying,
@@ -213,6 +215,17 @@ does not repair or conceal custody failures. Referenced rule resources
 must remain available to verify an imported run. Report publication and
 database updates are separate transactions; a failed database update
 reports that the review was saved and needs synchronization.
+
+IOC enrichment results live in the case overview and database cache;
+saved reports and analyst decisions retain their recorded content.
+Configure `AUTO_FORENSICS_VIRUSTOTAL_API_KEY`,
+`AUTO_FORENSICS_MALWAREBAZAAR_API_KEY`, or
+`AUTO_FORENSICS_ABUSEIPDB_API_KEY` to enable the corresponding provider.
+MalwareBazaar uses its required `Auth-Key` header. Requests are limited
+to applicable providers whose cache entry is missing or expired.
+Responses are bounded to 4 MiB and validated before creating a verdict.
+Provider failures remain failed lookups, and invalid legacy cache entries
+are skipped until refreshed. No provider is queried by default.
 
 The API exposes the same operations through
 `GET /api/cases/{case_id}/integrity`,

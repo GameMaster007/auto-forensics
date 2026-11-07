@@ -21,7 +21,14 @@ from pathlib import Path
 from typing import Any
 
 from .file_ops import atomic_write_text
-from .security import SecurityError, bounded_tree_paths, read_limited_text, sha256_file, stays_in_tree
+from .security import (
+    SecurityError,
+    bounded_tree_paths,
+    read_limited_text,
+    sha256_file,
+    stays_in_tree,
+    validate_json_nesting,
+)
 from .version import __version__
 
 _DIGEST = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -39,6 +46,7 @@ def read_run_manifest(path: Path) -> dict[str, Any]:
         raise SecurityError("Run manifest must be a regular file without a symlink")
     try:
         manifest = json.loads(read_limited_text(path, 16 * 1024 * 1024))
+        validate_json_nesting(manifest)
     except (OSError, ValueError, RecursionError) as exc:
         raise SecurityError("Run manifest could not be read as bounded JSON") from exc
     if not isinstance(manifest, dict) or type(manifest.get("manifest_version")) is not int:
@@ -222,6 +230,7 @@ def canonical_report_sha256(report: dict[str, Any]) -> str:
     """
     body = {key: value for key, value in report.items() if key != "generated_at"}
     try:
+        validate_json_nesting(body)
         payload = json.dumps(body, indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False) + "\n"
     except (ValueError, TypeError, RecursionError) as exc:
         raise SecurityError("Report contains values that cannot be represented as finite JSON") from exc
@@ -231,6 +240,7 @@ def canonical_report_sha256(report: dict[str, Any]) -> str:
 def serialize_report(report: dict[str, Any]) -> str:
     """Publish only finite JSON that subsequent verification can read."""
     try:
+        validate_json_nesting(report)
         payload = json.dumps(report, indent=2, allow_nan=False)
     except (ValueError, TypeError, RecursionError) as exc:
         raise SecurityError("Report contains values that cannot be represented as finite JSON") from exc

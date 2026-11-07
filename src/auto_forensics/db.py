@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+from .enrichment_validation import enrichment_payload
 from .migrations import (
     LATEST_SCHEMA_VERSION,
     MIGRATION_STEPS,
@@ -27,7 +28,7 @@ from .models import (
     finding_details_as_json,
     utc_now_iso,
 )
-from .timeline import timeline_sort_key
+from .timeline import parse_iso, timeline_sort_key
 
 SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
@@ -633,15 +634,12 @@ class Database:
             return None
 
         fetched_at = str(row["fetched_at"])
+        payload = enrichment_payload(row["confidence"], row["details_json"], provider=provider, verdict=row["verdict"])
+        fetched_dt = parse_iso(fetched_at, require_timezone=True)
+        if payload is None or fetched_dt is None:
+            return None
         if ttl_minutes > 0:
-            clean = fetched_at.replace("Z", "+00:00")
-            try:
-                fetched_dt = datetime.fromisoformat(clean)
-            except ValueError:
-                return None
             now_dt = datetime.now(timezone.utc)
-            if fetched_dt.tzinfo is None:
-                fetched_dt = fetched_dt.replace(tzinfo=timezone.utc)
             age_seconds = (now_dt - fetched_dt).total_seconds()
             if age_seconds > (ttl_minutes * 60):
                 return None
@@ -651,13 +649,15 @@ class Database:
             ioc_id="",
             provider=provider,
             verdict=str(row["verdict"]),
-            confidence=float(row["confidence"]),
-            details=json.loads(row["details_json"]),
+            confidence=payload[0],
+            details=payload[1],
             fetched_at=fetched_at,
         )
 
     def upsert_ioc_enrichment_cache(self, ioc_type: str, value: str, enrichment: IOCEnrichment) -> None:
-        now = utc_now_iso()
+        now = enrichment.fetched_at or utc_now_iso()
+        if enrichment_payload(enrichment.confidence, enrichment.details, provider=enrichment.provider, verdict=enrichment.verdict) is None or parse_iso(now, require_timezone=True) is None:
+            raise ValueError("Enrichment cache requires finite valid data and a timezone-aware fetch time")
         with self.connect() as con:
             con.execute(
                 """
@@ -676,7 +676,7 @@ class Database:
                     enrichment.provider,
                     enrichment.verdict,
                     enrichment.confidence,
-                    json.dumps(enrichment.details),
+                    json.dumps(enrichment.details, allow_nan=False),
                     enrichment.fetched_at or now,
                 ),
             )
@@ -697,7 +697,10 @@ class Database:
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            item["details"] = json.loads(item.pop("details_json"))
+            payload = enrichment_payload(item["confidence"], item.pop("details_json"), provider=item["provider"], verdict=item["verdict"])
+            if payload is None or parse_iso(item["fetched_at"], require_timezone=True) is None:
+                continue
+            item["confidence"], item["details"] = payload
             out.append(item)
         return out
 

@@ -29,7 +29,7 @@ from .models import (
 )
 from .pipeline import rewrite_published_report
 from .report_validation import validate_report_data
-from .security import SecurityError, read_limited_text
+from .security import SecurityError, read_limited_text, validate_json_nesting
 from .timeline import parse_iso
 from .version import __version__
 
@@ -224,6 +224,7 @@ def read_review_log(path: Path) -> list[dict[str, Any]]:
             continue
         try:
             item = json.loads(line)
+            validate_json_nesting(item)
         except (ValueError, RecursionError) as exc:
             raise ReviewError("analyst review log has a line that is not JSON") from exc
         if not isinstance(item, dict):
@@ -264,6 +265,7 @@ def load_case_report(path: Path) -> CaseReport:
     """Load ``case_report.json`` back into a report."""
     try:
         raw = json.loads(read_limited_text(path, MAX_REPORT_BYTES))
+        validate_json_nesting(raw)
     except (ValueError, RecursionError) as exc:
         raise ReviewError("case report could not be read as bounded JSON") from exc
     try:

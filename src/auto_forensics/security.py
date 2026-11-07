@@ -1,17 +1,39 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 CASE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$")
 
 
 class SecurityError(ValueError):
     pass
+
+
+def validate_json_nesting(value: Any, *, max_depth: int = 128) -> None:
+    """Bound JSON depth and reject nonfinite or non-JSON values iteratively."""
+    stack = [iter((value,))]
+    while stack:
+        try:
+            item = next(stack[-1])
+        except StopIteration:
+            stack.pop()
+            continue
+        if isinstance(item, (dict, list, tuple)):
+            if len(stack) > max_depth:
+                raise SecurityError(f"JSON nesting exceeds the maximum depth ({max_depth})")
+            if isinstance(item, dict) and any(not isinstance(key, str) for key in item):
+                raise SecurityError("JSON object keys must be strings")
+            stack.append(iter(item.values() if isinstance(item, dict) else item))
+        elif isinstance(item, float) and not math.isfinite(item):
+            raise SecurityError("JSON contains a nonfinite number")
+        elif item is not None and not isinstance(item, (str, int, float, bool)):
+            raise SecurityError("Value cannot be represented as JSON")
 
 
 @dataclass(slots=True)

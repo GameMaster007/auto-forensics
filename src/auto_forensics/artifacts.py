@@ -18,7 +18,14 @@ from typing import TYPE_CHECKING, Any
 
 from .ids import stable_id
 from .models import ArtifactEvent
-from .security import SecurityError, bounded_tree_paths, read_limited_text, sha256_file, stays_in_tree
+from .security import (
+    SecurityError,
+    bounded_tree_paths,
+    read_limited_text,
+    sha256_file,
+    stays_in_tree,
+    validate_json_nesting,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +144,8 @@ def load_json_artifacts(path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> li
     digest = sha256_file(path).lower()
     try:
         raw = json.loads(text)
-    except json.JSONDecodeError:
+        validate_json_nesting(raw)
+    except (ValueError, RecursionError):
         from .timeline_imports import events_from_json_lines
 
         return events_from_json_lines(text, path.name, digest)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import http.client
+import ipaddress
 import json
 import logging
 import math
@@ -12,6 +14,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from .enrichment_validation import MAX_ENRICHMENT_BYTES, abuse_score, finite_json_object, virustotal_counts
 from .models import IOC, IOCEnrichment
 
 logger = logging.getLogger(__name__)
@@ -48,10 +51,23 @@ def _request_json(
         raw_body = urllib.parse.urlencode(body).encode("utf-8")
         req_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
     for attempt_idx in range(attempts):
-        request = urllib.request.Request(url=url, method=method, headers=req_headers, data=raw_body)
+        request = urllib.request.Request(url=url, method=method, data=raw_body)
+        for name, value in req_headers.items():
+            if name.lower() in {"x-apikey", "auth-key", "key", "authorization"}:
+                request.add_unredirected_header(name, value)
+            else:
+                request.add_header(name, value)
         try:
             with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-                text = response.read().decode("utf-8", errors="replace")
+                declared = (getattr(response, "headers", None) or {}).get("Content-Length")
+                expected_length = int(declared) if declared is not None else None
+                if expected_length is not None and (expected_length < 0 or expected_length > MAX_ENRICHMENT_BYTES):
+                    return None
+                raw = response.read(MAX_ENRICHMENT_BYTES + 1)
+                if len(raw) > MAX_ENRICHMENT_BYTES:
+                    return None
+                if expected_length is not None and len(raw) != expected_length:
+                    raise http.client.IncompleteRead(raw, max(0, expected_length - len(raw)))
         except urllib.error.HTTPError as exc:
             status = int(getattr(exc, "code", 0) or 0)
             retryable = status in {408, 409, 425, 429, 500, 502, 503, 504}
@@ -68,7 +84,7 @@ def _request_json(
                 _sleep_for_attempt(attempt_idx)
                 continue
             return None
-        except (TimeoutError, ValueError) as exc:
+        except (OSError, http.client.HTTPException, ValueError) as exc:
             logger.debug("Network error contacting enrichment API %s: %s", url, exc)
             if attempt_idx < attempts - 1:
                 _sleep_for_attempt(attempt_idx)
@@ -76,10 +92,10 @@ def _request_json(
             return None
 
         try:
-            payload = json.loads(text)
-        except json.JSONDecodeError:
+            payload = json.loads(raw.decode("utf-8"))
+        except (ValueError, RecursionError):
             return None
-        return payload if isinstance(payload, dict) else None
+        return finite_json_object(payload)
     return None
 
 
@@ -94,15 +110,22 @@ class EnrichmentConfig:
     backoff_max_seconds: float = 8.0
 
 
-def enabled_providers(config: EnrichmentConfig) -> list[str]:
-    providers: list[str] = ["malwarebazaar"]
+def enabled_providers(config: EnrichmentConfig, ioc: IOC | None = None) -> list[str]:
+    providers: list[str] = []
+    if config.malwarebazaar_api_key:
+        providers.append("malwarebazaar")
     if config.virustotal_api_key:
         providers.append("virustotal")
     if config.abuseipdb_api_key:
         providers.append("abuseipdb")
     if config.enable_whois_lookup:
         providers.append("whois")
-    return providers
+    supported = {
+        "malwarebazaar": {"sha256", "sha1", "md5", "hash"},
+        "virustotal": {"sha256", "sha1", "md5", "hash", "ip", "domain", "url"},
+        "abuseipdb": {"ip"}, "whois": {"ip", "domain"},
+    }
+    return [provider for provider in providers if ioc is None or ioc.ioc_type in supported[provider]]
 
 
 def _request_kwargs(config: EnrichmentConfig) -> dict[str, Any]:
@@ -129,11 +152,13 @@ def _vt_enrich(ioc: IOC, api_key: str, config: EnrichmentConfig) -> IOCEnrichmen
     payload = _request_json(url, headers={"x-apikey": api_key}, **_request_kwargs(config))
     if not payload:
         return None
-    attrs = payload.get("data", {}).get("attributes", {})
-    stats = attrs.get("last_analysis_stats", {}) if isinstance(attrs, dict) else {}
-    malicious = float(stats.get("malicious", 0) or 0)
-    suspicious = float(stats.get("suspicious", 0) or 0)
-    harmless = float(stats.get("harmless", 0) or 0)
+    data = payload.get("data")
+    attrs = data.get("attributes") if isinstance(data, dict) else None
+    stats = attrs.get("last_analysis_stats") if isinstance(attrs, dict) else None
+    counts = virustotal_counts(stats)
+    if counts is None:
+        return None
+    malicious, suspicious, harmless = counts
     total = malicious + suspicious + harmless
     ratio = (malicious + suspicious) / total if total > 0 else 0.0
     verdict = "malicious" if ratio >= 0.25 else "suspicious" if ratio > 0 else "unknown"
@@ -151,8 +176,9 @@ def _malwarebazaar_enrich(ioc: IOC, config: EnrichmentConfig, api_key: str | Non
     if ioc.ioc_type not in {"sha256", "sha1", "md5", "hash"}:
         return None
     headers = {}
-    if api_key:
-        headers["API-KEY"] = api_key
+    if not api_key:
+        return None
+    headers["Auth-Key"] = api_key
     payload = _request_json(
         "https://mb-api.abuse.ch/api/v1/",
         method="POST",
@@ -162,17 +188,23 @@ def _malwarebazaar_enrich(ioc: IOC, config: EnrichmentConfig, api_key: str | Non
     )
     if not payload:
         return None
-    data = payload.get("data")
-    if not isinstance(data, list) or not data:
+    status = payload.get("query_status")
+    if status == "hash_not_found":
         return IOCEnrichment(
             enrichment_id=f"mb-{uuid.uuid4().hex[:10]}",
             ioc_id=ioc.ioc_id,
             provider="malwarebazaar",
             verdict="not_found",
             confidence=0.6,
-            details={},
+            details={"query_status": "hash_not_found"},
         )
-    first = data[0] if isinstance(data[0], dict) else {}
+    data = payload.get("data")
+    if status != "ok" or not isinstance(data, list) or not data or not isinstance(data[0], dict):
+        return None
+    first = data[0]
+    field = {32: "md5_hash", 40: "sha1_hash", 64: "sha256_hash"}.get(len(ioc.value))
+    if field is None or not isinstance(first.get(field), str) or first[field].lower() != ioc.value.lower():
+        return None
     signature = str(first.get("signature") or "")
     tags = first.get("tags") if isinstance(first.get("tags"), list) else []
     return IOCEnrichment(
@@ -181,7 +213,7 @@ def _malwarebazaar_enrich(ioc: IOC, config: EnrichmentConfig, api_key: str | Non
         provider="malwarebazaar",
         verdict="malicious",
         confidence=0.9,
-        details={"signature": signature, "tags": tags},
+        details={"query_status": "ok", "signature": signature, "tags": tags},
     )
 
 
@@ -196,7 +228,15 @@ def _abuseipdb_enrich(ioc: IOC, api_key: str, config: EnrichmentConfig) -> IOCEn
     if not payload:
         return None
     data = payload.get("data", {}) if isinstance(payload.get("data", {}), dict) else {}
-    score = float(data.get("abuseConfidenceScore", 0) or 0)
+    score = abuse_score(data.get("abuseConfidenceScore"))
+    if score is None:
+        return None
+    if data.get("ipAddress") is not None:
+        try:
+            if ipaddress.ip_address(data["ipAddress"]) != ipaddress.ip_address(ioc.value):
+                return None
+        except (ValueError, TypeError):
+            return None
     verdict = "malicious" if score >= 50 else "suspicious" if score > 0 else "unknown"
     return IOCEnrichment(
         enrichment_id=f"abuseipdb-{uuid.uuid4().hex[:10]}",
@@ -230,24 +270,28 @@ def _rdap_whois_enrich(ioc: IOC, config: EnrichmentConfig) -> IOCEnrichment | No
     )
 
 
-def enrich_ioc(ioc: IOC, config: EnrichmentConfig) -> list[IOCEnrichment]:
+def enrich_ioc(ioc: IOC, config: EnrichmentConfig, *, providers: set[str] | None = None) -> list[IOCEnrichment]:
     output: list[IOCEnrichment] = []
+    selected = set(enabled_providers(config, ioc))
+    if providers is not None:
+        selected &= providers
 
-    if config.virustotal_api_key:
+    if "virustotal" in selected and config.virustotal_api_key:
         vt = _vt_enrich(ioc, config.virustotal_api_key, config)
         if vt is not None:
             output.append(vt)
 
-    mb = _malwarebazaar_enrich(ioc, config, config.malwarebazaar_api_key)
-    if mb is not None:
-        output.append(mb)
+    if "malwarebazaar" in selected:
+        mb = _malwarebazaar_enrich(ioc, config, config.malwarebazaar_api_key)
+        if mb is not None:
+            output.append(mb)
 
-    if config.abuseipdb_api_key:
+    if "abuseipdb" in selected and config.abuseipdb_api_key:
         abuse = _abuseipdb_enrich(ioc, config.abuseipdb_api_key, config)
         if abuse is not None:
             output.append(abuse)
 
-    if config.enable_whois_lookup:
+    if "whois" in selected and config.enable_whois_lookup:
         whois = _rdap_whois_enrich(ioc, config)
         if whois is not None:
             output.append(whois)

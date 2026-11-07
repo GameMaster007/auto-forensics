@@ -16,6 +16,7 @@ from typing import Any
 from .citations import citation_from_event
 from .ids import stable_id
 from .models import ArtifactEvent, Finding
+from .security import validate_json_nesting
 from .timeline import parse_iso
 
 _PLASO_L2T = {
@@ -108,7 +109,8 @@ def events_from_json_lines(text: str, source_file: str, digest: str) -> list[Art
             continue
         try:
             item = json.loads(stripped)
-        except json.JSONDecodeError:
+            validate_json_nesting(item)
+        except (ValueError, RecursionError):
             continue
         if not isinstance(item, dict):
             continue
