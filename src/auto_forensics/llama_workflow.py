@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import urllib.error
 import urllib.request
@@ -149,9 +150,12 @@ def build_llm_prompt(task: str, payload: dict[str, Any]) -> str:
 
 
 def _safe_float(v: Any, default: float = 0.5) -> float:
+    if isinstance(v, bool):
+        return default
     try:
-        return float(v)
-    except Exception:
+        value = float(v)
+        return value if math.isfinite(value) else default
+    except (ValueError, TypeError, OverflowError):
         return default
 
 

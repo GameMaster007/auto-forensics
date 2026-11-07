@@ -616,6 +616,13 @@ def _run_case(config: PipelineConfig) -> CaseReport:
     timeline = normalize_timeline(artifacts, binary_features, generated_hints)
     findings.extend(tools.call("builtin_detectors", artifacts, binary_features, timeline))
     findings.extend(tools.call("sigma_rules", timeline))
+    # New drafts cannot inherit analyst decisions supplied by a model or
+    # plugin. Only the reviewed sidecar workflow can set these fields.
+    for finding in findings:
+        finding.review_status = "unverified"
+        finding.analyst_verified = False
+        finding.review_actor = finding.review_at = finding.review_note = ""
+        finding.verification = finding.machine_verification = ""
     findings, dropped_uncited = drop_uncited(findings, catalog)
     findings = _unique_finding_ids(findings)
     judge_mode = resolve_verifier_mode(provider, config.verifier_judge)

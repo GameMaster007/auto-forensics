@@ -282,6 +282,11 @@ Windows seven-digit fractions. Sub-microsecond digits are truncated for
 ordering while original timestamps remain in the report. Database views
 sort by parsed time across UTC offsets and place unknown clocks last.
 
+Every new run resets draft review fields to unverified, including
+plugin-provided findings. Analyst acceptance comes from the review log.
+Invalid, boolean, and nonfinite model scores use the documented numeric
+defaults rather than becoming maximum confidence.
+
 `--llm off` uses the same citation rule with a score-based heuristic
 and no draft wording from the mock. `--llm ollama` calls a local
 Ollama-compatible endpoint at temperature 0. If that endpoint is down,
