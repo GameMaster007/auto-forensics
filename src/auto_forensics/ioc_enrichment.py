@@ -114,7 +114,7 @@ def _request_kwargs(config: EnrichmentConfig) -> dict[str, Any]:
 
 
 def _vt_enrich(ioc: IOC, api_key: str, config: EnrichmentConfig) -> IOCEnrichment | None:
-    if ioc.ioc_type in {"sha256", "md5", "hash"}:
+    if ioc.ioc_type in {"sha256", "sha1", "md5", "hash"}:
         url = f"https://www.virustotal.com/api/v3/files/{urllib.parse.quote(ioc.value, safe='')}"
     elif ioc.ioc_type == "ip":
         url = f"https://www.virustotal.com/api/v3/ip_addresses/{urllib.parse.quote(ioc.value, safe='')}"
@@ -148,7 +148,7 @@ def _vt_enrich(ioc: IOC, api_key: str, config: EnrichmentConfig) -> IOCEnrichmen
 
 
 def _malwarebazaar_enrich(ioc: IOC, config: EnrichmentConfig, api_key: str | None = None) -> IOCEnrichment | None:
-    if ioc.ioc_type not in {"sha256", "md5", "hash"}:
+    if ioc.ioc_type not in {"sha256", "sha1", "md5", "hash"}:
         return None
     headers = {}
     if api_key:

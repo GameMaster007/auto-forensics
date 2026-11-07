@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 from bisect import bisect_right
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -119,7 +119,12 @@ def normalize_timeline(
     artifact_events = [event_from_artifact(a) for a in artifacts]
     events.extend(artifact_events)
     events.extend(event_from_binary(b) for b in binaries)
-    events.extend(generated_hints)
+    # Provenance keys belong to the parser/framework. A generated hint
+    # cannot turn itself into a cited observation by copying those keys.
+    events.extend(replace(
+        hint, tags=[tag for tag in hint.tags if tag != "artifact"],
+        related={key: value for key, value in hint.related.items() if key not in {"citation", "artifact_id", "logsource"}},
+    ) for hint in generated_hints)
 
     def sort_key(item: TimelineEvent) -> tuple[int, datetime]:
         dt = parse_iso(item.timestamp)

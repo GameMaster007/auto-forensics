@@ -250,6 +250,15 @@ wildcards, and unsupported modifiers are skipped and recorded under
 not a general Sigma backend. Keyword findings stop explicitly above
 10,000 matches; rules over 4 MiB are skipped with a recorded reason.
 
+Observable identities preserve URL path, query, fragment, and credential
+case while normalizing scheme/host and numeric ports. Case-distinct URLs
+remain separate and sort deterministically. Extracted hashes must have
+MD5, SHA-1, or SHA-256 lengths. Repeated observations retain all source
+paths/citations. Cited evidence sentences contribute finding observables
+and populate `ioc_refs`; titles, recommendations, and generated timeline
+hints do not create observations. These are observable candidates, not
+automatic findings of maliciousness.
+
 `--llm off` uses the same citation rule with a score-based heuristic
 and no draft wording from the mock. `--llm ollama` calls a local
 Ollama-compatible endpoint at temperature 0. If that endpoint is down,
