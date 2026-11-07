@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 CASE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$")
+_JSON_SURROGATE_PATTERN = re.compile(r"[\ud800-\udfff]")
 
 
 class SecurityError(ValueError):
@@ -30,9 +31,13 @@ def validate_json_nesting(value: Any, *, max_depth: int = 128) -> None:
                 raise SecurityError(f"JSON nesting exceeds the maximum depth ({max_depth})")
             if isinstance(item, dict) and any(not isinstance(key, str) for key in item):
                 raise SecurityError("JSON object keys must be strings")
+            if isinstance(item, dict) and any(_JSON_SURROGATE_PATTERN.search(key) for key in item):
+                raise SecurityError("JSON object keys contain invalid Unicode surrogates")
             stack.append(iter(item.values() if isinstance(item, dict) else item))
         elif isinstance(item, float) and not math.isfinite(item):
             raise SecurityError("JSON contains a nonfinite number")
+        elif isinstance(item, str) and _JSON_SURROGATE_PATTERN.search(item):
+            raise SecurityError("JSON text contains invalid Unicode surrogates")
         elif item is not None and not isinstance(item, (str, int, float, bool)):
             raise SecurityError("Value cannot be represented as JSON")
 
