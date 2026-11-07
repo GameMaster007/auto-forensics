@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from .file_ops import atomic_write_text
+from .report_validation import validate_report_data
 from .security import (
     SecurityError,
     bounded_tree_paths,
@@ -240,7 +241,10 @@ def canonical_report_sha256(report: dict[str, Any]) -> str:
 def serialize_report(report: dict[str, Any]) -> str:
     """Publish only finite JSON that subsequent verification can read."""
     try:
-        validate_json_nesting(report)
+        validate_report_data(report)
+    except SecurityError as exc:
+        raise SecurityError(f"Report does not satisfy the supported finite JSON schema: {exc}") from exc
+    try:
         payload = json.dumps(report, indent=2, allow_nan=False)
     except (ValueError, TypeError, RecursionError) as exc:
         raise SecurityError("Report contains values that cannot be represented as finite JSON") from exc

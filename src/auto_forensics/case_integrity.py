@@ -71,6 +71,18 @@ def _timeline_matches(report: CaseReport, rows: list[dict[str, Any]]) -> bool:
     names = {field.name for field in fields(TimelineEvent)}
     expected = [asdict(item) for item in report.timeline]
     observed = [{key: row.get(key) for key in names} for row in rows]
+    for item in (*expected, *observed):
+        score = item.get("risk_score")
+        if score is None or type(score) not in {int, float}:
+            return False
+        try:
+            normalized = float(score)
+        except OverflowError:
+            return False
+        if normalized != score:
+            return False
+        # SQLite stores -0.0 as +0.0; both denote the same risk score.
+        item["risk_score"] = 0.0 if normalized == 0 else normalized
     # Database ordering is not significant, but duplicate events are.
     def canonical(items: list[dict[str, Any]]) -> list[str]:
         return sorted(json.dumps(item, sort_keys=True, allow_nan=False) for item in items)

@@ -43,7 +43,10 @@ def _valid(value: Any, expected: Any, depth: int = 0) -> bool:
         if type(value) not in {int, float}:
             return False
         try:
-            return math.isfinite(value)
+            number = float(value)
+            # Float fields project to IEEE-754 database columns. Refuse an
+            # integer whose conversion would silently change its value.
+            return math.isfinite(number) and (type(value) is float or number == value)
         except OverflowError:
             return False
     if expected in {int, bool, str, type(None)}:
@@ -65,6 +68,17 @@ def validate_report_data(raw: Any) -> None:
         payload["enrichments"] = raw["ioc_enrichments"]
     if not _valid(payload, CaseReport):
         raise SecurityError("Published report has invalid record field types or missing required fields")
+    projected_text = {
+        "findings": ("finding_id", "title", "severity", "tactic", "recommendation", "origin", "review_status", "worker"),
+        "timeline": ("timestamp", "source", "event_type", "description"),
+        "iocs": ("ioc_id", "ioc_type", "value", "first_seen", "last_seen"),
+    }
+    for section, names in projected_text.items():
+        for record in raw.get(section, []):
+            for name in names:
+                value = record.get(name)
+                if isinstance(value, str) and "\x00" in value:
+                    raise SecurityError(f"Published report field {section}.{name} contains NUL and cannot be projected consistently")
     for name, identifier in (("findings", "finding_id"), ("iocs", "ioc_id")):
         seen: set[str] = set()
         for record in raw.get(name, []):
