@@ -14,7 +14,17 @@ from .migrations import (
     added_column,
     validate_finding_rebuild,
 )
-from .models import IOC, Finding, IOCEnrichment, TimelineEvent, citations_as_json, decode_finding_row, utc_now_iso
+from .models import (
+    IOC,
+    Finding,
+    IOCEnrichment,
+    TimelineEvent,
+    citations_as_json,
+    decode_finding_row,
+    decode_json_object,
+    finding_details_as_json,
+    utc_now_iso,
+)
 
 SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
@@ -361,8 +371,8 @@ class Database:
                 INSERT INTO findings(
                     finding_id, case_id, title, severity, confidence, tactic,
                     evidence_json, recommendation, created_at,
-                    citations_json, origin, review_status, worker
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    citations_json, origin, review_status, worker, details_json
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -379,6 +389,7 @@ class Database:
                         f.origin,
                         f.review_status,
                         f.worker,
+                        finding_details_as_json(f),
                     )
                     for f in findings
                 ],
@@ -415,7 +426,7 @@ class Database:
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            item["metadata"] = json.loads(item.pop("metadata_json"))
+            item["metadata"] = decode_json_object(item.pop("metadata_json"))
             out.append(item)
         return out
 
@@ -424,12 +435,23 @@ class Database:
             rows = con.execute(
                 """
                 SELECT finding_id, title, severity, confidence, tactic, evidence_json, recommendation,
-                       created_at, citations_json, origin, review_status, worker
+                       created_at, citations_json, origin, review_status, worker, details_json
                 FROM findings WHERE case_id = ? ORDER BY created_at DESC
                 """,
                 (case_id,),
             ).fetchall()
         return [decode_finding_row(dict(row)) for row in rows]
+
+    def update_finding_reviews(self, case_id: str, findings: list[Finding]) -> None:
+        """Update review metadata without replacing evidence or timestamps."""
+        with self.connect() as con:
+            for finding in findings:
+                result = con.execute(
+                    "UPDATE findings SET review_status=?, details_json=? WHERE case_id=? AND finding_id=?",
+                    (finding.review_status, finding_details_as_json(finding), case_id, finding.finding_id),
+                )
+                if result.rowcount != 1:
+                    raise ValueError("A reviewed finding is not indexed in this case")
 
     def get_timeline(self, case_id: str) -> list[dict[str, Any]]:
         with self.connect() as con:

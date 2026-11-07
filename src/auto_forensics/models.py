@@ -7,6 +7,7 @@ carries at least one citation that points at an ingested artifact.
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -180,6 +181,28 @@ def citations_as_json(citations: list[Citation]) -> str:
     return json.dumps([asdict(item) for item in citations])
 
 
+FINDING_DETAIL_FIELDS = (
+    "technique_id", "sub_technique", "ioc_refs", "confidence_low", "confidence_high",
+    "verification", "analyst_verified", "review_actor", "review_at", "review_note", "machine_verification",
+)
+
+
+def finding_details_as_json(finding: Finding) -> str:
+    return json.dumps({name: getattr(finding, name) for name in FINDING_DETAIL_FIELDS}, allow_nan=False)
+
+
+def decode_json_object(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return dict(raw)
+    if not isinstance(raw, str):
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def decode_finding_row(row: dict[str, Any]) -> dict[str, Any]:
     """Convert a findings-table row into the dict returned by the API.
 
@@ -195,6 +218,17 @@ def decode_finding_row(row: dict[str, Any]) -> dict[str, Any]:
     item["origin"] = str(item.get("origin") or "detector")
     item["review_status"] = str(item.get("review_status") or "unverified")
     item["worker"] = str(item.get("worker") or "pipeline")
+    details = decode_json_object(item.pop("details_json", "{}"))
+    for name in FINDING_DETAIL_FIELDS:
+        value = details.get(name)
+        if name in {"confidence_low", "confidence_high"}:
+            item[name] = value if type(value) in {int, float} and 0 <= value <= 1 and math.isfinite(value) else None
+        elif name == "ioc_refs":
+            item[name] = [reference for reference in value if isinstance(reference, str)] if isinstance(value, list) else []
+        elif name == "analyst_verified":
+            item[name] = value is True and item["review_status"] == "accepted"
+        else:
+            item[name] = value if isinstance(value, str) else ""
     return item
 
 

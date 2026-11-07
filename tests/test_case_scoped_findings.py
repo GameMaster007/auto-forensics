@@ -7,7 +7,7 @@ import os
 import sqlite3
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
@@ -20,7 +20,7 @@ from auto_forensics.migrations import (
     SchemaCompatibilityError,
     SchemaVersionError,
 )
-from auto_forensics.models import Citation, Finding
+from auto_forensics.models import FINDING_DETAIL_FIELDS, Citation, Finding, decode_finding_row
 from auto_forensics.pipeline import _unique_finding_ids
 
 
@@ -93,6 +93,87 @@ def test_duplicate_ids_within_one_case_roll_back_the_replacement(database_backen
     assert [row["title"] for row in db.get_findings("case-one")] == ["Original"]
 
 
+def test_finding_details_and_review_projection_round_trip_without_cross_case_updates(database_backend, tmp_path: Path):
+    db = database_backend
+    _cases(db, tmp_path)
+    original = replace(_finding(), technique_id="T1059", sub_technique="T1059.001", ioc_refs=["ioc-1"],
+                       confidence_low=0.1, confidence_high=0.9, verification="supported")
+    for case in ("case-one", "case-two"):
+        db.replace_findings_and_timeline(case, [original], [])
+    before = db.get_findings("case-one")[0]
+    assert {key: before[key] for key in asdict(original)} == asdict(original)
+    reviewed = replace(original, review_status="accepted", analyst_verified=True,
+                       review_actor="Ada", review_at="2026-11-07T01:00:00Z", review_note="Checked source",
+                       machine_verification="supported")
+    db.update_finding_reviews("case-one", [reviewed])
+    after = db.get_findings("case-one")[0]
+    assert {key: after[key] for key in asdict(reviewed)} == asdict(reviewed)
+    assert after["created_at"] == before["created_at"]
+    assert db.get_findings("case-two")[0]["review_status"] == "unverified"
+    with pytest.raises(ValueError, match="not indexed"):
+        db.update_finding_reviews("case-one", [original, replace(original, finding_id="missing")])
+    assert db.get_findings("case-one")[0] == after
+
+
+@pytest.mark.parametrize("raw", ["{bad", "[]", "null", 12])
+def test_corrupt_finding_details_have_safe_defaults(raw):
+    row = decode_finding_row({"details_json": raw, "review_status": "unverified"})
+    assert row["analyst_verified"] is False
+    assert row["ioc_refs"] == []
+    assert row["confidence_low"] is None
+
+
+def test_finding_details_cannot_override_core_fields_or_invent_an_accepted_decision():
+    row = decode_finding_row({"title": "Original", "review_status": "rejected", "details_json": json.dumps({
+        "title": "Injected", "review_status": "accepted", "analyst_verified": True,
+        "confidence_low": 10 ** 400, "confidence_high": True, "ioc_refs": ["ioc-1", 4],
+    })})
+    assert row["title"] == "Original"
+    assert row["review_status"] == "rejected"
+    assert row["analyst_verified"] is False
+    assert row["confidence_low"] is None and row["confidence_high"] is None
+    assert row["ioc_refs"] == ["ioc-1"]
+    assert set(FINDING_DETAIL_FIELDS).issubset(row)
+
+
+def test_review_detail_migration_rolls_back_and_retries_without_losing_legacy_rows(database_backend, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import auto_forensics.db as plain
+    import auto_forensics.db_sqlalchemy as sqlalchemy
+
+    db = database_backend
+    _cases(db, tmp_path)
+    db.replace_findings_and_timeline("case-one", [_finding("Legacy data")], [])
+    plain_backend = isinstance(db, Database)
+    if plain_backend:
+        with db.connect() as con:
+            con.execute("ALTER TABLE findings DROP COLUMN details_json")
+            con.execute("DELETE FROM schema_migrations WHERE version >= 7")
+            con.execute("PRAGMA user_version=6")
+    else:
+        with db.engine.begin() as con:
+            con.exec_driver_sql("ALTER TABLE findings DROP COLUMN details_json")
+            con.execute(db.schema_migrations.delete().where(db.schema_migrations.c.version >= 7))
+            if db.engine.dialect.name == "sqlite":
+                con.exec_driver_sql("PRAGMA user_version=6")
+    step = next(step for step in MIGRATION_STEPS if step.version == 7)
+    broken = replace(step, sql_statements=step.sql_statements + ("SELECT * FROM missing_detail_migration_table",))
+    with monkeypatch.context() as patch:
+        patch.setattr(plain if plain_backend else sqlalchemy, "MIGRATION_STEPS", (broken,))
+        with pytest.raises(Exception) as error:
+            db.run_migrations()
+        assert error.value.__class__.__name__ in {"OperationalError", "ProgrammingError"}
+    assert db.get_schema_version() == 6
+    if plain_backend:
+        with db.connect() as con:
+            assert "details_json" not in {row[1] for row in con.execute("PRAGMA table_info(findings)")}
+    else:
+        with db.engine.begin() as con:
+            assert "details_json" not in {column["name"] for column in db.sa.inspect(con).get_columns("findings")}
+    assert db.run_migrations()["current_version"] == LATEST_SCHEMA_VERSION
+    row = db.get_findings("case-one")[0]
+    assert row["title"] == "Legacy data" and row["analyst_verified"] is False
+
+
 def test_pipeline_keeps_distinct_cited_rows_and_deduplicates_identical_submissions():
     first = _finding()
     second = _finding()
@@ -158,12 +239,15 @@ def test_existing_v5_database_migrates_without_losing_findings_and_reopens(tmp_p
     path = tmp_path / "legacy.db"
     _legacy_database(path)
     with sqlite3.connect(path) as con:
-        original_row = tuple(con.execute("SELECT * FROM findings").fetchone())
+        query = con.execute("SELECT * FROM findings")
+        original_row = dict(zip((column[0] for column in query.description), query.fetchone()))
     factory = (lambda: Database(path)) if backend == "sqlite" else (lambda: SQLAlchemyDatabase(f"sqlite:///{path}"))
     db = factory()
     row = db.get_findings("legacy-case")[0]
     with sqlite3.connect(path) as con:
-        assert tuple(con.execute("SELECT * FROM findings").fetchone()) == original_row
+        query = con.execute("SELECT * FROM findings")
+        migrated = dict(zip((column[0] for column in query.description), query.fetchone()))
+        assert {key: migrated[key] for key in original_row} == original_row
     assert row["title"] == "Preserve this finding"
     assert row["confidence"] == 0.12345678901234567
     assert row["evidence"] == ["original evidence"]
@@ -245,7 +329,7 @@ def test_migration_does_not_commit_a_callers_existing_transaction(tmp_path: Path
         with db.connect() as con:
             con.execute("INSERT INTO cases VALUES(?, ?, ?, ?, ?, ?, ?)", ("pending-case", "now", "now", "created", "e", "o", None))
             con.execute("PRAGMA user_version=5")
-            con.execute("DELETE FROM schema_migrations WHERE version=6")
+            con.execute("DELETE FROM schema_migrations WHERE version>=6")
             db.run_migrations(con)
             raise RuntimeError("rollback caller")
     assert db.get_case("pending-case") is None
@@ -293,12 +377,14 @@ def test_existing_postgres_database_rebuild_is_transactional(database_backend, t
     db.replace_findings_and_timeline("case-one", [_finding("Retain PostgreSQL data")], [])
     original = db.get_findings("case-one")[0]
     with db.engine.begin() as con:
-        original_row = tuple(con.exec_driver_sql("SELECT * FROM findings").fetchone())
+        original_row = dict(con.exec_driver_sql("SELECT * FROM findings").fetchone()._mapping)
+        original_row.pop("details_json", None)
         constraint = db.sa.inspect(con).get_pk_constraint("findings")["name"]
         quoted = db.engine.dialect.identifier_preparer.quote(constraint)
         con.exec_driver_sql(f"ALTER TABLE findings DROP CONSTRAINT {quoted}")
         con.exec_driver_sql("ALTER TABLE findings ADD PRIMARY KEY (finding_id)")
-        con.execute(db.schema_migrations.delete().where(db.schema_migrations.c.version == 6))
+        con.exec_driver_sql("ALTER TABLE findings DROP COLUMN details_json")
+        con.execute(db.schema_migrations.delete().where(db.schema_migrations.c.version >= 6))
     if fail_first:
         step = next(step for step in MIGRATION_STEPS if step.version == 6)
         broken = replace(step, sql_statements=step.sql_statements[:3] + ("SELECT * FROM nonexistent_migration_table",))
@@ -307,13 +393,14 @@ def test_existing_postgres_database_rebuild_is_transactional(database_backend, t
             with pytest.raises(db.sa.exc.ProgrammingError):
                 db.run_migrations()
         assert db.get_schema_version() == 5
-        assert db.get_findings("case-one")[0] == original
         with db.engine.begin() as con:
+            assert dict(con.exec_driver_sql("SELECT * FROM findings").fetchone()._mapping) == original_row
             assert db.sa.inspect(con).get_pk_constraint("findings")["constrained_columns"] == ["finding_id"]
             assert not db.sa.inspect(con).has_table("findings_case_scoped")
     assert db.run_migrations()["current_version"] == LATEST_SCHEMA_VERSION
     with db.engine.begin() as con:
-        assert tuple(con.exec_driver_sql("SELECT * FROM findings").fetchone()) == original_row
+        migrated = dict(con.exec_driver_sql("SELECT * FROM findings").fetchone()._mapping)
+        assert {key: migrated[key] for key in original_row} == original_row
     db.replace_findings_and_timeline("case-two", [_finding("Independent PostgreSQL case")], [])
     assert db.get_findings("case-one")[0] == original
 

@@ -13,7 +13,17 @@ from .migrations import (
     added_column,
     validate_finding_rebuild,
 )
-from .models import IOC, Finding, IOCEnrichment, TimelineEvent, citations_as_json, decode_finding_row, utc_now_iso
+from .models import (
+    IOC,
+    Finding,
+    IOCEnrichment,
+    TimelineEvent,
+    citations_as_json,
+    decode_finding_row,
+    decode_json_object,
+    finding_details_as_json,
+    utc_now_iso,
+)
 
 
 class SQLAlchemyDatabase:
@@ -96,6 +106,7 @@ class SQLAlchemyDatabase:
             sa.Column("origin", sa.String(32), nullable=False, server_default=sa.text("'detector'")),
             sa.Column("review_status", sa.String(32), nullable=False, server_default=sa.text("'unverified'")),
             sa.Column("worker", sa.String(64), nullable=False, server_default=sa.text("'pipeline'")),
+            sa.Column("details_json", sa.Text, nullable=False, server_default=sa.text("'{}'")),
             sa.PrimaryKeyConstraint("case_id", "finding_id"),
         )
 
@@ -364,6 +375,7 @@ class SQLAlchemyDatabase:
                             "origin": f.origin,
                             "review_status": f.review_status,
                             "worker": f.worker,
+                            "details_json": finding_details_as_json(f),
                         }
                         for f in findings
                     ],
@@ -405,7 +417,7 @@ class SQLAlchemyDatabase:
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            item["metadata"] = json.loads(item.pop("metadata_json"))
+            item["metadata"] = decode_json_object(item.pop("metadata_json"))
             out.append(item)
         return out
 
@@ -424,6 +436,7 @@ class SQLAlchemyDatabase:
                 self.findings.c.origin,
                 self.findings.c.review_status,
                 self.findings.c.worker,
+                self.findings.c.details_json,
             )
             .where(self.findings.c.case_id == case_id)
             .order_by(self.findings.c.created_at.desc())
@@ -431,6 +444,17 @@ class SQLAlchemyDatabase:
         with self.engine.begin() as con:
             rows = self._rows(con.execute(stmt))
         return [decode_finding_row(row) for row in rows]
+
+    def update_finding_reviews(self, case_id: str, findings: list[Finding]) -> None:
+        with self.engine.begin() as con:
+            for finding in findings:
+                result = con.execute(
+                    self.findings.update().where(
+                        (self.findings.c.case_id == case_id) & (self.findings.c.finding_id == finding.finding_id)
+                    ).values(review_status=finding.review_status, details_json=finding_details_as_json(finding))
+                )
+                if result.rowcount != 1:
+                    raise ValueError("A reviewed finding is not indexed in this case")
 
     def get_timeline(self, case_id: str) -> list[dict[str, Any]]:
         stmt = (

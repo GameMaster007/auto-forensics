@@ -122,8 +122,12 @@ MIGRATION_STEPS: tuple[MigrationStep, ...] = (
             "CREATE INDEX idx_findings_case_title ON findings(case_id, title)",
         ),
     ),
+    MigrationStep(
+        version=7,
+        name="preserve_finding_review_and_verification_details",
+        sql_statements=("ALTER TABLE findings ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'",),
+    ),
 )
-
 
 LATEST_SCHEMA_VERSION = MIGRATION_STEPS[-1].version if MIGRATION_STEPS else 0
 
