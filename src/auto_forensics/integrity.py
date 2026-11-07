@@ -6,7 +6,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .manifest import canonical_report_sha256, hash_analysis_resources, hash_input_tree, read_run_manifest
+from .manifest import (
+    MAX_REPORT_BYTES,
+    canonical_report_sha256,
+    hash_analysis_resources,
+    hash_input_tree,
+    read_run_manifest,
+)
 from .models import Citation
 from .security import SecurityError, read_limited_text, sha256_file, stays_in_tree
 
@@ -68,7 +74,7 @@ def verify_run(manifest_path: Path, *, input_dir: Path | None = None) -> dict[st
     try:
         if not stays_in_tree(report_path, manifest_path.parent):
             raise SecurityError("Published report is missing or reached through a symlink")
-        report = json.loads(read_limited_text(report_path, 64 * 1024 * 1024))
+        report = json.loads(read_limited_text(report_path, MAX_REPORT_BYTES))
         if not isinstance(report, dict) or not isinstance(report.get("findings"), list):
             raise SecurityError("Published report is not a case report object")
         if report.get("case_id") != manifest["case_id"]:

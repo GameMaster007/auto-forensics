@@ -259,6 +259,23 @@ and populate `ioc_refs`; titles, recommendations, and generated timeline
 hints do not create observations. These are observable candidates, not
 automatic findings of maliciousness.
 
+STIX exports use [STIX 2.1](https://docs.oasis-open.org/cti/stix/v2.1/os/stix-v2.1-os.html)
+standard URL, domain, address, file-hash, and observed-data objects.
+Findings are review-bearing notes grouped by case. They preserve
+citations, current review state, and available review history. Candidate
+counts represent exported records; occurrence counts are not inferred.
+Analysis time is explicitly identified when source observation times
+are absent or invalid. Unsupported observable types/values remain
+visible as unmapped-candidate notes. IDs use a deterministic,
+producer-specific UUID namespace.
+
+Reviews regenerate STIX and Navigator alongside the report formats.
+Navigator layer 4.5 colors show accepted, unverified, mixed, and rejected
+states; an all-rejected technique is disabled and has score zero.
+Scores summarize active machine confidence rather than detection
+coverage. Publication rejects nonfinite JSON and reports above the
+64 MiB verification limit, preserving any earlier published run.
+
 `--llm off` uses the same citation rule with a score-based heuristic
 and no draft wording from the mock. `--llm ollama` calls a local
 Ollama-compatible endpoint at temperature 0. If that endpoint is down,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from auto_forensics.attack_mapper import apply_attack_mapping, build_attack_navigator_layer, load_attack_techniques
@@ -63,3 +64,26 @@ def test_build_attack_navigator_layer_uses_finding_confidence():
     assert layer["domain"] == "enterprise-attack"
     assert layer["techniques"][0]["techniqueID"] == "T1059"
     assert layer["techniques"][0]["score"] == 73
+    assert layer["versions"] == {"layer": "4.5", "navigator": "4.9.0"}
+    assert layer["techniques"][0]["metadata"][0]["value"] == "unverified"
+
+
+def test_rejected_techniques_are_disabled_and_mixed_review_states_are_explicit():
+    first = Finding("first", "Candidate", "medium", 0.7, "execution", technique_id="T1059")
+    rejected = replace(first, finding_id="rejected", review_status="rejected", confidence=0.99)
+    accepted = replace(first, finding_id="accepted", review_status="accepted", analyst_verified=True, confidence=0.6)
+    layer = build_attack_navigator_layer("case-1", [rejected], {})
+    technique = layer["techniques"][0]
+    assert technique["enabled"] is False and technique["score"] == 0
+    assert technique["metadata"][0]["value"] == "rejected"
+    layer = build_attack_navigator_layer("case-1", [first, accepted, rejected], {})
+    technique = layer["techniques"][0]
+    assert technique["enabled"] is True and technique["score"] == 70
+    assert technique["metadata"][0]["value"] == "mixed"
+    assert "rejected=1" in technique["comment"]
+
+
+def test_navigator_preserves_subtechnique_and_ignores_invalid_technique_ids():
+    finding = Finding("sub", "Subtechnique", "medium", 0.5, "execution", technique_id="T1059", sub_technique="T1059.001")
+    layer = build_attack_navigator_layer("case-1", [finding, replace(finding, finding_id="invalid", sub_technique="injected")], {})
+    assert [technique["techniqueID"] for technique in layer["techniques"]] == ["T1059.001"]

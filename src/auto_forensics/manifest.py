@@ -25,6 +25,7 @@ from .security import SecurityError, bounded_tree_paths, read_limited_text, sha2
 from .version import __version__
 
 _DIGEST = re.compile(r"^[0-9a-fA-F]{64}$")
+MAX_REPORT_BYTES = 64 * 1024 * 1024
 REPORT_ARTIFACT_NAMES = (
     "attack_navigator_layer.json", "case_report.html", "case_report.json",
     "case_report.md", "case_report.pdf", "case_stix_bundle.json",
@@ -206,8 +207,22 @@ def canonical_report_sha256(report: dict[str, Any]) -> str:
     the file the analyst opens and omitted from this hash.
     """
     body = {key: value for key, value in report.items() if key != "generated_at"}
-    payload = json.dumps(body, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+    try:
+        payload = json.dumps(body, indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False) + "\n"
+    except (ValueError, TypeError) as exc:
+        raise SecurityError("Report contains values that cannot be represented as finite JSON") from exc
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def serialize_report(report: dict[str, Any]) -> str:
+    """Publish only finite JSON that subsequent verification can read."""
+    try:
+        payload = json.dumps(report, indent=2, allow_nan=False)
+    except (ValueError, TypeError) as exc:
+        raise SecurityError("Report contains values that cannot be represented as finite JSON") from exc
+    if len(payload.encode("utf-8")) > MAX_REPORT_BYTES:
+        raise SecurityError("Report exceeds the supported JSON size limit (64 MiB)")
+    return payload
 
 
 def build_run_manifest(

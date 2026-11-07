@@ -4,10 +4,10 @@ import hashlib
 import html
 import json
 import logging
-import shutil
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +37,7 @@ from .manifest import (
     hash_output_files,
     prompt_template_sha256,
     read_run_manifest,
+    serialize_report,
     write_run_manifest,
 )
 from .models import ArtifactEvent, BinaryFeature, CaseReport, Citation, Finding, TimelineEvent, utc_now_iso
@@ -669,7 +670,7 @@ def _run_case(config: PipelineConfig) -> CaseReport:
         render_dir = Path(temporary)
         render_dir.mkdir(parents=True, exist_ok=True)
         (render_dir / "case_report.json").write_text(
-            json.dumps(report.to_dict(), indent=2), encoding="utf-8"
+            serialize_report(report.to_dict()), encoding="utf-8"
         )
         (render_dir / "case_report.md").write_text(_to_markdown(report), encoding="utf-8")
         (render_dir / "case_report.html").write_text(_to_html(report), encoding="utf-8")
@@ -733,8 +734,8 @@ def rewrite_published_report(
     """Rewrite the report files and the manifest hash after a review.
 
     ``generated_at`` stays the time of the original run. The review
-    time is stored on the finding. STIX ids are random, so that bundle
-    is left as the pipeline wrote it.
+    time is stored on the finding and in the custody log. All export
+    formats are regenerated so their review state stays consistent.
     """
     report.summary.update(_analyst_summary(report.findings))
     payload = report.to_dict()
@@ -745,24 +746,39 @@ def rewrite_published_report(
     manifest["finding_count"] = len(report.findings)
     with tempfile.TemporaryDirectory(prefix=".af-review-", dir=output_dir.parent) as temporary:
         staging = Path(temporary)
-        (staging / "case_report.json").write_text(json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
-        (staging / "case_report.md").write_text(_to_markdown(report), encoding="utf-8")
-        (staging / "case_report.html").write_text(_to_html(report), encoding="utf-8")
-        if not write_pdf_report(report, staging / "case_report.pdf"):
-            (staging / "case_report.pdf").unlink(missing_ok=True)
-        for name in ("attack_navigator_layer.json", "case_stix_bundle.json"):
-            if stays_in_tree(output_dir / name, output_dir):
-                shutil.copyfile(output_dir / name, staging / name)
+        review_times: dict[str, str] = {}
+        entries: list[dict[str, Any]] = []
         if review_log:
+            from .reviews import read_review_log
+
             if review_log_content is None:
                 review_log_content = (output_dir / review_log).read_bytes().decode("utf-8")
             with (staging / review_log).open("w", encoding="utf-8", newline="\n") as handle:
                 handle.write(review_log_content)
+            entries = read_review_log(staging / review_log)
+            if len(entries) != review_count:
+                raise SecurityError("Review log count differs from the requested publication")
+            for entry in entries:
+                previous = review_times.get(entry["finding_id"], entry["at"])
+                review_times[entry["finding_id"]] = max(previous, entry["at"], key=lambda value: datetime.fromisoformat(value.replace("Z", "+00:00")))
             manifest["analyst_reviews"] = {
                 "log": review_log, "entries": review_count,
                 "sha256": sha256_file(staging / review_log),
                 "size_bytes": (staging / review_log).stat().st_size,
             }
+        (staging / "case_report.json").write_text(serialize_report(payload), encoding="utf-8")
+        (staging / "case_report.md").write_text(_to_markdown(report), encoding="utf-8")
+        (staging / "case_report.html").write_text(_to_html(report), encoding="utf-8")
+        if not write_pdf_report(report, staging / "case_report.pdf"):
+            (staging / "case_report.pdf").unlink(missing_ok=True)
+        stix_path = manifest.get("paths", {}).get("attack_stix_path")
+        techniques = load_attack_techniques(Path(stix_path) if stix_path else None)
+        (staging / "attack_navigator_layer.json").write_text(
+            json.dumps(build_attack_navigator_layer(report.case_id, report.findings, techniques), indent=2), encoding="utf-8",
+        )
+        (staging / "case_stix_bundle.json").write_text(
+            json.dumps(build_stix_bundle(report, review_times=review_times, review_history=entries), indent=2), encoding="utf-8",
+        )
         manifest["artifacts"] = hash_output_files(staging)
         write_run_manifest(staging / "run_manifest.json", manifest)
         publish_directory_files(staging, output_dir, obsolete=REPORT_ARTIFACT_NAMES)

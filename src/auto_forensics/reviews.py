@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .file_ops import directory_lock
+from .manifest import MAX_REPORT_BYTES
 from .models import (
     IOC,
     BinaryFeature,
@@ -28,7 +29,7 @@ from .models import (
     utc_now_iso,
 )
 from .pipeline import rewrite_published_report
-from .security import SecurityError
+from .security import SecurityError, read_limited_text
 
 ANALYST_REVIEW_LOG = "analyst_reviews.jsonl"
 _DECISIONS = {"accept", "reject"}
@@ -253,7 +254,7 @@ def _validate_entry(entry: dict[str, Any]) -> None:
 
 def load_case_report(path: Path) -> CaseReport:
     """Load ``case_report.json`` back into a report."""
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw = json.loads(read_limited_text(path, MAX_REPORT_BYTES))
     return CaseReport(
         case_id=str(raw.get("case_id") or ""),
         generated_at=str(raw.get("generated_at") or ""),
