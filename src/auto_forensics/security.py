@@ -178,6 +178,65 @@ def read_limited_text(path: Path, max_bytes: int) -> str:
     return data.decode("utf-8", errors="replace")
 
 
+def capture_regular_evidence(
+    path: Path, root: Path, *, destination: Path | None = None,
+    max_bytes: int | None = None, start: int = 0, window_bytes: int = 0,
+) -> tuple[str, bytes]:
+    """Hash and capture the same source bytes in one bounded, regular-file pass.
+
+    A binary citation retains just its window in memory. Record parsers get a
+    private file snapshot. Read only the initial file length, so an appending
+    writer cannot turn verification into an unbounded stream.
+    """
+    descriptor = None
+    try:
+        root = root.resolve()
+        confine_without_symlinks(root, path)
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise SecurityError("Cited evidence must be a regular file")
+        if max_bytes is not None and before.st_size > max_bytes:
+            raise SecurityError("Cited evidence exceeds its verification size limit")
+        digest = hashlib.sha256()
+        window = bytearray()
+        offset = 0
+        remaining = before.st_size
+        with os.fdopen(descriptor, "rb", closefd=False) as source:
+            output = destination.open("xb") if destination is not None else None
+            try:
+                while remaining:
+                    chunk = source.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise SecurityError("Cited evidence changed during capture")
+                    digest.update(chunk)
+                    if output is not None:
+                        output.write(chunk)
+                    left, right = max(start, offset), min(start + window_bytes, offset + len(chunk))
+                    if right > left:
+                        window.extend(chunk[left - offset:right - offset])
+                    offset += len(chunk)
+                    remaining -= len(chunk)
+                if source.read(1):
+                    raise SecurityError("Cited evidence changed during capture")
+            finally:
+                if output is not None:
+                    output.close()
+        confine_without_symlinks(root, path)
+        after = os.fstat(descriptor)
+        current = path.stat(follow_symlinks=False)
+        if (before.st_size, before.st_mtime_ns, before.st_dev, before.st_ino) != (
+            after.st_size, after.st_mtime_ns, current.st_dev, current.st_ino
+        ):
+            raise SecurityError("Cited evidence changed during capture")
+        return digest.hexdigest(), bytes(window)
+    except OSError as exc:
+        raise SecurityError("Cited evidence could not be captured as a regular file") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def read_regular_text(path: Path, root: Path, max_bytes: int) -> str:
     """Read one unchanged regular UTF-8 file without following symlinks."""
     root = root.absolute()

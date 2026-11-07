@@ -249,6 +249,10 @@ contains `decision`, `actor`, optional `note`, and optional `override`.
 These routes use the existing API-key policy. Conflicting reviews or
 failed integrity checks return HTTP 409.
 
+Citation verification hashes and inspects the same captured bytes. Binary
+windows stay bounded in memory; record parsers read a private temporary
+snapshot so a source replacement after hashing cannot supply a new claim.
+
 Blocking analysis, import/export, and database operations run outside
 the API event loop, so health checks and status streams can remain
 responsive. Concurrent background requests within a server worker for

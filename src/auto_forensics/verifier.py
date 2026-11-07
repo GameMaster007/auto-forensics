@@ -19,12 +19,20 @@ from __future__ import annotations
 import csv
 import io
 import json
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
 
 from .models import ArtifactEvent, Citation, Finding
-from .security import bounded_tree_paths, sha256_file, stays_in_tree, validate_json_nesting
+from .security import (
+    SecurityError,
+    bounded_tree_paths,
+    capture_regular_evidence,
+    sha256_file,
+    stays_in_tree,
+    validate_json_nesting,
+)
 
 MAX_VERIFY_BYTES = 8 * 1024 * 1024
 # Whole-file citations use a bounded prefix. Located keyword citations
@@ -228,29 +236,34 @@ def read_cited_text(input_dir: Path, citation: Citation) -> tuple[str | None, st
     path = locate_source(input_dir, citation.source_file, citation.sha256)
     if path is None:
         return None, REASON_UNREADABLE
-    if sha256_file(path).lower() != citation.sha256.lower():
-        return None, REASON_HASH
     if citation.row is not None:
-        structured = _read_structured_record(path, citation.row)
-        if structured is not None:
-            return structured, ""
-        if _is_structured_artifact(path):
+        try:
+            structured = _is_structured_artifact(path)
+            with tempfile.TemporaryDirectory(prefix="af-citation-") as directory:
+                snapshot = Path(directory) / path.name
+                digest, _ = capture_regular_evidence(
+                    path, input_dir, destination=snapshot, max_bytes=None if structured else MAX_VERIFY_BYTES,
+                )
+                if digest.lower() != citation.sha256.lower():
+                    return None, REASON_HASH
+                text = _read_structured_record(snapshot, citation.row) if structured else _read_row(snapshot, citation.row)
+        except (OSError, SecurityError):
             return None, REASON_UNREADABLE
-        if path.stat().st_size > MAX_VERIFY_BYTES:
-            return None, REASON_UNREADABLE
-        text = _read_row(path, citation.row)
         if text is None:
             return None, REASON_UNREADABLE
         return text, ""
     start = citation.offset if citation.offset is not None else 0
     if start < 0:
         return None, REASON_UNREADABLE
-    with path.open("rb") as handle:
-        if start:
-            handle.seek(start)
-        cap = _OFFSET_WINDOW if start else min(path.stat().st_size, MAX_BINARY_VERIFY_BYTES)
-        window = handle.read(cap)
-    if start and not window and start >= path.stat().st_size:
+    try:
+        digest, window = capture_regular_evidence(
+            path, input_dir, start=start, window_bytes=_OFFSET_WINDOW if start else MAX_BINARY_VERIFY_BYTES,
+        )
+    except SecurityError:
+        return None, REASON_UNREADABLE
+    if digest.lower() != citation.sha256.lower():
+        return None, REASON_HASH
+    if start and not window:
         return None, REASON_UNREADABLE
     # Located UTF-16LE strings start on their first character, even at an
     # odd file offset. Decode one representation, avoiding claims formed
