@@ -242,6 +242,38 @@ def _to_html(report: CaseReport) -> str:
     # </script> inside a JavaScript string, so JSON escaping alone is insufficient.
     payload = json.dumps(report.to_dict()).replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
     escaped_case = html.escape(report.case_id)
+    # Render evidence before JavaScript runs, including when served under the
+    # API's strict CSP or viewed with scripts disabled. The script only enhances
+    # these already readable tables with filtering.
+    def esc(value: object) -> str:
+        return html.escape(str(value) if value is not None else "")
+
+    def table(headers: list[str], rows: list[list[object]]) -> str:
+        head = "<thead><tr>" + "".join(f"<th>{esc(value)}</th>" for value in headers) + "</tr></thead>"
+        body = "".join("<tr>" + "".join(f"<td>{esc(value)}</td>" for value in row) + "</tr>" for row in rows)
+        if not body:
+            body = f'<tr><td colspan="{len(headers)}">No records.</td></tr>'
+        return head + "<tbody>" + body + "</tbody>"
+
+    findings_table = table(
+        ["Severity", "Title", "Tactic", "Technique", "Confidence", "Review", "Citation"],
+        [[item.severity, item.title, item.tactic, item.technique_id or "", item.confidence,
+          _review_label(item) + " · " + (item.verification or "unverified"),
+          "; ".join(_format_citation(citation) for citation in item.citations)] for item in report.findings],
+    )
+    timeline_table = table(
+        ["Timestamp", "Type", "Source", "Description"],
+        [[item.timestamp, item.event_type, item.source, item.description] for item in report.timeline],
+    )
+    ioc_table = table(
+        ["Type", "Value", "Sources"],
+        [[item.ioc_type, item.value, ", ".join(item.sources)] for item in report.iocs],
+    )
+    kpis = "".join(
+        f'<span class="kpi">{label}: <strong>{esc(report.summary.get(key, 0))}</strong></span>'
+        for label, key in [("Findings", "total_findings"), ("Timeline", "timeline_events"),
+                           ("IOCs", "ioc_count"), ("ATT&amp;CK techniques", "attack_technique_coverage")]
+    )
     return f"""<!DOCTYPE html>
 <html lang=\"en\">
 <head>
@@ -281,22 +313,22 @@ def _to_html(report: CaseReport) -> str:
     <section class=\"card\">
       <h1>Case Report: {escaped_case}</h1>
       <p class=\"meta\">Generated at <strong>{html.escape(report.generated_at)}</strong></p>
-      <div class=\"meta\" id=\"kpis\"></div>
+      <div class=\"meta\" id=\"kpis\">{kpis}</div>
     </section>
     <section class=\"card\">
       <h2>Findings</h2>
-      <table id=\"findings\"></table>
+      <table id=\"findings\">{findings_table}</table>
     </section>
     <section class=\"card\">
       <h2>Timeline</h2>
-      <div class=\"toolbar\">
+      <div class=\"toolbar\" id=\"timelineToolbar\" hidden>
         <label>Filter event type <input id=\"typeFilter\" placeholder=\"e.g. dns_query\" /></label>
       </div>
-      <table id=\"timeline\"></table>
+      <table id=\"timeline\">{timeline_table}</table>
     </section>
     <section class=\"card\">
       <h2>IOCs</h2>
-      <table id=\"iocs\"></table>
+      <table id=\"iocs\">{ioc_table}</table>
     </section>
   </main>
   <script>
@@ -384,6 +416,7 @@ def _to_html(report: CaseReport) -> str:
     renderFindings();
     renderTimeline("");
     renderIocs();
+    document.getElementById("timelineToolbar").hidden = false;
     document.getElementById("typeFilter").addEventListener("input", (event) => renderTimeline(event.target.value));
   </script>
 </body>

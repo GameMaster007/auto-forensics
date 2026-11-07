@@ -60,6 +60,12 @@ function appendLog(message, payload) {
   logEl.textContent = line + "\n\n" + logEl.textContent;
 }
 
+function escapeHtml(value) {
+  return String(value === undefined || value === null ? "" : value)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
 async function api(path, method, body) {
   const headers = { "Content-Type": "application/json" };
   const key = apiKeyInput.value.trim();
@@ -92,8 +98,8 @@ function renderCases(items) {
   const html = items.map(function (c) {
     return (
       '<div class="case-item">' +
-      "<strong>" + c.case_id + "</strong>" +
-      '<div class="case-meta">status=' + c.status + " | updated=" + c.updated_at + "</div>" +
+      "<strong>" + escapeHtml(c.case_id) + "</strong>" +
+      '<div class="case-meta">status=' + escapeHtml(c.status) + " | updated=" + escapeHtml(c.updated_at) + "</div>" +
       "</div>"
     );
   }).join("");
@@ -110,10 +116,10 @@ function renderTimeline(items, filterText) {
   const rows = filtered.map(function (item) {
     return (
       "<tr>" +
-      "<td>" + (item.timestamp || "") + "</td>" +
-      "<td>" + (item.event_type || "") + "</td>" +
-      "<td>" + (item.source || "") + "</td>" +
-      "<td>" + (item.description || "") + "</td>" +
+      "<td>" + escapeHtml(item.timestamp) + "</td>" +
+      "<td>" + escapeHtml(item.event_type) + "</td>" +
+      "<td>" + escapeHtml(item.source) + "</td>" +
+      "<td>" + escapeHtml(item.description) + "</td>" +
       "</tr>"
     );
   }).join("");
@@ -140,7 +146,7 @@ function renderHeatmap(items) {
     return (
       '<div class="heat-cell">' +
       '<div class="heat-label">' + String(hour).padStart(2, "0") + ':00Z (' + count + ")</div>" +
-      '<div class="heat-bar-wrap"><div class="heat-bar" style="width:' + width + '%"></div></div>' +
+      '<progress class="heat-bar" max="100" value="' + width + '" aria-label="Events at ' + hour + ':00 UTC"></progress>' +
       "</div>"
     );
   }).join("");

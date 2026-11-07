@@ -57,6 +57,44 @@ def _create_case_with_artifacts(client, tmp_path: Path, case_id: str) -> None:
     assert ingested.status_code == 200
 
 
+def test_html_report_has_evidence_with_strict_csp_and_without_scripts(tmp_path: Path, offline_enrichment: None):
+    from html.parser import HTMLParser
+
+    pytest.importorskip("fastapi")
+    TestClient = pytest.importorskip("fastapi.testclient").TestClient
+    with TestClient(create_app(_config(tmp_path)), base_url="http://127.0.0.1") as client:
+        case_id = "case-static-report"
+        _create_case_with_artifacts(client, tmp_path, case_id)
+        analyzed = client.post(f"/api/cases/{case_id}/analyze", json={"enable_llama": False})
+        assert analyzed.status_code == 200
+        response = client.get(f"/api/cases/{case_id}/report", params={"fmt": "html"})
+        assert response.status_code == 200
+        policy = response.headers["Content-Security-Policy"]
+        assert "script-src 'self'" in policy and "'unsafe-inline'" not in policy
+        assert '<table id="timeline"><thead>' in response.text
+
+        class VisibleText(HTMLParser):
+            in_script = False
+            text = ""
+
+            def handle_starttag(self, tag, attrs):
+                if tag == "script":
+                    self.in_script = True
+
+            def handle_endtag(self, tag):
+                if tag == "script":
+                    self.in_script = False
+
+            def handle_data(self, data):
+                if not self.in_script:
+                    self.text += data
+
+        parsed = VisibleText()
+        parsed.feed(response.text)
+        assert "sample process" in parsed.text
+        assert "unit-test" in parsed.text
+
+
 def test_api_case_jobs_and_cleanup_endpoints(tmp_path: Path, offline_enrichment: None):
     pytest.importorskip("fastapi")
     testclient_module = pytest.importorskip("fastapi.testclient")
