@@ -93,6 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     replay = sub.add_parser("replay", help="Re-run a manifest and compare input and report hashes.")
     replay.add_argument("manifest", type=Path, help="Path to run_manifest.json.")
+    replay.add_argument("--input-dir", type=Path, default=None, help="Replay a relocated or imported copy of the recorded evidence.")
     replay.add_argument(
         "--output-dir",
         type=Path,
@@ -285,7 +286,7 @@ def main() -> None:
             return
 
         if args.command == "replay":
-            result = replay_manifest(args.manifest, output_dir=args.output_dir)
+            result = replay_manifest(args.manifest, output_dir=args.output_dir, input_dir=args.input_dir)
             print(json.dumps(result, indent=2))
             if not result["match"]:
                 raise SystemExit(1)

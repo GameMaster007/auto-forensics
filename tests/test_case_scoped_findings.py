@@ -425,6 +425,68 @@ def test_import_preserves_evidence_after_lost_commit_acknowledgement(database_ba
     assert service.check_case_integrity("archive-case")["match"] is True
 
 
+@pytest.mark.parametrize("table", ["artifacts", "evidence_hash_log", "audit_log"])
+def test_ingest_failure_rolls_back_index_hash_log_and_new_files(database_backend, tmp_path: Path, table: str):
+    from test_archive_integrity import _service
+
+    service = _service(tmp_path)
+    db = service.db = database_backend
+    service.create_case("ingest-case")
+    source = tmp_path / "original"
+    source.mkdir()
+    (source / "one.txt").write_text("original evidence")
+    service.ingest_case("ingest-case", source)
+    artifacts, hashes = db.get_artifacts("ingest-case"), db.get_evidence_hash_log("ingest-case")
+    source = tmp_path / "additional"
+    source.mkdir()
+    (source / "two.txt").write_text("additional evidence")
+    plain = isinstance(db, Database)
+    def reject_insert(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith(f"INSERT INTO {table} "):
+            raise RuntimeError("injected ingest persistence failure")
+    if plain:
+        with db.connect() as con:
+            con.execute(f"CREATE TRIGGER refuse_ingest BEFORE INSERT ON {table} BEGIN SELECT RAISE(ABORT, 'injected ingest persistence failure'); END")
+    else:
+        db.sa.event.listen(db.engine, "before_cursor_execute", reject_insert)
+    try:
+        with pytest.raises(Exception, match="injected ingest persistence failure"):
+            service.ingest_case("ingest-case", source)
+        assert db.get_artifacts("ingest-case") == artifacts
+        assert db.get_evidence_hash_log("ingest-case") == hashes
+        assert not (service.config.cases_dir / "ingest-case/evidence/two.txt").exists()
+        assert service.check_case_integrity("ingest-case")["match"] is True
+    finally:
+        if plain:
+            with db.connect() as con:
+                con.execute("DROP TRIGGER refuse_ingest")
+        else:
+            db.sa.event.remove(db.engine, "before_cursor_execute", reject_insert)
+    assert service.ingest_case("ingest-case", source)["ingested_files"] == 1
+    assert service.check_case_integrity("ingest-case")["match"] is True
+
+
+def test_ingest_preserves_new_files_after_lost_commit_acknowledgement(database_backend, tmp_path: Path, monkeypatch):
+    from auto_forensics.security import SecurityError
+    from test_archive_integrity import _service
+
+    service = _service(tmp_path)
+    service.db = database_backend
+    service.create_case("ingest-case")
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "new.txt").write_text("new evidence")
+    original = service.db.ingest_case_records
+    def commit_then_raise(*args, **kwargs):
+        original(*args, **kwargs)
+        raise RuntimeError("lost commit acknowledgement")
+    monkeypatch.setattr(service.db, "ingest_case_records", commit_then_raise)
+    with pytest.raises(SecurityError, match="may have committed"):
+        service.ingest_case("ingest-case", source)
+    assert (service.config.cases_dir / "ingest-case/evidence/new.txt").read_text() == "new evidence"
+    assert service.check_case_integrity("ingest-case")["match"] is True
+
+
 @pytest.mark.parametrize("backend", ["sqlite", "sqlalchemy"])
 def test_concurrent_initializers_share_a_consistent_schema(tmp_path: Path, backend: str):
     path = tmp_path / "concurrent.db"

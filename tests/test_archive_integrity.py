@@ -205,6 +205,52 @@ def test_import_applies_evidence_count_limit_before_publishing(tmp_path: Path, l
     assert not (service.config.cases_dir / "archive-case").exists()
 
 
+@pytest.mark.parametrize("name", [
+    "evidence/CON.txt", "evidence/NUL/note.txt", "evidence/COM¹.txt", "evidence/LPT³.txt", "evidence/CONIN$.txt",
+    "evidence/note.txt:stream", "evidence/note?.txt",
+    "evidence/trailing. /note.txt", "evidence/trailing./note.txt", "evidence/control\x01.txt",
+    ".AF-output.lock", "Evidence/note.txt", "Output/note.txt", "output/Case_Report.json",
+    "output/case_report.md/payload.txt", "output/analyst_reviews.jsonl/payload.txt",
+])
+def test_nonportable_or_reserved_archive_components_are_rejected(tmp_path: Path, name: str):
+    service = _service(tmp_path)
+    archive = _archive(service, tmp_path / "path.zip", [_row(name, b"data")], [(name, b"data")])
+    with pytest.raises(SecurityError):
+        service.import_case_archive(archive)
+    assert service.db.get_case("archive-case") is None
+    assert not (service.config.cases_dir / "archive-case").exists()
+
+
+def test_implicit_parent_directory_case_aliases_are_rejected(tmp_path: Path):
+    service = _service(tmp_path)
+    contents = [("evidence/Foo/a.txt", b"one"), ("evidence/foo/b.txt", b"two")]
+    archive = _archive(service, tmp_path / "alias.zip", [_row(name, data) for name, data in contents], contents)
+    with pytest.raises(SecurityError, match="case-aliased path components"):
+        service.import_case_archive(archive)
+    assert service.db.get_case("archive-case") is None
+
+
+def test_raw_nul_zip_names_cannot_be_silently_truncated(tmp_path: Path):
+    service = _service(tmp_path)
+    raw_name = "evidence/note.txtXhidden"
+    archive = _archive(service, tmp_path / "nul.zip", [_row("evidence/note.txt", b"data")], [(raw_name, b"data")])
+    archive.write_bytes(archive.read_bytes().replace(raw_name.encode(), raw_name.replace("X", "\x00").encode()))
+    with pytest.raises(SecurityError, match="NUL"):
+        service.import_case_archive(archive)
+    assert service.db.get_case("archive-case") is None
+
+
+@pytest.mark.parametrize("name", ["case_report.html", "case_report.md", "case_report.pdf", "analyst_reviews.jsonl"])
+def test_unrecorded_report_formats_and_review_logs_cannot_pass_case_integrity(tmp_path: Path, name: str):
+    service = _service(tmp_path)
+    relative = "output/" + name
+    archive = _archive(service, tmp_path / "orphan.zip", [_row(relative, b"orphan")], [(relative, b"orphan")])
+    service.import_case_archive(archive)
+    result = service.check_case_integrity("archive-case")
+    assert result["match"] is False
+    assert any("without its run manifest" in error for error in result["errors"])
+
+
 def test_export_accounts_for_manifest_and_preserves_destination_on_size_failure(tmp_path: Path):
     service = _service(tmp_path, policy=SecurityPolicy(max_archive_size_bytes=1000))
     service.create_case("source-case")
@@ -217,6 +263,37 @@ def test_export_accounts_for_manifest_and_preserves_destination_on_size_failure(
     with pytest.raises(SecurityError, match="expanded archive size"):
         service.export_case_archive("source-case", destination)
     assert destination.read_bytes() == b"preserved destination"
+
+
+@pytest.mark.parametrize("payload", [b"", b"A" * 850], ids=["compressed-boundary", "expanded-boundary"])
+def test_exported_archive_roundtrips_at_exact_size_boundary(tmp_path: Path, monkeypatch, payload: bytes):
+    service = _service(tmp_path)
+    service.create_case("source-case")
+    if payload:
+        source = tmp_path / "source"
+        source.mkdir()
+        (source / "note.txt").write_bytes(payload)
+        service.ingest_case("source-case", source)
+    now = "2026-11-07T03:00:00.123456Z"
+    monkeypatch.setattr("auto_forensics.service.utc_now_iso", lambda: now)
+    destination = tmp_path / "boundary.zip"
+    service.export_case_archive("source-case", destination)
+    with zipfile.ZipFile(destination) as archive:
+        expanded = sum(item.file_size for item in archive.infolist())
+        assert json.loads(archive.read("manifest.json"))["exported_at"] == now
+    compressed = destination.stat().st_size
+    assert (compressed > expanded) is not bool(payload)
+    required = max(compressed, expanded)
+    service.config.security_policy.max_archive_size_bytes = required
+    service.export_case_archive("source-case", destination)
+    service.import_case_archive(destination, case_id_override="boundary-copy")
+    assert service.check_case_integrity("boundary-copy")["match"] is True
+    before = destination.read_bytes()
+    service.config.security_policy.max_archive_size_bytes = required - 1
+    with pytest.raises(SecurityError, match="size limit"):
+        service.export_case_archive("source-case", destination)
+    assert destination.read_bytes() == before
+    assert not list(tmp_path.glob(".af-export-*"))
 
 
 def test_incremental_ingest_keeps_the_full_index_and_original_provenance(tmp_path: Path):

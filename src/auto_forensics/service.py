@@ -14,9 +14,9 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
 
-from .archives import archive_relative_path, extract_verified_archive
+from .archives import archive_relative_path, extract_verified_archive, record_archive_path
 from .case_integrity import custody_changes, inspect_case_integrity, verified_case_report
-from .case_manager import CaseManager
+from .case_manager import CaseManager, IngestResult
 from .config import AppConfig
 from .db import Database
 from .db_backend import DatabaseBackend
@@ -25,7 +25,7 @@ from .file_ops import directory_lock
 from .integrity import compare_inventory
 from .ioc_enrichment import EnrichmentConfig, enabled_providers, enrich_ioc
 from .manifest import hash_input_tree
-from .models import IOC, IOCEnrichment
+from .models import IOC, IOCEnrichment, utc_now_iso
 from .pipeline import PipelineConfig, run_case
 from .plugins import PluginRegistry
 from .reviews import ReviewError, record_review_locked
@@ -198,19 +198,26 @@ class AutoForensicsService:
         source_dir = self._validate_ingest_source(source_dir)
         previous = {row["rel_path"]: row for row in self.db.get_artifacts(case_id)}
         evidence_root = Path(case["evidence_dir"])
-        for relative, row in previous.items():
-            path = evidence_root / relative
-            if not stays_in_tree(path, evidence_root) or sha256_file(path) != row["sha256"].lower():
-                raise SecurityError(f"Stored evidence no longer matches its custody hash: {relative}")
+        if any(custody_changes(self.db, case).values()):
+            raise SecurityError("Stored evidence no longer matches its custody hash or contains unindexed files")
         self.db.set_case_status(case_id, "ingesting", None)
+        intake: IngestResult | None = None
         try:
             intake = self.case_manager.ingest_directory_detailed(case_id, source_dir)
             entries = intake.entries
+            published = {str(path.relative_to(evidence_root)) for path in intake.published_paths}
+            if {entry.rel_path for entry in entries} != previous.keys() | published or any(
+                entry.rel_path in previous and (
+                    entry.sha256.lower() != previous[entry.rel_path]["sha256"].lower()
+                    or entry.size_bytes != previous[entry.rel_path]["size_bytes"]
+                ) for entry in entries
+            ):
+                raise SecurityError("Existing evidence changed during ingestion; custody was not replaced")
             for entry in entries:
                 if entry.rel_path in previous:
                     entry.metadata = dict(previous[entry.rel_path].get("metadata") or {})
             added_count = sum(entry.rel_path not in previous for entry in entries)
-            self.db.replace_artifacts(
+            self.db.ingest_case_records(
                 case_id,
                 [
                     {
@@ -222,28 +229,21 @@ class AutoForensicsService:
                     }
                     for entry in entries
                 ],
+                {"ingested_files": added_count, "total_evidence_files": len(entries), "source_dir": str(source_dir),
+                 "skipped_counts": intake.skipped_counts},
             )
-            self.db.append_evidence_hash_log(
-                case_id,
-                [
-                    {
-                        "rel_path": entry.rel_path,
-                        "sha256": entry.sha256,
-                        "size_bytes": entry.size_bytes,
-                    }
-                    for entry in entries
-                ],
-            )
-            self.db.append_audit_log(
-                action="case_ingested",
-                actor="system",
-                details={"ingested_files": added_count, "total_evidence_files": len(entries), "source_dir": str(source_dir),
-                         "skipped_counts": intake.skipped_counts},
-                case_id=case_id,
-            )
-            self.db.set_case_status(case_id, "ready", None)
         except Exception as exc:
-            self.db.set_case_status(case_id, "failed", str(exc))
+            if intake is not None:
+                try:
+                    current = {row["rel_path"]: row for row in self.db.get_artifacts(case_id)}
+                except Exception:
+                    raise SecurityError("Ingest database outcome is uncertain; new evidence was preserved for recovery") from exc
+                if current != previous:
+                    raise SecurityError("Ingest may have committed; new evidence was preserved. Check case integrity before retrying") from exc
+                self.db.set_case_status(case_id, "failed", str(exc))
+                self.case_manager.rollback_ingest(case_id, intake)
+            else:
+                self.db.set_case_status(case_id, "failed", str(exc))
             raise
         return {
             "case": case_id,
@@ -678,6 +678,12 @@ class AutoForensicsService:
         output_dir = Path(case["output_dir"])
         if not evidence_dir.exists():
             raise SecurityError(f"Evidence directory not found for case: {case_id}")
+        if any(custody_changes(self.db, case).values()):
+            raise SecurityError("Evidence does not match its custody index; analysis was not started")
+        expected_inputs = [
+            {"path": row["rel_path"], "sha256": row["sha256"], "size_bytes": row["size_bytes"]}
+            for row in self.db.get_artifacts(case_id)
+        ]
 
         self.db.set_case_status(case_id, "analyzing", None)
         try:
@@ -702,6 +708,8 @@ class AutoForensicsService:
                     openai_api_key=self.config.openai_api_key,
                     plugin_registry=plugin_registry,
                     llm_provider=llm_provider,
+                    expected_input_files=expected_inputs,
+                    require_safe_input_tree=True,
                 )
             )
             if callable(progress_callback):
@@ -914,6 +922,7 @@ class AutoForensicsService:
         def inventory() -> list[dict[str, Any]]:
             rows: list[dict[str, Any]] = []
             names: set[str] = set()
+            spellings: dict[str, str] = {}
             total_bytes = 0
             for path in sorted(bounded_tree_paths(case_root, max_entries=50_032, max_depth=22)):
                 relative = path.relative_to(case_root)
@@ -926,6 +935,7 @@ class AutoForensicsService:
                 if not stays_in_tree(path, case_root):
                     continue
                 name = archive_relative_path(relative.as_posix())
+                record_archive_path(name, spellings)
                 if name.casefold() in names:
                     raise SecurityError("Case has paths that alias on another operating system")
                 names.add(name.casefold())
@@ -956,7 +966,7 @@ class AutoForensicsService:
                 "integrity_algorithm": "hmac-sha256" if self.config.api_key_hash else "sha256",
                 "case_id": case_id,
                 "created_at": case.get("created_at"),
-                "exported_at": case.get("updated_at"),
+                "exported_at": utc_now_iso(),
                 "files": files,
             }
             manifest["signature"] = self._archive_signature(manifest)

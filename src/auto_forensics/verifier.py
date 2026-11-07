@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .models import ArtifactEvent, Citation, Finding
-from .security import sha256_file, stays_in_tree
+from .security import bounded_tree_paths, sha256_file, stays_in_tree
 
 MAX_VERIFY_BYTES = 8 * 1024 * 1024
 # Whole-file citations use a bounded prefix. Located keyword citations
@@ -271,22 +271,28 @@ def locate_source(input_dir: Path, source_file: str, sha256: str = "") -> Path |
     if rel.is_absolute() or ".." in rel.parts or not source_file:
         return None
     direct = root / rel
-    if stays_in_tree(direct, root):
+    if stays_in_tree(direct, root) and (len(rel.parts) > 1 or not sha256 or sha256_file(direct).lower() == sha256.lower()):
         return direct
     if len(rel.parts) != 1:
         return None
     matches = [
         path
-        for path in sorted(root.rglob("*"))
-        if path.name == rel.name and stays_in_tree(path, root) and len(path.relative_to(root).parts) <= 20
+        for path in sorted(bounded_tree_paths(root))
+        if path.name == rel.name and stays_in_tree(path, root)
     ]
-    if len(matches) == 1:
+    if len(matches) == 1 and not sha256:
         return matches[0]
     wanted = sha256.lower()
     if wanted:
-        for path in matches:
-            if sha256_file(path).lower() == wanted:
-                return path
+        hash_matches = [path for path in matches if sha256_file(path).lower() == wanted]
+        if len(hash_matches) == 1:
+            return hash_matches[0]
+        if hash_matches:
+            return None
+    if stays_in_tree(direct, root):
+        return direct
+    if len(matches) == 1:
+        return matches[0]
     return None
 
 

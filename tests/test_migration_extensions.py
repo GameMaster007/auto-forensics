@@ -107,3 +107,139 @@ def test_postgres_custom_schema_is_preserved_or_refused(database_backend, tmp_pa
             assert any(check["name"] == "external_confidence_check" for check in inspector.get_check_constraints("findings"))
         else:
             assert any(fk["name"] == "external_worker_fk" for fk in inspector.get_foreign_keys("findings"))
+
+
+@pytest.mark.parametrize("backend", ["sqlite", "sqlalchemy"])
+def test_custom_column_collation_is_preserved_or_refused(tmp_path, backend):
+    path = tmp_path / "legacy.db"
+    original = existing.SCHEMA_SQL
+    existing.SCHEMA_SQL = original.replace("title TEXT NOT NULL,", "title TEXT NOT NULL COLLATE NOCASE,", 1)
+    try:
+        existing._legacy_database(path)
+    finally:
+        existing.SCHEMA_SQL = original
+    query = "SELECT COUNT(*) FROM findings WHERE title='preserve this finding'"
+    with sqlite3.connect(path) as con:
+        assert con.execute(query).fetchone()[0] == 1
+    db = None
+    try:
+        db = Database(path) if backend == "sqlite" else SQLAlchemyDatabase(f"sqlite:///{path}")
+    except SchemaCompatibilityError:
+        return
+    finally:
+        if isinstance(db, SQLAlchemyDatabase):
+            db.engine.dispose()
+    with sqlite3.connect(path) as con:
+        assert con.execute(query).fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("database_backend", ["postgres"], indirect=True)
+@pytest.mark.parametrize("customization", ["audit_rule", "row_security", "column_annotation"])
+def test_additional_pg_schema_objects_are_preserved_or_refused(database_backend, tmp_path, customization):
+    db = database_backend
+    existing._cases(db, tmp_path)
+    db.replace_findings_and_timeline("case-one", [existing._finding()], [])
+    with db.engine.begin() as con:
+        constraint = db.sa.inspect(con).get_pk_constraint("findings")["name"]
+        quoted = db.engine.dialect.identifier_preparer.quote(constraint)
+        con.exec_driver_sql(f"ALTER TABLE findings DROP CONSTRAINT {quoted}")
+        con.exec_driver_sql("ALTER TABLE findings ADD PRIMARY KEY (finding_id)")
+        con.exec_driver_sql("ALTER TABLE findings DROP COLUMN details_json")
+        con.execute(db.schema_migrations.delete().where(db.schema_migrations.c.version >= 6))
+        if customization == "audit_rule":
+            con.exec_driver_sql("CREATE TABLE external_audit (finding_id TEXT,title TEXT)")
+            con.exec_driver_sql("CREATE RULE external_audit_update AS ON UPDATE TO findings DO ALSO INSERT INTO external_audit VALUES (NEW.finding_id, NEW.title)")
+            con.exec_driver_sql("UPDATE findings SET title='Before migration'")
+            assert con.exec_driver_sql("SELECT COUNT(*) FROM external_audit").scalar_one() == 1
+        elif customization == "row_security":
+            con.exec_driver_sql("ALTER TABLE findings ENABLE ROW LEVEL SECURITY")
+            con.exec_driver_sql("CREATE POLICY external_case_scope ON findings USING (case_id='case-one')")
+        else:
+            con.exec_driver_sql("COMMENT ON COLUMN findings.evidence_json IS 'Retain original evidence annotation'")
+    try:
+        db.run_migrations()
+    except SchemaCompatibilityError:
+        assert db.get_schema_version() == 5
+        return
+    with db.engine.begin() as con:
+        if customization == "audit_rule":
+            con.exec_driver_sql("UPDATE findings SET title='After migration'")
+            assert con.exec_driver_sql("SELECT COUNT(*) FROM external_audit").scalar_one() == 2
+        elif customization == "row_security":
+            assert con.exec_driver_sql("SELECT relrowsecurity FROM pg_class WHERE oid='findings'::regclass").scalar_one() is True
+            assert con.exec_driver_sql("SELECT COUNT(*) FROM pg_policy WHERE polrelid='findings'::regclass").scalar_one() == 1
+        else:
+            columns = db.sa.inspect(con).get_columns("findings")
+            assert next(c for c in columns if c["name"] == "evidence_json")["comment"] == "Retain original evidence annotation"
+
+
+@pytest.mark.parametrize("field", ["evidence_json", "citations_json", "details_json"])
+@pytest.mark.parametrize("raw", ["[" * 10000 + "0" + "]" * 10000, "1" * 5000], ids=["deep-nesting", "oversized-integer"])
+def test_malformed_finding_json_does_not_hide_remaining_findings(database_backend, tmp_path, field, raw):
+    db = database_backend
+    existing._cases(db, tmp_path)
+    db.replace_findings_and_timeline("case-one", [existing._finding()], [])
+    if isinstance(db, Database):
+        with db.connect() as con:
+            con.execute(f"UPDATE findings SET {field}=?", (raw,))
+    else:
+        with db.engine.begin() as con:
+            con.execute(db.findings.update().values(**{field: raw}))
+    rows = db.get_findings("case-one")
+    assert len(rows) == 1
+
+
+@pytest.mark.parametrize("database_backend", ["postgres"], indirect=True)
+@pytest.mark.parametrize("target", ["artifacts", "evidence_hash_log", "audit_log"])
+def test_postgres_real_statement_failure_rolls_back_import(database_backend, tmp_path, target):
+    from test_archive_integrity import _archive, _row, _service
+    service = _service(tmp_path)
+    db = database_backend
+    service.db = db
+    payload = b"Imported disposable PostgreSQL evidence"
+    archive = _archive(service, tmp_path / "import.zip", [_row("evidence/note.txt", payload)], [("evidence/note.txt", payload)])
+    with db.engine.begin() as con:
+        con.exec_driver_sql(f"ALTER TABLE {target} ADD CONSTRAINT reject_import CHECK(case_id <> 'archive-case')")
+    try:
+        with pytest.raises(db.sa.exc.IntegrityError):
+            service.import_case_archive(archive)
+        assert db.get_case("archive-case") is None
+        assert db.get_artifacts("archive-case") == []
+        assert db.get_evidence_hash_log("archive-case") == []
+        assert db.get_audit_log("archive-case") == []
+        assert not (service.config.cases_dir / "archive-case").exists()
+    finally:
+        with db.engine.begin() as con:
+            con.exec_driver_sql(f"ALTER TABLE {target} DROP CONSTRAINT reject_import")
+    service.import_case_archive(archive)
+    assert service.check_case_integrity("archive-case")["match"] is True
+
+
+@pytest.mark.parametrize("database_backend", ["postgres"], indirect=True)
+def test_postgres_commit_and_recovery_read_failure_preserves_files(database_backend, tmp_path, monkeypatch):
+    from auto_forensics.security import SecurityError
+    from test_archive_integrity import _archive, _row, _service
+    service = _service(tmp_path)
+    db = database_backend
+    service.db = db
+    payload = b"Evidence after uncertain acknowledgement"
+    archive = _archive(service, tmp_path / "import.zip", [_row("evidence/note.txt", payload)], [("evidence/note.txt", payload)])
+    original_import = db.import_case_records
+    original_get = db.get_case
+    read_calls = 0
+    def commit_then_raise(*args, **kwargs):
+        original_import(*args, **kwargs)
+        raise RuntimeError("lost commit acknowledgement")
+    def get_case(case_id):
+        nonlocal read_calls
+        read_calls += 1
+        if read_calls > 1:
+            raise RuntimeError("recovery read unavailable")
+        return original_get(case_id)
+    with monkeypatch.context() as patch:
+        patch.setattr(db, "import_case_records", commit_then_raise)
+        patch.setattr(db, "get_case", get_case)
+        with pytest.raises(SecurityError, match="uncertain"):
+            service.import_case_archive(archive)
+    assert (service.config.cases_dir / "archive-case/evidence/note.txt").read_bytes() == payload
+    assert service.check_case_integrity("archive-case")["match"] is True

@@ -209,7 +209,7 @@ def decode_json_object(raw: Any) -> dict[str, Any]:
         return {}
     try:
         parsed = json.loads(raw)
-    except json.JSONDecodeError:
+    except (ValueError, RecursionError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
 
@@ -250,6 +250,6 @@ def _decode_json_list(raw: Any) -> list[Any]:
         return []
     try:
         parsed = json.loads(raw)
-    except json.JSONDecodeError:
+    except (ValueError, RecursionError):
         return []
     return parsed if isinstance(parsed, list) else []

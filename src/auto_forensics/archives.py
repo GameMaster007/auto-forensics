@@ -9,8 +9,12 @@ import zipfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable
 
-from .manifest import valid_digest
+from .manifest import REPORT_ARTIFACT_NAMES, valid_digest
 from .security import SecurityError, SecurityPolicy
+
+_WINDOWS_DEVICES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} | {
+    f"{prefix}{digit}" for prefix in ("COM", "LPT") for digit in "123456789¹²³"
+}
 
 
 def archive_relative_path(value: object) -> str:
@@ -19,9 +23,33 @@ def archive_relative_path(value: object) -> str:
     path = PurePosixPath(value)
     if path.is_absolute() or PureWindowsPath(value).drive or ".." in path.parts or str(path) != value:
         raise SecurityError("Archive path escapes or aliases the case directory")
-    if not path.parts or path.parts[0].startswith(".af-") or value == "manifest.json":
+    if not path.parts or path.parts[0].casefold().startswith(".af-") or value.casefold() == "manifest.json":
         raise SecurityError("Archive has a reserved or empty case path")
+    for component in path.parts:
+        if (component.split(".")[0].rstrip(" ").upper() in _WINDOWS_DEVICES or component.endswith((".", " "))
+                or any(ord(character) < 32 or character in '<>:"|?*' for character in component)):
+            raise SecurityError("Archive has a nonportable path component")
+    reserved_output = {*REPORT_ARTIFACT_NAMES, "run_manifest.json", "analyst_reviews.jsonl"}
+    if path.parts[0].casefold() in {"evidence", "output"} and path.parts[0] not in {"evidence", "output"}:
+        raise SecurityError("Archive aliases a required case directory")
+    if len(path.parts) > 1 and path.parts[0] == "output" and path.parts[1].casefold() in reserved_output and path.parts[1] not in reserved_output:
+        raise SecurityError("Archive aliases a reserved output file")
+    if path.parts[0].casefold() == "manifest.json" or (
+        len(path.parts) > 2 and path.parts[0] == "output" and path.parts[1] in reserved_output
+    ):
+        raise SecurityError("Archive uses a reserved file name as a directory")
     return value
+
+
+def record_archive_path(name: str, spellings: dict[str, str]) -> None:
+    """Reject differently spelled implicit parents on case-insensitive hosts."""
+    parts = PurePosixPath(name).parts
+    for end in range(1, len(parts) + 1):
+        prefix = "/".join(parts[:end])
+        key = prefix.casefold()
+        if key in spellings and spellings[key] != prefix:
+            raise SecurityError("Archive has case-aliased path components")
+        spellings[key] = prefix
 
 
 def extract_verified_archive(
@@ -37,13 +65,17 @@ def extract_verified_archive(
         with zipfile.ZipFile(archive_path) as archive:
             members: dict[str, zipfile.ZipInfo] = {}
             seen: set[str] = set()
+            spellings: dict[str, str] = {}
             total_bytes = 0
             if len(archive.infolist()) > min(policy.max_total_files + 32, 10_032):
                 raise SecurityError("Archive exceeds the file count limit")
             for info in archive.infolist():
+                if info.orig_filename != info.filename or "\x00" in info.orig_filename:
+                    raise SecurityError("Archive has a truncated or NUL-containing member path")
                 name = info.filename.rstrip("/") if info.is_dir() else info.filename
                 if name != "manifest.json":
                     archive_relative_path(name)
+                record_archive_path(name, spellings)
                 key = name.casefold()
                 if key in seen:
                     raise SecurityError("Archive has duplicate or case-aliased paths")
@@ -52,6 +84,8 @@ def extract_verified_archive(
                 if mode not in {0, stat.S_IFREG, stat.S_IFDIR} or info.flag_bits & 1:
                     raise SecurityError("Archive has a symlink, special, or encrypted entry")
                 if info.is_dir():
+                    if name.startswith("output/") and name.split("/")[-1] in {*REPORT_ARTIFACT_NAMES, "run_manifest.json", "analyst_reviews.jsonl"}:
+                        raise SecurityError("Archive uses a reserved file name as a directory")
                     continue
                 if name in {"evidence", "output"}:
                     raise SecurityError("Archive replaces a required case directory with a file")

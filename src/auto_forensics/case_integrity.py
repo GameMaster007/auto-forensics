@@ -9,7 +9,7 @@ from typing import Any
 
 from .db_backend import DatabaseBackend
 from .integrity import compare_inventory, verify_run
-from .manifest import hash_input_tree
+from .manifest import REPORT_ARTIFACT_NAMES, hash_input_tree
 from .models import CaseReport, Finding, TimelineEvent
 from .reviews import load_case_report
 from .security import SecurityError, bounded_tree_paths
@@ -94,7 +94,7 @@ def inspect_case_integrity(db: DatabaseBackend, case: dict[str, Any]) -> dict[st
                 report = load_case_report(output / "case_report.json")
                 projection = finding_projection_changes(report, db.get_findings(case["case_id"]))
                 timeline_match = _timeline_matches(report, db.get_timeline(case["case_id"]))
-        elif (output / "case_report.json").exists() or db.get_findings(case["case_id"]) or db.get_timeline(case["case_id"]):
+        elif any((output / name).exists() or (output / name).is_symlink() for name in (*REPORT_ARTIFACT_NAMES, "analyst_reviews.jsonl")) or db.get_findings(case["case_id"]) or db.get_timeline(case["case_id"]):
             errors.append("A report or database projection exists without its run manifest")
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         errors.append(f"Run check failed: {exc}")

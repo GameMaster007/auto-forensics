@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from .ids import stable_id
 from .models import ArtifactEvent
-from .security import SecurityError, read_limited_text, sha256_file, stays_in_tree
+from .security import SecurityError, bounded_tree_paths, read_limited_text, sha256_file, stays_in_tree
 
 logger = logging.getLogger(__name__)
 
@@ -250,8 +250,8 @@ def _stamp_provenance(
         event.metadata["offset"] = offset
 
 
-def _ensure_provenance(events: list[ArtifactEvent], path: Path) -> None:
-    """Fill provenance when a parser did not set it.
+def _ensure_provenance(events: list[ArtifactEvent], path: Path, source_file: str | None = None) -> None:
+    """Bind parser records to the file actually discovered by this run.
 
     ``row`` falls back to the 1-based order of records returned for
     this file. A parser that already set ``row`` keeps that value.
@@ -260,8 +260,8 @@ def _ensure_provenance(events: list[ArtifactEvent], path: Path) -> None:
         return
     digest = sha256_file(path).lower()
     for index, event in enumerate(events, start=1):
-        event.metadata.setdefault("source_file", path.name)
-        event.metadata.setdefault("source_sha256", digest)
+        event.metadata["source_file"] = source_file or path.name
+        event.metadata["source_sha256"] = digest
         event.metadata.setdefault("row", index)
 
 
@@ -633,10 +633,6 @@ def _safe_timestamp_text(value: Any) -> str | None:
     return text.replace(" ", "T")
 
 
-def _timestamp_from_stat(path: Path) -> str:
-    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z")
-
-
 def _prefetch_event(
     source: str,
     executable: str,
@@ -744,9 +740,9 @@ def load_prefetch_artifacts(path: Path) -> list[ArtifactEvent]:
         _prefetch_event(
             source=path.name,
             executable=executable,
-            timestamp=_timestamp_from_stat(path),
+            timestamp=None,
             run_count=None,
-            metadata={"parser": "filename-fallback"},
+            metadata={"parser": "filename-fallback", "timestamp_basis": "unknown"},
         )
     ]
 
@@ -951,11 +947,11 @@ def load_mft_artifacts(path: Path) -> list[ArtifactEvent]:
     return [
         ArtifactEvent(
             artifact_id=_gen_artifact_id("mft", path.name, "fallback"),
-            timestamp=_timestamp_from_stat(path),
+            timestamp=None,
             event_type="mft_artifact_ingested",
             description=f"MFT artifact detected: {path.name}",
             source=path.name,
-            metadata={"parser": "fallback", "path": str(path)},
+            metadata={"parser": "fallback", "timestamp_basis": "unknown"},
         )
     ]
 
@@ -984,11 +980,11 @@ def load_memory_artifacts(path: Path) -> list[ArtifactEvent]:
         return [
             ArtifactEvent(
                 artifact_id=_gen_artifact_id("mem", path.name, "fallback"),
-                timestamp=_timestamp_from_stat(path),
+                timestamp=None,
                 event_type="memory_artifact_ingested",
                 description=f"Memory image detected: {path.name}",
                 source=path.name,
-                metadata={"parser": "fallback"},
+                metadata={"parser": "fallback", "timestamp_basis": "unknown"},
             )
         ]
 
@@ -1031,11 +1027,11 @@ def load_memory_artifacts(path: Path) -> list[ArtifactEvent]:
     return [
         ArtifactEvent(
             artifact_id=_gen_artifact_id("mem", path.name, "volatility-empty"),
-            timestamp=_timestamp_from_stat(path),
+            timestamp=None,
             event_type="memory_artifact_ingested",
             description=f"Memory image detected: {path.name}",
             source=path.name,
-            metadata={"parser": "volatility-empty"},
+            metadata={"parser": "volatility-empty", "timestamp_basis": "unknown"},
         )
     ]
 
@@ -1142,7 +1138,7 @@ def discover_artifacts(
     parser_registry.register_defaults()
 
     root = input_dir.resolve()
-    for path in sorted(root.rglob("*")):
+    for path in sorted(bounded_tree_paths(root)):
         if not stays_in_tree(path, root):
             continue
         suffix = path.suffix.lower()
@@ -1150,7 +1146,7 @@ def discover_artifacts(
             binaries.append(path)
             continue
         parsed = parser_registry.parse(path, max_text_bytes=max_text_bytes)
-        _ensure_provenance(parsed, path)
+        _ensure_provenance(parsed, path, str(path.relative_to(root)))
         events.extend(parsed)
 
     return events, binaries

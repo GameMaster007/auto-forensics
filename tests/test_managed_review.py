@@ -99,6 +99,68 @@ def test_async_enrichment_preserves_concurrent_review_and_hashed_outputs(managed
     assert replay_manifest(output / "run_manifest.json")["match"] is True
 
 
+@pytest.mark.parametrize("change", ["modified", "missing", "unindexed"])
+def test_failed_custody_cannot_be_adopted_by_ingest_or_analyzed(managed_service, tmp_path, change):
+    service = managed_service
+    case = service.require_case("managed-case")
+    evidence, output = Path(case["evidence_dir"]), Path(case["output_dir"])
+    saved = {path.name: path.read_bytes() for path in output.iterdir() if path.is_file()}
+    artifacts, hashes = service.db.get_artifacts("managed-case"), service.db.get_evidence_hash_log("managed-case")
+    if change == "modified":
+        (evidence / "payload.bin").write_bytes(b"MZ powershell changed evidence")
+    elif change == "missing":
+        (evidence / "payload.bin").unlink()
+    else:
+        (evidence / "unindexed.txt").write_text("unlogged evidence")
+    source = tmp_path / "additional"
+    source.mkdir()
+    (source / "new.txt").write_text("new evidence")
+    with pytest.raises(SecurityError, match="custody"):
+        service.ingest_case("managed-case", source)
+    with pytest.raises(SecurityError, match="custody"):
+        service.analyze_case("managed-case", enable_llama=False)
+    assert not (evidence / "new.txt").exists()
+    assert service.db.get_artifacts("managed-case") == artifacts
+    assert service.db.get_evidence_hash_log("managed-case") == hashes
+    assert {path.name: path.read_bytes() for path in output.iterdir() if path.is_file()} == saved
+
+
+def test_analysis_binds_initial_pipeline_snapshot_to_managed_custody(managed_service, monkeypatch):
+    import auto_forensics.service as module
+
+    service = managed_service
+    case = service.require_case("managed-case")
+    evidence, output = Path(case["evidence_dir"]), Path(case["output_dir"])
+    saved = {path.name: path.read_bytes() for path in output.iterdir() if path.is_file()}
+    original = module.run_case
+    def change_after_preflight(config):
+        (evidence / "payload.bin").write_bytes(b"MZ powershell changed after preflight")
+        return original(config)
+    monkeypatch.setattr(module, "run_case", change_after_preflight)
+    with pytest.raises(SecurityError, match="custody or replay inventory"):
+        service.analyze_case("managed-case", enable_llama=False)
+    assert {path.name: path.read_bytes() for path in output.iterdir() if path.is_file()} == saved
+
+
+def test_confirmed_ingest_rollback_does_not_leave_a_blocking_empty_directory(managed_service, tmp_path, monkeypatch):
+    service = managed_service
+    evidence = Path(service.require_case("managed-case")["evidence_dir"])
+    source = tmp_path / "nested-source"
+    (source / "folder.txt").mkdir(parents=True)
+    (source / "folder.txt/inside.txt").write_text("new evidence")
+    with monkeypatch.context() as patch:
+        def fail(*args, **kwargs):
+            raise RuntimeError("injected transaction failure")
+        patch.setattr(service.db, "ingest_case_records", fail)
+        with pytest.raises(RuntimeError, match="injected transaction failure"):
+            service.ingest_case("managed-case", source)
+    assert not (evidence / "folder.txt").exists()
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    (replacement / "folder.txt").write_text("valid later file")
+    assert service.ingest_case("managed-case", replacement)["ingested_files"] == 1
+
+
 def test_standalone_reviews_are_detected_and_sync_does_not_rerun_or_change_report(managed_service, monkeypatch):
     service = managed_service
     finding = _finding(service)

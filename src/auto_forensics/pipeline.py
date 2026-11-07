@@ -37,12 +37,13 @@ from .manifest import (
     prompt_template_sha256,
     read_run_manifest,
     serialize_report,
+    validate_file_inventory,
     write_run_manifest,
 )
 from .models import ArtifactEvent, BinaryFeature, CaseReport, Citation, Finding, TimelineEvent, utc_now_iso
 from .pdf_report import write_pdf_report
 from .plugins import PluginRegistry
-from .security import SecurityError, sha256_file, stays_in_tree, validate_case_id
+from .security import SecurityError, bounded_tree_paths, sha256_file, stays_in_tree, validate_case_id
 from .sigma_rules import evaluate_sigma_rules
 from .stix_export import build_stix_bundle
 from .timeline import normalize_timeline, timeline_sort_key
@@ -72,6 +73,8 @@ class PipelineConfig:
     llm_provider: str | None = None
     seed: int = 0
     verifier_judge: str | None = None
+    expected_input_files: list[dict[str, Any]] | None = None
+    require_safe_input_tree: bool = False
 
 
 def _severity_rank(value: str) -> int:
@@ -463,8 +466,7 @@ def _claim_judge(mode: str, workflow: LlamaWorkflow | MockLlamaWorkflow | None) 
     return None
 
 
-def run_case(config: PipelineConfig) -> CaseReport:
-    """Run one pipeline while excluding other writers to its output directory."""
+def _prepare_pipeline_config(config: PipelineConfig) -> PipelineConfig:
     config = replace(config, input_dir=config.input_dir.resolve(), output_dir=config.output_dir.resolve())
     if config.output_dir.is_relative_to(config.input_dir):
         raise SecurityError("The output directory must be outside the evidence directory")
@@ -474,11 +476,38 @@ def run_case(config: PipelineConfig) -> CaseReport:
         "rules_dir": config.rules_dir, "sigma_rules_dir": config.sigma_rules_dir,
         "attack_stix_path": config.attack_stix_path,
     })
+    return config
+
+
+def run_case(config: PipelineConfig) -> CaseReport:
+    """Run one pipeline while excluding other writers to its output directory."""
+    config = _prepare_pipeline_config(config)
     with directory_lock(config.output_dir):
-        review_path = config.output_dir / "analyst_reviews.jsonl"
-        if review_path.exists() or review_path.is_symlink():
-            raise SecurityError("This output contains analyst reviews; use a new output directory for a new run")
-        return _run_case(config)
+        return run_case_locked(config)
+
+
+def run_case_locked(config: PipelineConfig) -> CaseReport:
+    """Run while the caller holds the output lock through later publication."""
+    config = _prepare_pipeline_config(config)
+    review_path = config.output_dir / "analyst_reviews.jsonl"
+    if review_path.exists() or review_path.is_symlink():
+        raise SecurityError("This output contains analyst reviews; use a new output directory for a new run")
+    return _run_case(config)
+
+
+def _pipeline_inputs(config: PipelineConfig) -> list[dict[str, Any]]:
+    from .integrity import compare_inventory
+
+    rows = hash_input_tree(config.input_dir)
+    if config.require_safe_input_tree:
+        for path in bounded_tree_paths(config.input_dir):
+            if path.is_symlink() or (not path.is_dir() and not path.is_file()):
+                raise SecurityError("Managed evidence contains a symlink or special file")
+    if config.expected_input_files is not None:
+        validate_file_inventory(config.expected_input_files)
+        if any(compare_inventory(config.expected_input_files, rows).values()):
+            raise SecurityError("Evidence no longer matches the required custody or replay inventory; report was not published")
+    return rows
 
 
 def _run_case(config: PipelineConfig) -> CaseReport:
@@ -499,7 +528,7 @@ def _run_case(config: PipelineConfig) -> CaseReport:
         raise SecurityError("The output directory must be outside the evidence directory")
     if type(config.max_text_bytes) is not int or config.max_text_bytes < 1:
         raise SecurityError("max_text_bytes must be a positive integer")
-    input_files = hash_input_tree(evidence_root)
+    input_files = _pipeline_inputs(config)
     resource_paths = {
         "rules_dir": config.rules_dir,
         "sigma_rules_dir": config.sigma_rules_dir,
@@ -675,7 +704,7 @@ def _run_case(config: PipelineConfig) -> CaseReport:
         summary=summary,
         iocs=iocs,
     )
-    if hash_input_tree(evidence_root) != input_files:
+    if _pipeline_inputs(config) != input_files:
         raise SecurityError("Evidence changed during analysis; the report was not published")
     if hash_analysis_resources(resource_paths) != resources:
         raise SecurityError("Analysis resources changed during analysis; the report was not published")

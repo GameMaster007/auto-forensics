@@ -95,6 +95,9 @@ citations. It reports added, missing, and modified evidence separately
 and exits 1 on a mismatch. `--input-dir` checks a relocated evidence
 copy. It does not decide whether a claim is true or authenticate a
 manifest that somebody has rewritten together with the report.
+`replay --input-dir` also selects a relocated or imported evidence copy.
+Replay reports both the recorded and checked evidence paths. Without
+that option, it uses the original path recorded in the manifest.
 
 New runs write manifest version 2, including the parser byte limit and
 resource hashes. Version 1 manifests remain readable with a warning
@@ -119,11 +122,20 @@ Starting a new run over an output directory containing analyst reviews
 is refused; choose a new output directory to preserve those decisions.
 Files are staged and replaced individually, with the manifest last.
 An interruption between replacements is detectable by `verify`.
+Replay holds the source and destination locks through review restoration,
+so a concurrent analyst decision cannot be replaced between replay stages.
+Imported reports must have valid field types and unique finding/IOC IDs
+before verification, review, or database synchronization can use them.
 
 Managed ingestion is additive. A second ingest keeps the existing
 custody index and original provenance, stages new files before copying,
 and refuses a different file at an existing evidence path. JSONL exports
 are supported by both managed ingest and `run`.
+Managed ingest and analysis refuse a failed custody check. The analysis
+snapshot must also match the indexed hashes before execution and publication.
+Ingest commits its index, custody log, audit entry, and ready status together.
+A confirmed failure removes only newly published unchanged files and owned
+empty directories; uncertain commits preserve evidence for recovery.
 
 Ingest responses include skipped-entry counts and up to 1,000 relative
 paths with reasons (unsupported artifact, file-size limit, symlink, or
@@ -147,6 +159,8 @@ Export binds the archived evidence inventory to the managed custody
 index and refuses modified, missing, or unindexed evidence. Both compressed
 and expanded archive limits include the manifest. Import applies the
 same evidence count and depth bounds as analysis before publication.
+Portable archives reject Windows device names, alternate streams, trailing
+spaces or periods, and differently spelled case aliases in parent paths.
 Imported case records, custody hashes, and their audit entry commit in
 one database transaction. A confirmed failure removes the new case
 directory; an uncertain database commit preserves evidence and reports
@@ -297,9 +311,18 @@ Every new run resets draft review fields to unverified, including
 plugin-provided findings. Analyst acceptance comes from the review log.
 Invalid, boolean, and nonfinite model scores use the documented numeric
 defaults rather than becoming maximum confidence.
+Filename-only Prefetch and fallback MFT/memory records retain an unknown
+event time. A copied file's modification time is not treated as execution
+or acquisition time, so relocating unchanged evidence does not alter those
+timeline records.
+
+Legacy finding-key migrations refuse custom schema behavior they cannot
+preserve, including dependent foreign keys, custom constraints/indexes,
+triggers, collations, PostgreSQL policies/rules/grants, and annotations.
+The original schema and records remain intact for a reviewed manual migration.
 
 This work is packaged as the unpublished development version
-`0.2.0.dev0`. The CLI, API metadata, and manifest record that same
+`0.2.0.dev1`. The CLI, API metadata, and manifest record that same
 version. Archived runs can still be checked with `verify`; replay and
 review require their recorded tool version so changed algorithms do
 not silently rewrite an older run. A missing version also prevents

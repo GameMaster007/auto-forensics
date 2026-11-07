@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .security import (
@@ -33,6 +34,8 @@ class IngestResult:
     skipped_entries: list[dict[str, str]]
     skipped_counts: dict[str, int]
     skipped_entries_truncated: bool
+    published_paths: list[Path] = field(default_factory=list)
+    created_directories: list[tuple[Path, int, int]] = field(default_factory=list)
 
 
 class CaseManager:
@@ -131,6 +134,7 @@ class CaseManager:
             raise SecurityError("Maximum case file count exceeded during ingestion")
 
         added: list[Path] = []
+        created_directories: list[tuple[Path, int, int]] = []
         with tempfile.TemporaryDirectory(prefix=".af-ingest-", dir=self.case_root(case_id)) as temporary:
             stage = Path(temporary)
             for src, relative, size, digest in sources:
@@ -145,7 +149,15 @@ class CaseManager:
                     if key in existing:
                         continue
                     destination = confine_without_symlinks(evidence_dir, evidence_dir / relative)
-                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    missing_parents: list[Path] = []
+                    parent = destination.parent
+                    while not parent.exists():
+                        missing_parents.append(parent)
+                        parent = parent.parent
+                    for directory in reversed(missing_parents):
+                        directory.mkdir()
+                        identity = directory.stat()
+                        created_directories.append((directory, identity.st_dev, identity.st_ino))
                     # A hard link publishes a complete staged file and refuses
                     # to replace anything created since preflight.
                     os.link(stage / relative, destination)
@@ -154,10 +166,37 @@ class CaseManager:
                         key, src.suffix.lower().lstrip("."), size, digest, {"source_path": str(src)},
                     )
             except Exception:
-                for path in reversed(added):
-                    path.unlink(missing_ok=True)
+                self.rollback_ingest(case_id, IngestResult(
+                    list(existing.values()), skipped, skipped_counts, False, added, created_directories,
+                ))
                 raise
         return IngestResult(
             [existing[key] for key in sorted(existing)], skipped, skipped_counts,
-            sum(skipped_counts.values()) > len(skipped),
+            sum(skipped_counts.values()) > len(skipped), added, created_directories,
         )
+
+    def rollback_ingest(self, case_id: str, intake: IngestResult) -> None:
+        """Remove only unchanged files published by a confirmed failed ingest."""
+        evidence = self.evidence_dir(case_id)
+        expected = {item.rel_path: item for item in intake.entries}
+        removable: list[Path] = []
+        for path in intake.published_paths:
+            confine_without_symlinks(evidence, path)
+            if not path.exists():
+                continue
+            entry = expected[str(path.relative_to(evidence))]
+            if not stays_in_tree(path, evidence) or path.stat().st_size != entry.size_bytes or sha256_file(path) != entry.sha256:
+                raise SecurityError("Ingest rollback found changed new evidence; files were preserved for recovery")
+            removable.append(path)
+        for path in reversed(removable):
+            path.unlink()
+        for path, device, inode in reversed(intake.created_directories):
+            try:
+                current = path.lstat()
+                if not path.is_symlink() and path.is_dir() and (current.st_dev, current.st_ino) == (device, inode):
+                    path.rmdir()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                if exc.errno not in {errno.ENOTEMPTY, errno.EEXIST}:
+                    raise

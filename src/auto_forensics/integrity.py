@@ -14,6 +14,7 @@ from .manifest import (
     read_run_manifest,
 )
 from .models import Citation
+from .report_validation import validate_report_data
 from .security import SecurityError, read_limited_text, sha256_file, stays_in_tree
 from .version import __version__
 
@@ -80,6 +81,7 @@ def verify_run(manifest_path: Path, *, input_dir: Path | None = None) -> dict[st
             raise SecurityError("Published report is not a case report object")
         if report.get("case_id") != manifest["case_id"]:
             raise SecurityError("Published report case identifier differs from its manifest")
+        validate_report_data(report)
         actual_sha = canonical_report_sha256(report)
         report_match = actual_sha == manifest["output"]["sha256"].lower()
         citations_match = _check_citation_files(report["findings"], manifest["input_files"])

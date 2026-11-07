@@ -104,6 +104,127 @@ def test_deep_report_serialization_has_a_domain_error(operation):
         operation({"extra": nested})
 
 
+@pytest.mark.parametrize("review_target", ["source", "destination"])
+def test_replay_excludes_review_writers_until_log_restoration_finishes(tmp_path: Path, monkeypatch, review_target: str):
+    import auto_forensics.replay as replay
+    from auto_forensics.reviews import ReviewError, read_review_log, record_review
+
+    _, manifest = _run(tmp_path)
+    finding_id = json.loads((manifest.parent / "case_report.json").read_text())["findings"][0]["finding_id"]
+    record_review(manifest.parent, finding_id=finding_id, decision="accept", actor="Ada")
+    destination = tmp_path / "replayed"
+    original = replay.apply_review_log
+    attempts = []
+    def try_interleaved_review(output_dir, log_path):
+        target = manifest.parent if review_target == "source" else destination
+        with pytest.raises(ReviewError, match="busy"):
+            record_review(target, finding_id=finding_id, decision="accept", actor="Bea", note="Must not be overwritten")
+        attempts.append(target)
+        return original(output_dir, log_path)
+    monkeypatch.setattr(replay, "apply_review_log", try_interleaved_review)
+    assert replay.replay_manifest(manifest, destination)["match"] is True
+    assert len(attempts) == 1
+    assert read_review_log(destination / "analyst_reviews.jsonl")[0]["actor"] == "Ada"
+    assert verify_run(destination / "run_manifest.json")["match"] is True
+
+
+@pytest.mark.parametrize("path,value", [
+    (("findings", 0, "confidence"), {"value": 0.7}),
+    (("findings", 0, "confidence"), True),
+    (("findings", 0, "evidence"), [42]),
+    (("findings", 0, "severity"), []),
+    (("findings", 0, "analyst_verified"), "true"),
+    (("binary_features", 0, "size_bytes"), "32"),
+    (("binary_features", 0, "string_hits"), [None]),
+    (("timeline", 0, "timestamp"), {"date": "2026-01-01"}),
+    (("timeline", 0, "related"), []),
+    (("iocs", 0, "sources"), "source"),
+    (("summary", "severity_breakdown"), []),
+    (("summary", "verification"), [{"finding_id": {"id": "bad"}}]),
+])
+def test_checksum_valid_malformed_reports_cannot_be_reviewed_or_verified(tmp_path: Path, path, value):
+    from auto_forensics.manifest import hash_output_files, write_run_manifest
+    from auto_forensics.reviews import ReviewError, load_case_report, record_review
+
+    _, manifest_path = _run(tmp_path)
+    report_path = manifest_path.parent / "case_report.json"
+    report = json.loads(report_path.read_text())
+    target = report
+    for component in path[:-1]:
+        target = target[component]
+    target[path[-1]] = value
+    report_path.write_text(json.dumps(report))
+    manifest = json.loads(manifest_path.read_text())
+    manifest["output"]["sha256"] = canonical_report_sha256(report)
+    manifest["artifacts"] = hash_output_files(manifest_path.parent)
+    write_run_manifest(manifest_path, manifest)
+    result = verify_run(manifest_path)
+    assert result["match"] is False and result["artifacts_match"] is True
+    with pytest.raises(ReviewError, match="invalid"):
+        load_case_report(report_path)
+    with pytest.raises(ReviewError, match="integrity"):
+        record_review(manifest_path.parent, finding_id=report["findings"][0]["finding_id"], decision="accept", actor="Ada")
+    assert not (manifest_path.parent / "analyst_reviews.jsonl").exists()
+
+
+@pytest.mark.parametrize("section,field", [("findings", "finding_id"), ("iocs", "ioc_id")])
+@pytest.mark.parametrize("kind", ["duplicate", "empty"])
+def test_checksum_valid_reports_require_unique_nonempty_record_ids(tmp_path: Path, section: str, field: str, kind: str):
+    from auto_forensics.manifest import hash_output_files, write_run_manifest
+    from auto_forensics.reviews import ReviewError, load_case_report
+
+    _, manifest_path = _run(tmp_path)
+    path = manifest_path.parent / "case_report.json"
+    report = json.loads(path.read_text())
+    if kind == "duplicate":
+        report[section].append(copy.deepcopy(report[section][0]))
+    else:
+        report[section][0][field] = " "
+    path.write_text(json.dumps(report))
+    manifest = json.loads(manifest_path.read_text())
+    manifest["output"]["sha256"] = canonical_report_sha256(report)
+    manifest["artifacts"] = hash_output_files(manifest_path.parent)
+    write_run_manifest(manifest_path, manifest)
+    assert verify_run(manifest_path)["match"] is False
+    with pytest.raises(ReviewError, match=field):
+        load_case_report(path)
+
+
+def test_replay_can_explicitly_check_relocated_evidence_and_refuses_its_changes(tmp_path: Path):
+    source, manifest = _run(tmp_path)
+    relocated = tmp_path / "relocated"
+    source.rename(relocated)
+    result = replay_manifest(manifest, input_dir=relocated)
+    assert result["match"] is True
+    assert result["recorded_input_dir"] == str(source)
+    assert result["checked_input_dir"] == str(relocated)
+    (relocated / "notes.txt").write_text("changed after relocation")
+    result = replay_manifest(manifest, input_dir=relocated)
+    assert result["match"] is False and result["executed"] is False
+
+
+def test_fallback_events_depend_on_evidence_bytes_and_paths_not_copy_mtime(tmp_path: Path, monkeypatch):
+    import os
+    import shutil
+
+    monkeypatch.setattr("auto_forensics.artifacts.shutil.which", lambda name: None)
+    source = tmp_path / "evidence"
+    source.mkdir()
+    for name in ("CMD.EXE-1234ABCD.pf", "$MFT", "memory.raw"):
+        path = source / name
+        path.write_bytes(b"synthetic fallback artifact")
+        os.utime(path, (978307200, 978307200))
+    first = tmp_path / "first"
+    report = run_case(PipelineConfig("fallback-case", source, first, llm_provider="off"))
+    relocated = tmp_path / "relocated"
+    shutil.copytree(source, relocated)
+    for path in relocated.iterdir():
+        os.utime(path, (1767225600, 1767225600))
+    assert report.timeline and all(event.timestamp is None for event in report.timeline)
+    result = replay_manifest(first / "run_manifest.json", input_dir=relocated)
+    assert result["match"] is True
+
+
 def test_verify_is_read_only_and_reports_specific_input_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     source, manifest = _run(tmp_path)
     before = {path.name: path.read_bytes() for path in manifest.parent.iterdir() if path.is_file()}

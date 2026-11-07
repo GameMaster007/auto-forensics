@@ -28,6 +28,7 @@ from .models import (
     utc_now_iso,
 )
 from .pipeline import rewrite_published_report
+from .report_validation import validate_report_data
 from .security import SecurityError, read_limited_text
 from .timeline import parse_iso
 from .version import __version__
@@ -146,6 +147,12 @@ def apply_review_log(output_dir: Path, log_path: Path) -> bool:
     Returns False when a logged finding is not in the report. The
     report is left unchanged in that case, so a replay hash misses.
     """
+    with directory_lock(output_dir):
+        return apply_review_log_locked(output_dir, log_path)
+
+
+def apply_review_log_locked(output_dir: Path, log_path: Path) -> bool:
+    """Restore source decisions while the caller holds the destination lock."""
     if not log_path.exists() and not log_path.is_symlink():
         return True
     entries = read_review_log(log_path)
@@ -153,18 +160,17 @@ def apply_review_log(output_dir: Path, log_path: Path) -> bool:
         return True
     content = log_path.read_bytes().decode("utf-8")
     output_dir = output_dir.resolve()
-    with directory_lock(output_dir):
-        report = load_case_report(output_dir / "case_report.json")
-        by_id = {item.finding_id: item for item in report.findings}
-        for entry in entries:
-            finding = by_id.get(entry["finding_id"])
-            if finding is None:
-                return False
-            apply_entry(finding, entry)
-        rewrite_published_report(
-            report, output_dir, review_log=ANALYST_REVIEW_LOG,
-            review_count=len(entries), review_log_content=content,
-        )
+    report = load_case_report(output_dir / "case_report.json")
+    by_id = {item.finding_id: item for item in report.findings}
+    for entry in entries:
+        finding = by_id.get(entry["finding_id"])
+        if finding is None:
+            return False
+        apply_entry(finding, entry)
+    rewrite_published_report(
+        report, output_dir, review_log=ANALYST_REVIEW_LOG,
+        review_count=len(entries), review_log_content=content,
+    )
     return True
 
 
@@ -260,6 +266,10 @@ def load_case_report(path: Path) -> CaseReport:
         raw = json.loads(read_limited_text(path, MAX_REPORT_BYTES))
     except (ValueError, RecursionError) as exc:
         raise ReviewError("case report could not be read as bounded JSON") from exc
+    try:
+        validate_report_data(raw)
+    except SecurityError as exc:
+        raise ReviewError(str(exc)) from exc
     return CaseReport(
         case_id=str(raw.get("case_id") or ""),
         generated_at=str(raw.get("generated_at") or ""),

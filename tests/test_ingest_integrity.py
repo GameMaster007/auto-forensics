@@ -118,3 +118,23 @@ def test_special_entries_in_managed_evidence_refuse_additive_ingest(tmp_path: Pa
     with pytest.raises(SecurityError, match="special"):
         manager.ingest_directory("ingest-case", source)
     assert not (evidence / "new.txt").exists()
+
+
+def test_publication_failure_removes_only_owned_empty_directories(tmp_path: Path, monkeypatch):
+    import auto_forensics.case_manager as module
+
+    manager = CaseManager(tmp_path / "cases", SecurityPolicy())
+    evidence, _ = manager.init_case_dirs("ingest-case")
+    source = tmp_path / "source"
+    (source / "folder.txt").mkdir(parents=True)
+    (source / "folder.txt/inside.txt").write_text("synthetic evidence")
+    with monkeypatch.context() as patch:
+        patch.setattr(module.os, "link", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("injected publication failure")))
+        with pytest.raises(OSError, match="injected publication failure"):
+            manager.ingest_directory("ingest-case", source)
+    assert not (evidence / "folder.txt").exists()
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    (replacement / "folder.txt").write_text("valid later file")
+    manager.ingest_directory("ingest-case", replacement)
+    assert (evidence / "folder.txt").read_text() == "valid later file"

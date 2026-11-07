@@ -301,7 +301,7 @@ class Database:
                         "options": {"onupdate": key[5], "ondelete": key[6]},
                     } for key in con.execute("PRAGMA foreign_key_list(findings)")]
                     table_sql = con.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='findings'").fetchone()[0]
-                    custom_constraints = bool(re.search(r"\b(?:CHECK|UNIQUE)\b", table_sql, re.IGNORECASE))
+                    custom_constraints = bool(re.search(r"\b(?:CHECK|UNIQUE|COLLATE)\b", table_sql, re.IGNORECASE))
                     triggers = con.execute("SELECT 1 FROM sqlite_master WHERE type='trigger' AND tbl_name='findings'").fetchone()
                     validate_finding_rebuild(
                         {row[1] for row in con.execute("PRAGMA table_info(findings)")}, incoming_references=incoming,
@@ -370,17 +370,33 @@ class Database:
                 "VALUES(?, ?, ?, 'ready', ?, ?, NULL)",
                 (case_id, now, now, str(evidence_dir), str(output_dir)),
             )
-            con.executemany(
-                "INSERT INTO artifacts(case_id, rel_path, artifact_type, size_bytes, sha256, ingested_at, metadata_json) VALUES(?, ?, ?, ?, ?, ?, ?)",
-                [(case_id, item["rel_path"], item["artifact_type"], item["size_bytes"], item["sha256"], now,
-                  json.dumps(item.get("metadata", {}))) for item in artifacts],
-            )
-            con.executemany(
-                "INSERT INTO evidence_hash_log(case_id, rel_path, sha256, size_bytes, logged_at) VALUES(?, ?, ?, ?, ?)",
-                [(case_id, item["rel_path"], item["sha256"], item["size_bytes"], now) for item in artifacts],
-            )
+            self._write_artifact_custody(con, case_id, artifacts, now)
             con.execute(
                 "INSERT INTO audit_log(case_id, action, actor, details_json, created_at) VALUES(?, 'case_imported', 'system', ?, ?)",
+                (case_id, json.dumps(provenance), now),
+            )
+
+    def _write_artifact_custody(self, con: sqlite3.Connection, case_id: str, artifacts: list[dict[str, Any]], now: str) -> None:
+        con.execute("DELETE FROM artifacts WHERE case_id=?", (case_id,))
+        con.executemany(
+            "INSERT INTO artifacts(case_id, rel_path, artifact_type, size_bytes, sha256, ingested_at, metadata_json) VALUES(?, ?, ?, ?, ?, ?, ?)",
+            [(case_id, item["rel_path"], item["artifact_type"], item["size_bytes"], item["sha256"], now,
+              json.dumps(item.get("metadata", {}))) for item in artifacts],
+        )
+        con.executemany(
+            "INSERT INTO evidence_hash_log(case_id, rel_path, sha256, size_bytes, logged_at) VALUES(?, ?, ?, ?, ?)",
+            [(case_id, item["rel_path"], item["sha256"], item["size_bytes"], now) for item in artifacts],
+        )
+
+    def ingest_case_records(self, case_id: str, artifacts: list[dict[str, Any]], provenance: dict[str, Any]) -> None:
+        now = utc_now_iso()
+        with self.connect() as con:
+            result = con.execute("UPDATE cases SET status='ready', last_error=NULL, updated_at=? WHERE case_id=?", (now, case_id))
+            if result.rowcount != 1:
+                raise ValueError("Case disappeared before ingest persistence")
+            self._write_artifact_custody(con, case_id, artifacts, now)
+            con.execute(
+                "INSERT INTO audit_log(case_id, action, actor, details_json, created_at) VALUES(?, 'case_ingested', 'system', ?, ?)",
                 (case_id, json.dumps(provenance), now),
             )
 

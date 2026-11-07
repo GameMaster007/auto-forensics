@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -275,12 +276,33 @@ class SQLAlchemyDatabase:
                 )
                 if self.engine.dialect.name == "sqlite":
                     triggers = con.exec_driver_sql("SELECT 1 FROM sqlite_master WHERE type='trigger' AND tbl_name='findings'").first()
+                    table_sql = con.exec_driver_sql("SELECT sql FROM sqlite_master WHERE type='table' AND name='findings'").scalar_one()
+                    custom_metadata = bool(re.search(r"\bCOLLATE\b", table_sql, re.IGNORECASE))
                 else:
                     triggers = con.exec_driver_sql(
                         "SELECT 1 FROM information_schema.triggers WHERE event_object_table='findings' AND event_object_schema=current_schema()"
                     ).first()
+                    # Dropping/recreating a PostgreSQL relation also discards
+                    # row policies, rules, grants, annotations and column
+                    # collations that ordinary reflection does not expose.
+                    custom_metadata = bool(con.exec_driver_sql("""
+                        SELECT c.relrowsecurity OR c.relforcerowsecurity OR c.relacl IS NOT NULL
+                            OR c.reloptions IS NOT NULL OR c.relkind <> 'r' OR c.relispartition
+                            OR pg_get_userbyid(c.relowner) <> current_user
+                            OR EXISTS (SELECT 1 FROM pg_policy WHERE polrelid=c.oid)
+                            OR EXISTS (SELECT 1 FROM pg_rewrite WHERE ev_class=c.oid)
+                            OR EXISTS (SELECT 1 FROM pg_description WHERE objoid=c.oid AND classoid='pg_class'::regclass)
+                            OR EXISTS (SELECT 1 FROM pg_seclabel WHERE objoid=c.oid AND classoid='pg_class'::regclass)
+                            OR EXISTS (
+                                SELECT 1 FROM pg_attribute a JOIN pg_type t ON t.oid=a.atttypid
+                                WHERE a.attrelid=c.oid AND a.attnum > 0 AND NOT a.attisdropped
+                                  AND (a.attcollation <> t.typcollation OR a.attidentity <> '' OR a.attgenerated <> ''
+                                       OR a.attoptions IS NOT NULL OR a.attfdwoptions IS NOT NULL)
+                            )
+                        FROM pg_class c WHERE c.oid='findings'::regclass
+                    """).scalar_one())
                 foreign_keys = inspector.get_foreign_keys("findings")
-                extra_schema = bool(inspector.get_check_constraints("findings") or inspector.get_unique_constraints("findings") or triggers)
+                extra_schema = bool(inspector.get_check_constraints("findings") or inspector.get_unique_constraints("findings") or triggers or custom_metadata)
                 extra_schema = extra_schema or any(
                     key.get("referred_schema") not in {None, inspector.default_schema_name} for key in foreign_keys
                 )
@@ -340,18 +362,35 @@ class SQLAlchemyDatabase:
                 case_id=case_id, created_at=now, updated_at=now, status="ready",
                 evidence_dir=str(evidence_dir), output_dir=str(output_dir), last_error=None,
             ))
-            if artifacts:
-                con.execute(self.artifacts.insert(), [{
-                    "case_id": case_id, "rel_path": item["rel_path"], "artifact_type": item["artifact_type"],
-                    "size_bytes": item["size_bytes"], "sha256": item["sha256"], "ingested_at": now,
-                    "metadata_json": json.dumps(item.get("metadata", {})),
-                } for item in artifacts])
-                con.execute(self.evidence_hash_log.insert(), [{
-                    "case_id": case_id, "rel_path": item["rel_path"], "sha256": item["sha256"],
-                    "size_bytes": item["size_bytes"], "logged_at": now,
-                } for item in artifacts])
+            self._write_artifact_custody(con, case_id, artifacts, now)
             con.execute(self.audit_log.insert().values(
                 case_id=case_id, action="case_imported", actor="system", details_json=json.dumps(provenance), created_at=now,
+            ))
+
+    def _write_artifact_custody(self, con: Any, case_id: str, artifacts: list[dict[str, Any]], now: str) -> None:
+        con.execute(self.artifacts.delete().where(self.artifacts.c.case_id == case_id))
+        if artifacts:
+            con.execute(self.artifacts.insert(), [{
+                "case_id": case_id, "rel_path": item["rel_path"], "artifact_type": item["artifact_type"],
+                "size_bytes": item["size_bytes"], "sha256": item["sha256"], "ingested_at": now,
+                "metadata_json": json.dumps(item.get("metadata", {})),
+            } for item in artifacts])
+            con.execute(self.evidence_hash_log.insert(), [{
+                "case_id": case_id, "rel_path": item["rel_path"], "sha256": item["sha256"],
+                "size_bytes": item["size_bytes"], "logged_at": now,
+            } for item in artifacts])
+
+    def ingest_case_records(self, case_id: str, artifacts: list[dict[str, Any]], provenance: dict[str, Any]) -> None:
+        now = utc_now_iso()
+        with self.engine.begin() as con:
+            result = con.execute(self.cases.update().where(self.cases.c.case_id == case_id).values(
+                status="ready", last_error=None, updated_at=now,
+            ))
+            if result.rowcount != 1:
+                raise ValueError("Case disappeared before ingest persistence")
+            self._write_artifact_custody(con, case_id, artifacts, now)
+            con.execute(self.audit_log.insert().values(
+                case_id=case_id, action="case_ingested", actor="system", details_json=json.dumps(provenance), created_at=now,
             ))
 
     def list_cases(self) -> list[dict[str, Any]]:

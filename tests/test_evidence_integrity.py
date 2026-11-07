@@ -82,6 +82,28 @@ def test_multiline_csv_preserves_fields_and_physical_citation_rows(tmp_path: Pat
     assert read_cited_text(tmp_path, header)[0] is None
 
 
+def test_nested_artifact_provenance_cannot_be_shadowed_by_a_root_basename(tmp_path: Path):
+    from auto_forensics.integrity import verify_run
+    from auto_forensics.pipeline import PipelineConfig, run_case
+
+    evidence = tmp_path / "evidence"
+    (evidence / "host").mkdir(parents=True)
+    nested = evidence / "host/events.json"
+    nested.write_text(json.dumps([{
+        "artifact_id": "event-4104", "event_type": "powershell_script", "source": "windows",
+        "description": "PowerShell script block logged", "event_id": 4104,
+    }]))
+    (evidence / "events.json").write_text("[]")
+    digest = hashlib.sha256(nested.read_bytes()).hexdigest()
+    assert locate_source(evidence, "events.json", digest) == nested
+    output = tmp_path / "output"
+    report = run_case(PipelineConfig("shadow-case", evidence, output, llm_provider="off"))
+    assert len(report.findings) == 1
+    assert report.findings[0].citations[0].source_file == "host/events.json"
+    assert report.findings[0].verification == "supported"
+    assert verify_run(output / "run_manifest.json")["match"] is True
+
+
 class _Tags(HTMLParser):
     def __init__(self):
         super().__init__()
