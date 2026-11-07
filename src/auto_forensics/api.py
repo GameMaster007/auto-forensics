@@ -7,9 +7,10 @@ import hmac
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .config import AppConfig
+from .reviews import ReviewError
 from .security import SecurityError, confine_path, validate_case_id
 from .service import AutoForensicsService
 
@@ -84,6 +85,13 @@ class CaseImportRequest(BaseModel):
 
 class JobCleanupRequest(BaseModel):
     retention_days: int | None = Field(default=None, ge=0, le=3650)
+
+
+class FindingReviewRequest(BaseModel):
+    decision: Literal["accept", "reject", "annotate"]
+    actor: str = Field(min_length=1, max_length=120)
+    note: str = Field(default="", max_length=2000)
+    override: bool = False
 
 
 def _dashboard_html() -> str:
@@ -264,6 +272,28 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             return service.search_case(validate_case_id(case_id), q, limit=limit)
         except SecurityError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/cases/{case_id}/integrity", response_class=JSONResponse, dependencies=[Depends(api_guard)])
+    def case_integrity(case_id: str) -> dict[str, Any]:
+        try:
+            return service.check_case_integrity(validate_case_id(case_id))
+        except SecurityError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/cases/{case_id}/sync-report", response_class=JSONResponse, dependencies=[Depends(api_guard)])
+    def sync_report(case_id: str) -> dict[str, Any]:
+        try:
+            return service.sync_case_report(validate_case_id(case_id))
+        except SecurityError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/cases/{case_id}/findings/{finding_id}/review", response_class=JSONResponse, dependencies=[Depends(api_guard)])
+    def review_finding(case_id: str, finding_id: str, body: FindingReviewRequest) -> dict[str, Any]:
+        try:
+            return service.review_finding(validate_case_id(case_id), finding_id=finding_id, decision=body.decision,
+                                          actor=body.actor, note=body.note, override=body.override)
+        except (SecurityError, ReviewError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/cases/{case_id}/jobs", response_class=JSONResponse, dependencies=[Depends(api_guard)])
     async def list_case_jobs(

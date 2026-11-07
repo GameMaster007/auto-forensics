@@ -123,6 +123,7 @@ def test_replay_refuses_to_overwrite_source_outputs_or_evidence(tmp_path: Path):
     lambda m: m["input_files"][0].update(size_bytes=True),
     lambda m: m.update(output=[]),
     lambda m: m["output"].update(report="../outside.json"),
+    lambda m: m["output"].update(report="different_report.json"),
     lambda m: m["model"].update(provider=[]),
     lambda m: m.update(input_dir="\x00"),
     lambda m: m["model"].update(endpoint=[]),
@@ -138,6 +139,17 @@ def test_malformed_manifests_fail_before_replay(tmp_path: Path, mutation):
     manifest.write_text(json.dumps(raw), encoding="utf-8")
     with pytest.raises(SecurityError):
         replay_manifest(manifest)
+    assert not (manifest.parent / "replay").exists()
+
+
+def test_manifest_file_symlinks_cannot_redirect_verification_or_review(tmp_path: Path):
+    _source, manifest = _run(tmp_path)
+    real = tmp_path / "external_manifest.json"
+    manifest.rename(real)
+    manifest.symlink_to(real)
+    for operation in (read_run_manifest, verify_run, replay_manifest):
+        with pytest.raises(SecurityError, match="symlink"):
+            operation(manifest)
     assert not (manifest.parent / "replay").exists()
 
 

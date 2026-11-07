@@ -28,7 +28,7 @@ def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict
     Analyst decisions in ``analyst_reviews.jsonl`` beside that manifest
     are applied again before the report hash is compared.
     """
-    manifest_path = manifest_path.resolve()
+    manifest_path = manifest_path.parent.resolve() / manifest_path.name
     manifest = read_run_manifest(manifest_path)
     input_dir = Path(manifest["input_dir"])
     input_match, input_changes, input_error = check_inputs(manifest, input_dir)

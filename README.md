@@ -155,6 +155,46 @@ and its verification is `not verified`. It is not in
 `verified_finding_ids`. `verification: supported` on any other finding
 is still the machine check, not an analyst decision.
 
+For a managed case, use `--case-id CASE-ID` in place of `--output-dir`.
+This updates both the report and the database view shown by the API:
+
+```bash
+auto-forensics review --case-id case-001 --finding-id FINDING-ID \
+  --decision accept --actor "A. Analyst"
+auto-forensics check-case --case-id case-001
+```
+
+`check-case` compares current evidence with the custody index, checks
+the saved run, and compares the database findings and timeline with the
+report. It makes no model calls and exits nonzero on a mismatch. A case
+that has not been analyzed can still pass its custody check.
+
+If a standalone review changed a managed case's report, an import has
+not restored its database views, or a database update was interrupted,
+`auto-forensics sync-report --case-id CASE-ID` rebuilds the findings and
+timeline from the saved report after verifying evidence, resources,
+report artifacts, and review hashes. It preserves the report bytes,
+analyst notes, and enrichment cache. It refuses changed evidence; it
+does not repair or conceal custody failures. Referenced rule resources
+must remain available to verify an imported run. Report publication and
+database updates are separate transactions; a failed database update
+reports that the review was saved and needs synchronization.
+
+The API exposes the same operations through
+`GET /api/cases/{case_id}/integrity`,
+`POST /api/cases/{case_id}/sync-report`, and
+`POST /api/cases/{case_id}/findings/{finding_id}/review`. The review body
+contains `decision`, `actor`, optional `note`, and optional `override`.
+These routes use the existing API-key policy. Conflicting reviews or
+failed integrity checks return HTTP 409.
+
+Database migrations are transactional on SQLite and PostgreSQL. Finding
+IDs are scoped to a case, so analyzing the same artifact in another
+case does not overwrite it. Full technique, confidence-range, machine
+verification, and analyst review details are retained. An unrecognized
+legacy finding-table layout or a newer schema is refused rather than
+rebuilt destructively; preserve a database backup before upgrading.
+
 `--llm off` uses the same citation rule with a score-based heuristic
 and no draft wording from the mock. `--llm ollama` calls a local
 Ollama-compatible endpoint at temperature 0. If that endpoint is down,

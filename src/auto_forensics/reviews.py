@@ -34,7 +34,7 @@ _DECISIONS = {"accept", "reject"}
 
 
 class ReviewError(ValueError):
-    """The review was refused and the report was not changed."""
+    """A review failed; the message identifies any saved decision needing repair."""
 
 
 def record_review(
@@ -49,20 +49,29 @@ def record_review(
     input_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Verify and lock a run before recording an analyst decision."""
-    from .integrity import verify_run
-
     output_dir = output_dir.resolve()
     try:
         with directory_lock(output_dir):
-            result = verify_run(output_dir / "run_manifest.json", input_dir=input_dir)
-            if not result["match"]:
-                raise ReviewError("Run integrity check failed before review; no decision was recorded")
-            return _record_review(
+            return record_review_locked(
                 output_dir, finding_id=finding_id, decision=decision, actor=actor,
-                note=note, override=override, at=at,
+                note=note, override=override, at=at, input_dir=input_dir,
             )
     except SecurityError as exc:
         raise ReviewError(str(exc)) from exc
+
+
+def record_review_locked(
+    output_dir: Path, *, finding_id: str, decision: str, actor: str,
+    note: str = "", override: bool = False, at: str | None = None, input_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Record under an output lock already held by a managed-case operation."""
+    from .integrity import verify_run
+
+    result = verify_run(output_dir / "run_manifest.json", input_dir=input_dir)
+    if not result["match"]:
+        raise ReviewError("Run integrity check failed before review; no decision was recorded")
+    return _record_review(output_dir, finding_id=finding_id, decision=decision, actor=actor,
+                          note=note, override=override, at=at)
 
 
 def _record_review(

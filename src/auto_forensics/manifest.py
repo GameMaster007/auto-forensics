@@ -33,6 +33,9 @@ REPORT_ARTIFACT_NAMES = (
 
 def read_run_manifest(path: Path) -> dict[str, Any]:
     """Load a bounded, structurally valid manifest before executing a replay."""
+    path = path.parent.resolve() / path.name
+    if not stays_in_tree(path, path.parent):
+        raise SecurityError("Run manifest must be a regular file without a symlink")
     try:
         manifest = json.loads(read_limited_text(path, 16 * 1024 * 1024))
     except (OSError, ValueError) as exc:
@@ -59,7 +62,7 @@ def read_run_manifest(path: Path) -> dict[str, Any]:
         ):
             raise SecurityError("Run manifest has an invalid analyst review digest")
     output = manifest.get("output")
-    if not isinstance(output, dict) or not safe_relative_path(output.get("report")) or not valid_digest(output.get("sha256")):
+    if not isinstance(output, dict) or output.get("report") != "case_report.json" or not valid_digest(output.get("sha256")):
         raise SecurityError("Run manifest has an invalid report path or hash")
     model = manifest.get("model")
     if not isinstance(model, dict) or not isinstance(model.get("provider"), str) or model["provider"] not in {

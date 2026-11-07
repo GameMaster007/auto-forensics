@@ -49,7 +49,9 @@ def verify_run(manifest_path: Path, *, input_dir: Path | None = None) -> dict[st
     Hashes detect changes relative to the manifest. This is not a digital
     signature, and it does not decide whether a finding's words are true.
     """
-    manifest_path = manifest_path.resolve()
+    # Resolve directory aliases without following a manifest-file symlink
+    # into an unrelated output directory.
+    manifest_path = manifest_path.parent.resolve() / manifest_path.name
     manifest = read_run_manifest(manifest_path)
     source = input_dir if input_dir is not None else Path(manifest["input_dir"])
     input_match, changes, input_error = check_inputs(manifest, source)
@@ -69,6 +71,8 @@ def verify_run(manifest_path: Path, *, input_dir: Path | None = None) -> dict[st
         report = json.loads(read_limited_text(report_path, 64 * 1024 * 1024))
         if not isinstance(report, dict) or not isinstance(report.get("findings"), list):
             raise SecurityError("Published report is not a case report object")
+        if report.get("case_id") != manifest["case_id"]:
+            raise SecurityError("Published report case identifier differs from its manifest")
         actual_sha = canonical_report_sha256(report)
         report_match = actual_sha == manifest["output"]["sha256"].lower()
         citations_match = _check_citation_files(report["findings"], manifest["input_files"])

@@ -74,9 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_llm_argument(run)
 
-    review = sub.add_parser("review", help="Accept, reject, or annotate one finding in a run directory.")
+    review = sub.add_parser("review", help="Accept, reject, or annotate one finding in a run or managed case.")
     review.add_argument("--input-dir", type=Path, default=None, help="Evidence directory for an imported or relocated run.")
-    review.add_argument("--output-dir", required=True, type=Path, help="Directory that contains case_report.json.")
+    review_target = review.add_mutually_exclusive_group(required=True)
+    review_target.add_argument("--output-dir", type=Path, help="Directory that contains case_report.json.")
+    review_target.add_argument("--case-id", help="Managed case; also update its database view.")
     review.add_argument("--finding-id", required=True, help="Finding id from the report.")
     review.add_argument("--decision", required=True, choices=["accept", "reject", "annotate"])
     review.add_argument("--actor", required=True, help="Name recorded in the custody log.")
@@ -99,6 +101,11 @@ def build_parser() -> argparse.ArgumentParser:
     verify = sub.add_parser("verify", help="Check a run's evidence and stored report without executing a model.")
     verify.add_argument("manifest", type=Path, help="Path to run_manifest.json.")
     verify.add_argument("--input-dir", type=Path, default=None, help="Check a relocated copy of the evidence.")
+
+    check_case = sub.add_parser("check-case", help="Compare managed evidence custody, report hashes, and database views.")
+    check_case.add_argument("--case-id", required=True)
+    sync_report = sub.add_parser("sync-report", help="Restore findings and timeline database views from a verified saved report.")
+    sync_report.add_argument("--case-id", required=True)
 
     export_case = sub.add_parser("export", help="Export case as an integrity-checked zip archive.")
     export_case.add_argument("--case-id", required=True, help="Case identifier.")
@@ -257,15 +264,18 @@ def main() -> None:
             return
 
         if args.command == "review":
-            entry = record_review(
-                args.output_dir,
-                finding_id=args.finding_id,
-                decision=args.decision,
-                actor=args.actor,
-                note=args.note,
-                override=args.override,
-                input_dir=args.input_dir,
-            )
+            if args.case_id:
+                if args.input_dir is not None:
+                    parser.error("--input-dir applies only to review --output-dir; managed cases use their custody directory")
+                entry = ensure_service().review_finding(
+                    args.case_id, finding_id=args.finding_id, decision=args.decision,
+                    actor=args.actor, note=args.note, override=args.override,
+                )
+            else:
+                entry = record_review(
+                    args.output_dir, finding_id=args.finding_id, decision=args.decision,
+                    actor=args.actor, note=args.note, override=args.override, input_dir=args.input_dir,
+                )
             print(json.dumps(entry, indent=2))
             return
 
@@ -281,6 +291,17 @@ def main() -> None:
             print(json.dumps(result, indent=2))
             if not result["match"]:
                 raise SystemExit(1)
+            return
+
+        if args.command == "check-case":
+            result = ensure_service().check_case_integrity(args.case_id)
+            print(json.dumps(result, indent=2))
+            if not result["match"]:
+                raise SystemExit(1)
+            return
+
+        if args.command == "sync-report":
+            print(json.dumps(ensure_service().sync_case_report(args.case_id), indent=2))
             return
     except ReviewError as exc:
         raise SystemExit(f"Review refused: {exc}") from exc

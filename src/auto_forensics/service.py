@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .archives import archive_relative_path, extract_verified_archive
+from .case_integrity import custody_changes, inspect_case_integrity, verified_case_report
 from .case_manager import CaseManager
 from .config import AppConfig
 from .db import Database
@@ -25,6 +26,7 @@ from .ioc_enrichment import EnrichmentConfig, enabled_providers, enrich_ioc
 from .models import IOC, IOCEnrichment
 from .pipeline import PipelineConfig, run_case
 from .plugins import PluginRegistry
+from .reviews import ReviewError, record_review_locked
 from .security import SecurityError, sha256_file, stays_in_tree, validate_case_id
 
 
@@ -762,6 +764,50 @@ class AutoForensicsService:
             "latest_enrichment_job": latest_enrichment_job,
             "summary": summary,
         }
+
+    @_case_operation
+    def check_case_integrity(self, case_id: str) -> dict[str, Any]:
+        case = self.require_case(case_id)
+        with directory_lock(Path(case["output_dir"])):
+            return inspect_case_integrity(self.db, case)
+
+    @_case_operation
+    def sync_case_report(self, case_id: str) -> dict[str, Any]:
+        """Repair findings/timeline views from the verified saved report."""
+        case = self.require_case(case_id)
+        with directory_lock(Path(case["output_dir"])):
+            if any(custody_changes(self.db, case).values()):
+                raise SecurityError("Evidence differs from its custody index; refusing to synchronize")
+            report = verified_case_report(case)
+            self.db.replace_findings_and_timeline(case_id, report.findings, report.timeline)
+            self.db.append_audit_log(
+                action="report_projection_synchronized", actor="system", case_id=case_id,
+                details={"findings": len(report.findings), "timeline_events": len(report.timeline)},
+            )
+        return {"case_id": case_id, "findings": len(report.findings), "timeline_events": len(report.timeline)}
+
+    @_case_operation
+    def review_finding(
+        self, case_id: str, *, finding_id: str, decision: str, actor: str,
+        note: str = "", override: bool = False,
+    ) -> dict[str, Any]:
+        case = self.require_case(case_id)
+        output = Path(case["output_dir"])
+        with directory_lock(output):
+            integrity = inspect_case_integrity(self.db, case)
+            if not integrity["match"] or not integrity["report_present"]:
+                raise ReviewError("Case integrity check failed; inspect check-case and use sync-report for a stale database view")
+            entry = record_review_locked(
+                output, finding_id=finding_id, decision=decision, actor=actor,
+                note=note, override=override, input_dir=Path(case["evidence_dir"]),
+            )
+            report = verified_case_report(case)
+            try:
+                self.db.update_finding_reviews(case_id, report.findings)
+            except Exception as exc:
+                raise ReviewError("Review was saved in the report, but its database view could not be updated; run sync-report") from exc
+            self.db.append_audit_log(action="finding_reviewed", actor=entry["actor"], case_id=case_id, details=entry)
+        return entry
 
     def add_case_note(self, case_id: str, content: str, author: str = "analyst") -> dict[str, Any]:
         case_id = validate_case_id(case_id)
