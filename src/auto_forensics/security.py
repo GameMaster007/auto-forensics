@@ -4,6 +4,7 @@ import hashlib
 import math
 import os
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
@@ -175,3 +176,40 @@ def read_limited_text(path: Path, max_bytes: int) -> str:
     if len(data) > max_bytes:
         raise SecurityError(f"File exceeds maximum text size: {path}")
     return data.decode("utf-8", errors="replace")
+
+
+def read_regular_text(path: Path, root: Path, max_bytes: int) -> str:
+    """Read one unchanged regular UTF-8 file without following symlinks."""
+    root = root.absolute()
+    def guard() -> None:
+        if any(parent.is_symlink() for parent in (root, *root.parents)) or not stays_in_tree(path, root):
+            raise SecurityError("Published report must be a regular file inside its output directory without symlinks")
+    try:
+        guard()
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            before = os.fstat(descriptor)
+            if not stat.S_ISREG(before.st_mode):
+                raise SecurityError("Published report must be a regular file")
+            if before.st_size > max_bytes:
+                raise SecurityError("Published report exceeds its text size limit")
+            guard()
+            current = path.stat(follow_symlinks=False)
+            if (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
+                raise SecurityError("Published report changed before reading")
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                data = handle.read(max_bytes + 1)
+            guard()
+            after = os.fstat(descriptor)
+            current = path.stat(follow_symlinks=False)
+            if (before.st_size, before.st_mtime_ns, before.st_dev, before.st_ino) != (
+                after.st_size, after.st_mtime_ns, current.st_dev, current.st_ino
+            ):
+                raise SecurityError("Published report changed while reading")
+        finally:
+            os.close(descriptor)
+        if len(data) > max_bytes:
+            raise SecurityError("Published report exceeds its text size limit")
+        return data.decode("utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise SecurityError("Published report could not be read as bounded regular UTF-8 text") from exc

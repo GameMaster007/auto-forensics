@@ -204,48 +204,81 @@ def finding_details_as_json(finding: Finding) -> str:
     return json.dumps({name: getattr(finding, name) for name in FINDING_DETAIL_FIELDS}, allow_nan=False)
 
 
-def decode_json_object(raw: Any) -> dict[str, Any]:
+_INVALID_JSON = object()
+
+
+def _stored_json(raw: Any) -> Any:
     try:
+        if isinstance(raw, str) and len(raw.encode("utf-8")) > 64 * 1024 * 1024:
+            return _INVALID_JSON
         parsed = json.loads(raw) if isinstance(raw, str) else raw
         validate_json_nesting(parsed)
     except (ValueError, RecursionError):
-        return {}
+        return _INVALID_JSON
+    return parsed
+
+
+def decode_json_object(raw: Any) -> dict[str, Any]:
+    parsed = _stored_json(raw)
     return dict(parsed) if isinstance(parsed, dict) else {}
+
+
+def _json_error(item: dict[str, Any], field: str) -> None:
+    errors = item.get("_json_errors")
+    if not isinstance(errors, list) or not all(isinstance(error, str) for error in errors):
+        errors = item["_json_errors"] = []
+    if field not in errors:
+        errors.append(field)
+
+
+def decode_row_json(item: dict[str, Any], source: str, target: str, expected: type, *, nullable: bool = False) -> None:
+    """Keep a safe display value and a diagnostic for invalid stored data."""
+    parsed = _stored_json(item.pop(source, None))
+    if isinstance(parsed, expected) or (nullable and parsed is None):
+        item[target] = parsed
+    else:
+        item[target] = None if nullable else expected()
+        _json_error(item, source)
 
 
 def decode_finding_row(row: dict[str, Any]) -> dict[str, Any]:
     """Convert a findings-table row into the dict returned by the API.
 
-    Corrupt JSON becomes an empty list rather than an exception, so one
-    bad row cannot hide the rest of the case.
+    Corrupt JSON gets a display default and a diagnostic, so one bad row
+    cannot hide the rest of the case or pass an integrity check by coercion.
     """
     item = dict(row)
-    item["evidence"] = decode_json_list(item.pop("evidence_json", "[]"))
+    item.setdefault("evidence_json", "[]")
+    decode_row_json(item, "evidence_json", "evidence", list)
     if "citations_json" in item:
-        item["citations"] = decode_json_list(item.pop("citations_json"))
+        decode_row_json(item, "citations_json", "citations", list)
     else:
         item["citations"] = []
     item["origin"] = str(item.get("origin") or "detector")
     item["review_status"] = str(item.get("review_status") or "unverified")
     item["worker"] = str(item.get("worker") or "pipeline")
-    details = decode_json_object(item.pop("details_json", "{}"))
+    item.setdefault("details_json", "{}")
+    decode_row_json(item, "details_json", "_details", dict)
+    details = item.pop("_details")
     for name in FINDING_DETAIL_FIELDS:
         value = details.get(name)
         if name in {"confidence_low", "confidence_high"}:
             item[name] = value if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1 and math.isfinite(value) else None
+            valid = value is None or item[name] is not None
         elif name == "ioc_refs":
             item[name] = [reference for reference in value if isinstance(reference, str)] if isinstance(value, list) else []
+            valid = isinstance(value, list) and len(item[name]) == len(value)
         elif name == "analyst_verified":
             item[name] = value is True and item["review_status"] == "accepted"
+            valid = isinstance(value, bool) and (not value or item["review_status"] == "accepted")
         else:
             item[name] = value if isinstance(value, str) else ""
+            valid = isinstance(value, str)
+        if name in details and not valid:
+            _json_error(item, "details_json." + name)
     return item
 
 
 def decode_json_list(raw: Any) -> list[Any]:
-    try:
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
-        validate_json_nesting(parsed)
-    except (ValueError, RecursionError):
-        return []
+    parsed = _stored_json(raw)
     return parsed if isinstance(parsed, list) else []

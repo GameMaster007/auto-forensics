@@ -22,7 +22,7 @@ from .models import (
     TimelineEvent,
     citations_as_json,
     decode_finding_row,
-    decode_json_object,
+    decode_row_json,
     finding_details_as_json,
     utc_now_iso,
 )
@@ -505,7 +505,7 @@ class SQLAlchemyDatabase:
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            item["metadata"] = decode_json_object(item.pop("metadata_json"))
+            decode_row_json(item, "metadata_json", "metadata", dict)
             out.append(item)
         return out
 
@@ -564,8 +564,8 @@ class SQLAlchemyDatabase:
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            item["tags"] = json.loads(item.pop("tags_json"))
-            item["related"] = json.loads(item.pop("related_json"))
+            decode_row_json(item, "tags_json", "tags", list)
+            decode_row_json(item, "related_json", "related", dict)
             out.append(item)
         out.sort(key=lambda row: timeline_sort_key(row.get("timestamp")))
         return out
@@ -612,8 +612,8 @@ class SQLAlchemyDatabase:
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            item["sources"] = json.loads(item.pop("sources_json"))
-            item["metadata"] = json.loads(item.pop("metadata_json"))
+            decode_row_json(item, "sources_json", "sources", list)
+            decode_row_json(item, "metadata_json", "metadata", dict)
             out.append(item)
         return out
 
@@ -822,7 +822,7 @@ class SQLAlchemyDatabase:
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            item["details"] = json.loads(item.pop("details_json"))
+            decode_row_json(item, "details_json", "details", dict)
             out.append(item)
         return out
 
@@ -892,11 +892,7 @@ class SQLAlchemyDatabase:
         if row is None:
             return None
         item = dict(row._mapping)
-        result_json = item.pop("result_json", None)
-        try:
-            item["result"] = json.loads(result_json) if result_json else None
-        except (json.JSONDecodeError, TypeError):
-            item["result"] = None
+        decode_row_json(item, "result_json", "result", dict, nullable=True)
         return item
 
     def list_case_jobs(
@@ -926,11 +922,7 @@ class SQLAlchemyDatabase:
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            result_json = item.pop("result_json", None)
-            try:
-                item["result"] = json.loads(result_json) if result_json else None
-            except (json.JSONDecodeError, TypeError):
-                item["result"] = None
+            decode_row_json(item, "result_json", "result", dict, nullable=True)
             out.append(item)
         return out
 
@@ -1036,15 +1028,15 @@ class SQLAlchemyDatabase:
         timeline_out: list[dict[str, Any]] = []
         for row in timeline_rows:
             item = dict(row)
-            item["tags"] = json.loads(item.pop("tags_json"))
-            item["related"] = json.loads(item.pop("related_json"))
+            decode_row_json(item, "tags_json", "tags", list)
+            decode_row_json(item, "related_json", "related", dict)
             timeline_out.append(item)
 
         ioc_out: list[dict[str, Any]] = []
         for row in ioc_rows:
             item = dict(row)
-            item["sources"] = json.loads(item.pop("sources_json"))
-            item["metadata"] = json.loads(item.pop("metadata_json"))
+            decode_row_json(item, "sources_json", "sources", list)
+            decode_row_json(item, "metadata_json", "metadata", dict)
             ioc_out.append(item)
 
         return {

@@ -24,12 +24,20 @@ from .db_sqlalchemy import SQLAlchemyDatabase
 from .file_ops import directory_lock
 from .integrity import compare_inventory
 from .ioc_enrichment import EnrichmentConfig, enabled_providers, enrich_ioc
-from .manifest import hash_input_tree
+from .manifest import MAX_REPORT_BYTES, hash_input_tree
 from .models import IOC, IOCEnrichment, utc_now_iso
 from .pipeline import PipelineConfig, run_case
 from .plugins import PluginRegistry
 from .reviews import ReviewError, record_review_locked
-from .security import SecurityError, bounded_tree_paths, sha256_file, stays_in_tree, validate_case_id
+from .security import (
+    SecurityError,
+    bounded_tree_paths,
+    read_regular_text,
+    sha256_file,
+    stays_in_tree,
+    validate_case_id,
+    validate_json_nesting,
+)
 
 
 def _case_operation(method: Callable[..., Any]) -> Callable[..., Any]:
@@ -772,13 +780,16 @@ class AutoForensicsService:
         latest_enrichment_job = self.db.get_case_latest_job(case_id, job_type="enrichment")
         report_path = Path(case["output_dir"]) / "case_report.json"
         summary: dict[str, Any] = {}
-        if report_path.exists():
+        report_error: str | None = None
+        if report_path.exists() or report_path.is_symlink():
             try:
-                payload = json.loads(report_path.read_text(encoding="utf-8"))
-                if isinstance(payload, dict):
-                    summary = payload.get("summary", {})
-            except json.JSONDecodeError:
-                summary = {}
+                payload = json.loads(read_regular_text(report_path, Path(case["output_dir"]), MAX_REPORT_BYTES))
+                validate_json_nesting(payload)
+                if not isinstance(payload, dict) or not isinstance(payload.get("summary"), dict):
+                    raise SecurityError("Saved report has an invalid summary")
+                summary = payload["summary"]
+            except (ValueError, RecursionError) as exc:
+                report_error = str(exc)
         return {
             "case": case,
             "artifacts": artifacts,
@@ -792,6 +803,7 @@ class AutoForensicsService:
             "latest_job": latest_job,
             "latest_enrichment_job": latest_enrichment_job,
             "summary": summary,
+            "report_error": report_error,
         }
 
     @_case_operation
@@ -1089,6 +1101,4 @@ class AutoForensicsService:
             raise SecurityError(
                 "Unsupported report format. Use 'json', 'md', 'html', 'navigator', or 'stix'."
             )
-        if not path.exists():
-            raise SecurityError(f"Report not found: {path}")
-        return path.read_text(encoding="utf-8")
+        return read_regular_text(path, output, MAX_REPORT_BYTES)

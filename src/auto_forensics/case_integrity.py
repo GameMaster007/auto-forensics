@@ -33,9 +33,12 @@ def verified_case_report(case: dict[str, Any]) -> CaseReport:
 
 
 def custody_changes(db: DatabaseBackend, case: dict[str, Any]) -> dict[str, list[str]]:
+    artifacts = db.get_artifacts(case["case_id"])
+    if any(row.get("_json_errors") for row in artifacts):
+        raise SecurityError("Stored artifact provenance contains invalid JSON")
     recorded = [
         {"path": row["rel_path"], "sha256": row["sha256"], "size_bytes": row["size_bytes"]}
-        for row in db.get_artifacts(case["case_id"])
+        for row in artifacts
     ]
     root = Path(case["evidence_dir"])
     changes = compare_inventory(recorded, hash_input_tree(root))
@@ -54,14 +57,17 @@ def finding_projection_changes(report: CaseReport, rows: list[dict[str, Any]]) -
     observed = {row["finding_id"]: {key: row.get(key) for key in names} for row in rows}
     if len(expected) != len(report.findings) or len(observed) != len(rows):
         raise SecurityError("Report or database has duplicate finding identities")
+    corrupt = {row["finding_id"] for row in rows if row.get("_json_errors")}
     return {
         "missing": sorted(expected.keys() - observed.keys()),
         "extra": sorted(observed.keys() - expected.keys()),
-        "modified": sorted(key for key in expected.keys() & observed.keys() if expected[key] != observed[key]),
+        "modified": sorted(key for key in expected.keys() & observed.keys() if expected[key] != observed[key] or key in corrupt),
     }
 
 
 def _timeline_matches(report: CaseReport, rows: list[dict[str, Any]]) -> bool:
+    if any(row.get("_json_errors") for row in rows):
+        return False
     names = {field.name for field in fields(TimelineEvent)}
     expected = [asdict(item) for item in report.timeline]
     observed = [{key: row.get(key) for key in names} for row in rows]

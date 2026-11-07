@@ -204,6 +204,10 @@ auto-forensics check-case --case-id case-001
 the saved run, and compares the database findings and timeline with the
 report. It makes no model calls and exits nonzero on a mismatch. A case
 that has not been analyzed can still pass its custody check.
+Database JSON display defaults retain `_json_errors` diagnostics.
+Integrity checks reject those diagnostics even when a default happens
+to equal the saved report's value. Case views remain readable so damaged
+records can be identified and recovered.
 
 If a standalone review changed a managed case's report, an import has
 not restored its database views, or a database update was interrupted,
@@ -230,6 +234,9 @@ Model responses are bounded to 8 MiB and use the same finite JSON and
 depth checks. Invalid responses leave the workflow on its existing
 fallback path. API-key and authorization headers are withheld from
 redirected requests. OpenAI-compatible base URLs may include `/v1`.
+Report endpoints accept unchanged regular UTF-8 files up to 64 MiB and
+refuse symlinks, directories, and special files. An unreadable saved report
+leaves the case overview available with a `report_error` diagnostic.
 
 The API exposes the same operations through
 `GET /api/cases/{case_id}/integrity`,
