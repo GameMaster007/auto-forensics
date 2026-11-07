@@ -12,8 +12,10 @@ instructions.
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
+import math
 import re
 import urllib.error
 import urllib.request
@@ -21,10 +23,12 @@ from dataclasses import asdict
 from typing import Any
 
 from .citations import citation_for_binary
+from .http_json import json_object, private_request, read_json_response
 from .ids import stable_id
 from .models import BinaryFeature, Citation, Finding, TimelineEvent
 
 logger = logging.getLogger(__name__)
+MAX_MODEL_RESPONSE_BYTES = 8 * 1024 * 1024
 
 # Patterns that may indicate prompt-injection attempts embedded in evidence data.
 _INJECTION_PATTERN = re.compile(
@@ -149,9 +153,12 @@ def build_llm_prompt(task: str, payload: dict[str, Any]) -> str:
 
 
 def _safe_float(v: Any, default: float = 0.5) -> float:
+    if isinstance(v, bool):
+        return default
     try:
-        return float(v)
-    except Exception:
+        value = float(v)
+        return value if math.isfinite(value) else default
+    except (ValueError, TypeError, OverflowError):
         return default
 
 
@@ -181,7 +188,7 @@ class LlamaWorkflow:
             "options": {"temperature": 0, "seed": self.seed},
         }
         data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
+        req = private_request(
             f"{self.endpoint}/api/generate",
             data=data,
             headers={"Content-Type": "application/json"},
@@ -189,20 +196,16 @@ class LlamaWorkflow:
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
-                parsed = json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+                parsed = read_json_response(resp, max_bytes=MAX_MODEL_RESPONSE_BYTES)
+        except (OSError, http.client.HTTPException, ValueError):
             return None
 
+        if parsed is None:
+            return None
         text = parsed.get("response", "")
         if not isinstance(text, str):
             return None
-        try:
-            result = json.loads(text)
-            if isinstance(result, dict):
-                return result
-        except json.JSONDecodeError:
-            return None
-        return None
+        return json_object(text)
 
     def _call_openai_compatible(self, prompt: str) -> dict[str, Any] | None:
         payload = {
@@ -224,16 +227,17 @@ class LlamaWorkflow:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        req = urllib.request.Request(
-            f"{self.endpoint}/v1/chat/completions",
+        suffix = "/chat/completions" if self.endpoint.endswith("/v1") else "/v1/chat/completions"
+        req = private_request(
+            f"{self.endpoint}{suffix}",
             data=json.dumps(payload).encode("utf-8"),
             headers=headers,
             method="POST",
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
-                parsed = json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+                parsed = read_json_response(resp, max_bytes=MAX_MODEL_RESPONSE_BYTES)
+        except (OSError, http.client.HTTPException, ValueError):
             return None
 
         choices = parsed.get("choices", []) if isinstance(parsed, dict) else []
@@ -244,13 +248,7 @@ class LlamaWorkflow:
         content = message.get("content", "")
         if not isinstance(content, str):
             return None
-        try:
-            result = json.loads(content)
-            if isinstance(result, dict):
-                return result
-        except json.JSONDecodeError:
-            return None
-        return None
+        return json_object(content)
 
     def _call(self, prompt: str) -> dict[str, Any] | None:
         if self.provider == "openai_compatible":

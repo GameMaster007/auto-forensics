@@ -17,17 +17,26 @@ part of the record.
 from __future__ import annotations
 
 import csv
+import io
 import json
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
 
 from .models import ArtifactEvent, Citation, Finding
-from .security import sha256_file, stays_in_tree
+from .security import (
+    SecurityError,
+    bounded_tree_paths,
+    capture_regular_evidence,
+    sha256_file,
+    stays_in_tree,
+    validate_json_nesting,
+)
 
 MAX_VERIFY_BYTES = 8 * 1024 * 1024
-# Same window ``analyze_binary`` uses for string hits. An offset-0
-# citation has to see a keyword found in that window.
+# Whole-file citations use a bounded prefix. Located keyword citations
+# can read a small window at their recorded offset anywhere in the file.
 MAX_BINARY_VERIFY_BYTES = 32 * 1024 * 1024
 _OFFSET_WINDOW = 8192
 _TEXT_PARSERS = {
@@ -222,34 +231,45 @@ def claim_lines(finding: Finding) -> list[str]:
 
 def read_cited_text(input_dir: Path, citation: Citation) -> tuple[str | None, str]:
     """Re-hash the cited file and return the cited row or byte window."""
+    if not citation.is_complete():
+        return None, REASON_UNREADABLE
     path = locate_source(input_dir, citation.source_file, citation.sha256)
     if path is None:
         return None, REASON_UNREADABLE
-    if sha256_file(path).lower() != citation.sha256.lower():
-        return None, REASON_HASH
     if citation.row is not None:
-        structured = _read_structured_record(path, citation.row)
-        if structured is not None:
-            return structured, ""
-        if _is_structured_artifact(path):
+        try:
+            structured = _is_structured_artifact(path)
+            with tempfile.TemporaryDirectory(prefix="af-citation-") as directory:
+                snapshot = Path(directory) / path.name
+                digest, _ = capture_regular_evidence(
+                    path, input_dir, destination=snapshot, max_bytes=None if structured else MAX_VERIFY_BYTES,
+                )
+                if digest.lower() != citation.sha256.lower():
+                    return None, REASON_HASH
+                text = _read_structured_record(snapshot, citation.row) if structured else _read_row(snapshot, citation.row)
+        except (OSError, SecurityError):
             return None, REASON_UNREADABLE
-        if path.stat().st_size > MAX_VERIFY_BYTES:
-            return None, REASON_UNREADABLE
-        text = _read_row(path, citation.row)
         if text is None:
             return None, REASON_UNREADABLE
         return text, ""
     start = citation.offset if citation.offset is not None else 0
     if start < 0:
         return None, REASON_UNREADABLE
-    with path.open("rb") as handle:
-        if start:
-            handle.seek(start)
-        cap = _OFFSET_WINDOW if start else min(path.stat().st_size, MAX_BINARY_VERIFY_BYTES)
-        window = handle.read(cap)
-    if start and not window and start >= path.stat().st_size:
+    try:
+        digest, window = capture_regular_evidence(
+            path, input_dir, start=start, window_bytes=_OFFSET_WINDOW if start else MAX_BINARY_VERIFY_BYTES,
+        )
+    except SecurityError:
         return None, REASON_UNREADABLE
-    return window.decode("utf-8", errors="replace"), ""
+    if digest.lower() != citation.sha256.lower():
+        return None, REASON_HASH
+    if start and not window:
+        return None, REASON_UNREADABLE
+    # Located UTF-16LE strings start on their first character, even at an
+    # odd file offset. Decode one representation, avoiding claims formed
+    # by concatenating unrelated decoding alternatives.
+    encoding = "utf-16le" if len(window) >= 4 and window[1] == 0 and window[3] == 0 and 32 <= window[0] <= 126 and 32 <= window[2] <= 126 else "utf-8"
+    return window.decode(encoding, errors="replace"), ""
 
 
 def locate_source(input_dir: Path, source_file: str, sha256: str = "") -> Path | None:
@@ -263,21 +283,29 @@ def locate_source(input_dir: Path, source_file: str, sha256: str = "") -> Path |
     rel = Path(source_file)
     if rel.is_absolute() or ".." in rel.parts or not source_file:
         return None
-    direct = (root / rel).resolve()
-    if direct.is_file() and not direct.is_symlink() and direct.is_relative_to(root):
+    direct = root / rel
+    if stays_in_tree(direct, root) and (len(rel.parts) > 1 or not sha256 or sha256_file(direct).lower() == sha256.lower()):
         return direct
+    if len(rel.parts) != 1:
+        return None
     matches = [
         path
-        for path in sorted(root.rglob("*"))
-        if path.name == rel.name and stays_in_tree(path, root) and len(path.relative_to(root).parts) <= 20
+        for path in sorted(bounded_tree_paths(root))
+        if path.name == rel.name and stays_in_tree(path, root)
     ]
-    if len(matches) == 1:
+    if len(matches) == 1 and not sha256:
         return matches[0]
     wanted = sha256.lower()
     if wanted:
-        for path in matches:
-            if sha256_file(path).lower() == wanted:
-                return path
+        hash_matches = [path for path in matches if sha256_file(path).lower() == wanted]
+        if len(hash_matches) == 1:
+            return hash_matches[0]
+        if hash_matches:
+            return None
+    if stays_in_tree(direct, root):
+        return direct
+    if len(matches) == 1:
+        return matches[0]
     return None
 
 
@@ -287,24 +315,23 @@ def _read_row(path: Path, row: int) -> str | None:
     if path.suffix.lower() == ".json":
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            raw = None
-        if isinstance(raw, list):
-            records = [item for item in raw if isinstance(item, dict)]
-            if row <= len(records):
-                return _json_record_text(records[row - 1])
-        elif isinstance(raw, dict) and row == 1:
-            return _json_record_text(raw)
+            validate_json_nesting(raw)
+        except (OSError, ValueError, RecursionError):
+            pass
+        else:
+            records = [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else [raw]
+            if row > len(records) or not isinstance(records[row - 1], dict):
+                return None
+            return _json_record_text(records[row - 1])
     if path.suffix.lower() == ".csv":
-        decoded = _csv_record_text(path, row)
-        if decoded is not None:
-            return decoded
+        return _csv_record_text(path, row)
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
+    lines = list(io.StringIO(text, newline="")) if path.suffix.lower() in {".json", ".jsonl"} else text.splitlines()
     if row <= len(lines):
-        line = lines[row - 1]
+        line = lines[row - 1].rstrip("\r\n")
         record = _json_object_line(line)
         if record is not None:
             return _json_record_text(record)
@@ -320,14 +347,22 @@ def _csv_record_text(path: Path, row: int) -> str | None:
     text. The raw line stays too, for a claim that quotes the line.
     """
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        with path.open("r", encoding="utf-8", errors="replace", newline="") as handle:
+            text = handle.read().removeprefix("\ufeff")
     except OSError:
         return None
-    reader = csv.DictReader(lines)
+    # Match csv.reader.line_num: Unicode separators inside a field are data,
+    # not additional physical lines that may shift another record's slice.
+    lines = list(io.StringIO(text, newline=""))
+    reader = csv.DictReader(io.StringIO(text, newline=""))
+    _ = reader.fieldnames
+    previous_line = reader.line_num
     for record in reader:
+        start_line = previous_line
+        previous_line = reader.line_num
         if reader.line_num != row:
             continue
-        values = [lines[row - 1] if row <= len(lines) else ""]
+        values = ["".join(lines[start_line:row])]
         for key, value in record.items():
             if key:
                 values.append(str(key))
@@ -344,7 +379,8 @@ def _json_object_line(line: str) -> dict | None:
         return None
     try:
         value = json.loads(stripped)
-    except json.JSONDecodeError:
+        validate_json_nesting(value)
+    except (ValueError, RecursionError):
         return None
     if isinstance(value, dict):
         return value

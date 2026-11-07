@@ -11,7 +11,7 @@ from auto_forensics.security import SecurityPolicy
 from auto_forensics.service import AutoForensicsService
 
 
-def test_sqlalchemy_backend_with_sqlite_url(tmp_path: Path):
+def test_sqlalchemy_backend_with_sqlite_url(tmp_path: Path, offline_enrichment: None):
     pytest.importorskip("sqlalchemy")
 
     data_dir = tmp_path / "data"

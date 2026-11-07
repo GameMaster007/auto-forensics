@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import logging
+import math
 import re
 import shutil
 import socket  # used for inet_ntop in network parsing
@@ -16,7 +18,14 @@ from typing import TYPE_CHECKING, Any
 
 from .ids import stable_id
 from .models import ArtifactEvent
-from .security import SecurityError, read_limited_text, sha256_file, stays_in_tree
+from .security import (
+    SecurityError,
+    bounded_tree_paths,
+    read_limited_text,
+    sha256_file,
+    stays_in_tree,
+    validate_json_nesting,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -133,14 +142,44 @@ def load_json_artifacts(path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> li
     except SecurityError:
         return []
     digest = sha256_file(path).lower()
+    if path.suffix.lower() == ".jsonl":
+        # JSONL always addresses object records by physical line. An array
+        # value on one line is not several logical records on other lines.
+        return _events_from_physical_json_lines(text, path.name, digest, allow_generic=True)
     try:
         raw = json.loads(text)
-    except json.JSONDecodeError:
-        from .timeline_imports import events_from_json_lines
-
-        return events_from_json_lines(text, path.name, digest)
+        validate_json_nesting(raw)
+    except (ValueError, RecursionError):
+        return _events_from_physical_json_lines(text, path.name, digest)
     items = raw if isinstance(raw, list) else [raw]
     return _events_from_json_items(items, path.name, digest)
+
+
+def _events_from_physical_json_lines(
+    text: str, source_file: str, digest: str, *, allow_generic: bool = False,
+) -> list[ArtifactEvent]:
+    """Count LF/CRLF/CR lines without splitting Unicode inside JSON fields."""
+    from .timeline_imports import event_from_record
+
+    out: list[ArtifactEvent] = []
+    for line_number, line in enumerate(io.StringIO(text, newline=""), start=1):
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+            validate_json_nesting(item)
+        except (ValueError, RecursionError):
+            continue
+        if not isinstance(item, dict):
+            continue
+        event = event_from_record(item, source_file, digest, line_number)
+        if event is None and allow_generic:
+            source = str(item.get("source") or source_file)
+            event = _make_event(item, source=source, identity=f"{source_file}:{line_number}")
+            _stamp_provenance(event, source_file, digest, row=line_number)
+        if event is not None:
+            out.append(event)
+    return out
 
 
 def _events_from_json_items(
@@ -176,18 +215,19 @@ def load_csv_artifacts(path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> lis
     except SecurityError:
         return out
     # Reuse CSV parser safely on bounded input.
-    lines = text.splitlines()
-    if not lines:
+    if not text.strip():
         return out
     digest = sha256_file(path).lower()
-    reader = csv.DictReader(lines)
+    reader = csv.DictReader(io.StringIO(text.removeprefix("\ufeff"), newline=""))
     from .timeline_imports import events_from_csv
 
     specialized = events_from_csv(reader, path.name, digest)
     if specialized is not None:
         return specialized
-    # Line 1 is the header. The first data record is file line 2.
-    for line_number, row in enumerate(reader, start=2):
+    # Cite the physical line on which the CSV record ends, including
+    # quoted fields that span more than one line.
+    for row in reader:
+        line_number = reader.line_num
         event = _make_event(row, source=path.name, identity=f"{path.name}:{line_number}")
         _stamp_provenance(event, path.name, digest, row=line_number)
         out.append(event)
@@ -196,16 +236,20 @@ def load_csv_artifacts(path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> lis
 
 def load_txt_artifacts(path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> list[ArtifactEvent]:
     out: list[ArtifactEvent] = []
-    try:
-        content = read_limited_text(path, max_text_bytes)
-    except SecurityError:
+    with path.open("rb") as handle:
+        data = handle.read(max_text_bytes + 1)
+    if len(data) > max_text_bytes:
         return out
+    # Surrogate escaping keeps undecodable bytes available for exact offset
+    # accounting. Event text still uses the existing replacement decoding.
+    content = data.decode("utf-8", errors="surrogateescape")
     digest = sha256_file(path).lower()
     offset = 0
     for line_number, line in enumerate(content.splitlines(keepends=True), start=1):
+        raw_line = line.encode("utf-8", errors="surrogateescape")
         start = offset
-        offset += len(line.encode("utf-8"))
-        text = line.strip()
+        offset += len(raw_line)
+        text = raw_line.decode("utf-8", errors="replace").strip()
         if not text:
             continue
         parts = [x.strip() for x in text.split("|", 2)]
@@ -247,8 +291,8 @@ def _stamp_provenance(
         event.metadata["offset"] = offset
 
 
-def _ensure_provenance(events: list[ArtifactEvent], path: Path) -> None:
-    """Fill provenance when a parser did not set it.
+def _ensure_provenance(events: list[ArtifactEvent], path: Path, source_file: str | None = None) -> None:
+    """Bind parser records to the file actually discovered by this run.
 
     ``row`` falls back to the 1-based order of records returned for
     this file. A parser that already set ``row`` keeps that value.
@@ -257,8 +301,8 @@ def _ensure_provenance(events: list[ArtifactEvent], path: Path) -> None:
         return
     digest = sha256_file(path).lower()
     for index, event in enumerate(events, start=1):
-        event.metadata.setdefault("source_file", path.name)
-        event.metadata.setdefault("source_sha256", digest)
+        event.metadata["source_file"] = source_file or path.name
+        event.metadata["source_sha256"] = digest
         event.metadata.setdefault("row", index)
 
 
@@ -440,10 +484,11 @@ def _extract_tls_sni(data: bytes) -> str | None:
 
 def beaconing_events_from_flows(
     source: str,
-    flow_timestamps: dict[tuple[str, int, str], list[float]],
+    flow_timestamps: dict[tuple[str, str, int, str], list[float]],
 ) -> list[ArtifactEvent]:
     out: list[ArtifactEvent] = []
-    for (dst_ip, dst_port, proto), stamps in flow_timestamps.items():
+    for (src_ip, dst_ip, dst_port, proto), stamps in sorted(flow_timestamps.items()):
+        stamps = [stamp for stamp in stamps if type(stamp) in {float, int} and -62135596800 <= stamp <= 253402300799 and math.isfinite(stamp)]
         if len(stamps) < 5:
             continue
         ordered = sorted(stamps)
@@ -460,7 +505,7 @@ def beaconing_events_from_flows(
         score = round(max(0.0, min(10.0, (1.0 - coeff_var) * 10.0)), 2)
         out.append(
             ArtifactEvent(
-                artifact_id=_gen_artifact_id("pcap", source, dst_ip, dst_port, proto, ordered[0]),
+                artifact_id=_gen_artifact_id("pcap", source, src_ip, dst_ip, dst_port, proto, ordered[0]),
                 timestamp=_to_iso_utc(ordered[0]),
                 event_type="c2_beacon_suspected",
                 description=(
@@ -469,6 +514,7 @@ def beaconing_events_from_flows(
                 ),
                 source=source,
                 metadata={
+                    "src_ip": src_ip,
                     "dst_ip": dst_ip,
                     "dst_port": dst_port,
                     "protocol": proto,
@@ -489,7 +535,7 @@ def load_pcap_artifacts(path: Path) -> list[ArtifactEvent]:
         return []
 
     out: list[ArtifactEvent] = []
-    flow_timestamps: dict[tuple[str, int, str], list[float]] = {}
+    flow_timestamps: dict[tuple[str, str, int, str], list[float]] = {}
 
     def packet_stream() -> Any:
         with path.open("rb") as f:
@@ -509,6 +555,11 @@ def load_pcap_artifacts(path: Path) -> list[ArtifactEvent]:
 
     for ts, buf in packet_stream():
         try:
+            packet_time = float(ts)
+            timestamp = _to_iso_utc(packet_time)
+        except (ValueError, TypeError, OverflowError, OSError):
+            continue
+        try:
             eth = dpkt.ethernet.Ethernet(buf)
         except Exception:
             continue
@@ -523,7 +574,7 @@ def load_pcap_artifacts(path: Path) -> list[ArtifactEvent]:
             continue
 
         l4 = getattr(ip, "data", None)
-        if l4 is None:
+        if not isinstance(l4, (dpkt.udp.UDP, dpkt.tcp.TCP)):
             continue
         sport = int(getattr(l4, "sport", 0) or 0)
         dport = int(getattr(l4, "dport", 0) or 0)
@@ -533,7 +584,7 @@ def load_pcap_artifacts(path: Path) -> list[ArtifactEvent]:
             payload = payload.tobytes()
 
         proto = "udp" if l4.__class__.__name__.lower() == "udp" else "tcp"
-        flow_timestamps.setdefault((dst_ip, dport, proto), []).append(float(ts))
+        flow_timestamps.setdefault((src_ip, dst_ip, dport, proto), []).append(packet_time)
 
         if proto == "udp" and (sport == 53 or dport == 53):
             try:
@@ -548,7 +599,7 @@ def load_pcap_artifacts(path: Path) -> list[ArtifactEvent]:
                     out.append(
                         ArtifactEvent(
                             artifact_id=_gen_artifact_id("pcap", "dns", name, ts),
-                            timestamp=_to_iso_utc(float(ts)),
+                            timestamp=timestamp,
                             event_type="dns_query",
                             description=f"DNS query for {name}",
                             source=path.name,
@@ -574,7 +625,7 @@ def load_pcap_artifacts(path: Path) -> list[ArtifactEvent]:
                 out.append(
                     ArtifactEvent(
                         artifact_id=_gen_artifact_id("pcap", "http", host, path_part, ts),
-                        timestamp=_to_iso_utc(float(ts)),
+                        timestamp=timestamp,
                         event_type="http_request",
                         description=f"HTTP {req.method} {path_part}",
                         source=path.name,
@@ -594,7 +645,7 @@ def load_pcap_artifacts(path: Path) -> list[ArtifactEvent]:
                 out.append(
                     ArtifactEvent(
                         artifact_id=_gen_artifact_id("pcap", "tls", sni, ts),
-                        timestamp=_to_iso_utc(float(ts)),
+                        timestamp=timestamp,
                         event_type="tls_client_hello",
                         description=f"TLS client hello with SNI {sni}",
                         source=path.name,
@@ -621,10 +672,6 @@ def _safe_timestamp_text(value: Any) -> str | None:
     if text.endswith("Z") or "+" in text or "T" in text:
         return text
     return text.replace(" ", "T")
-
-
-def _timestamp_from_stat(path: Path) -> str:
-    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _prefetch_event(
@@ -734,9 +781,9 @@ def load_prefetch_artifacts(path: Path) -> list[ArtifactEvent]:
         _prefetch_event(
             source=path.name,
             executable=executable,
-            timestamp=_timestamp_from_stat(path),
+            timestamp=None,
             run_count=None,
-            metadata={"parser": "filename-fallback"},
+            metadata={"parser": "filename-fallback", "timestamp_basis": "unknown"},
         )
     ]
 
@@ -941,11 +988,11 @@ def load_mft_artifacts(path: Path) -> list[ArtifactEvent]:
     return [
         ArtifactEvent(
             artifact_id=_gen_artifact_id("mft", path.name, "fallback"),
-            timestamp=_timestamp_from_stat(path),
+            timestamp=None,
             event_type="mft_artifact_ingested",
             description=f"MFT artifact detected: {path.name}",
             source=path.name,
-            metadata={"parser": "fallback", "path": str(path)},
+            metadata={"parser": "fallback", "timestamp_basis": "unknown"},
         )
     ]
 
@@ -974,11 +1021,11 @@ def load_memory_artifacts(path: Path) -> list[ArtifactEvent]:
         return [
             ArtifactEvent(
                 artifact_id=_gen_artifact_id("mem", path.name, "fallback"),
-                timestamp=_timestamp_from_stat(path),
+                timestamp=None,
                 event_type="memory_artifact_ingested",
                 description=f"Memory image detected: {path.name}",
                 source=path.name,
-                metadata={"parser": "fallback"},
+                metadata={"parser": "fallback", "timestamp_basis": "unknown"},
             )
         ]
 
@@ -1021,11 +1068,11 @@ def load_memory_artifacts(path: Path) -> list[ArtifactEvent]:
     return [
         ArtifactEvent(
             artifact_id=_gen_artifact_id("mem", path.name, "volatility-empty"),
-            timestamp=_timestamp_from_stat(path),
+            timestamp=None,
             event_type="memory_artifact_ingested",
             description=f"Memory image detected: {path.name}",
             source=path.name,
-            metadata={"parser": "volatility-empty"},
+            metadata={"parser": "volatility-empty", "timestamp_basis": "unknown"},
         )
     ]
 
@@ -1132,7 +1179,7 @@ def discover_artifacts(
     parser_registry.register_defaults()
 
     root = input_dir.resolve()
-    for path in sorted(root.rglob("*")):
+    for path in sorted(bounded_tree_paths(root)):
         if not stays_in_tree(path, root):
             continue
         suffix = path.suffix.lower()
@@ -1140,7 +1187,7 @@ def discover_artifacts(
             binaries.append(path)
             continue
         parsed = parser_registry.parse(path, max_text_bytes=max_text_bytes)
-        _ensure_provenance(parsed, path)
+        _ensure_provenance(parsed, path, str(path.relative_to(root)))
         events.extend(parsed)
 
     return events, binaries

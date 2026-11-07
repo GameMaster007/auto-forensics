@@ -7,7 +7,7 @@ from typing import Any
 from .citations import file_citation
 from .ids import stable_id
 from .models import Finding, TimelineEvent
-from .security import SecurityError, confine_path
+from .security import SecurityError, read_limited_text, stays_in_tree
 
 logger = logging.getLogger(__name__)
 
@@ -37,18 +37,23 @@ def _compile_rules(rules_dir: Path) -> list[tuple[Path, Any]]:
         return []
 
     compiled: list[tuple[Path, Any]] = []
-    for rule_file in sorted(rules_dir.rglob("*")):
-        if not rule_file.is_file():
+    root = rules_dir.resolve()
+
+    def include_source(requested: str, filename: str | None, namespace: str) -> str:
+        del namespace
+        parent = Path(filename).parent if filename else root
+        included = parent / requested
+        if not stays_in_tree(included, root):
+            raise SecurityError("YARA includes must be regular files inside the rules directory")
+        return read_limited_text(included, 4 * 1024 * 1024)
+
+    for rule_file in sorted(root.rglob("*")):
+        if not stays_in_tree(rule_file, root):
             continue
         if rule_file.suffix.lower() not in {".yar", ".yara"}:
             continue
         try:
-            confine_path(rules_dir, rule_file)
-        except SecurityError:
-            logger.warning("YARA rule file escapes rules directory, skipping: %s", rule_file)
-            continue
-        try:
-            compiled.append((rule_file, yara.compile(filepath=str(rule_file))))
+            compiled.append((rule_file, yara.compile(filepath=str(rule_file), include_callback=include_source)))
         except Exception as exc:
             logger.warning("Failed to compile YARA rule %s: %s", rule_file, exc)
             continue
@@ -59,6 +64,8 @@ def scan_paths_with_yara(
     files: list[Path],
     rules_dir: Path | None,
     max_file_size_bytes: int = 200 * 1024 * 1024,
+    *,
+    evidence_root: Path | None = None,
 ) -> tuple[list[Finding], list[TimelineEvent]]:
     if rules_dir is None or not rules_dir.exists():
         return [], []
@@ -90,20 +97,22 @@ def scan_paths_with_yara(
                 tactic, technique, sub_technique = _attack_from_meta(meta)
                 severity = _severity_from_tags(tags)
                 rule_name = str(getattr(match, "rule", "yara_rule"))
+                citation = file_citation(sample, root=evidence_root)
+                source_file = citation.source_file if evidence_root is not None else str(sample)
                 findings.append(
                     Finding(
-                        finding_id=stable_id("yara", rule_name, str(sample), ",".join(tags)),
+                        finding_id=stable_id("yara", rule_name, source_file, ",".join(tags)),
                         title=f"YARA match: {rule_name}",
                         severity=severity,
                         confidence=0.85,
                         tactic=tactic,
-                        evidence=[f"file={sample}", f"rule_file={rule_file}", f"tags={','.join(tags)}"],
+                        evidence=[f"file={source_file}", f"rule_file={rule_file}", f"tags={','.join(tags)}"],
                         recommendation="Open the cited file and confirm the YARA match before isolating a host.",
                         technique_id=technique,
                         sub_technique=sub_technique,
                         confidence_low=0.7,
                         confidence_high=0.95,
-                        citations=[file_citation(sample)],
+                        citations=[citation],
                         origin="detector",
                         review_status="unverified",
                     )
@@ -113,11 +122,11 @@ def scan_paths_with_yara(
                         timestamp=None,
                         source="yara",
                         event_type="yara_match",
-                        description=f"Rule {rule_name} matched {sample.name}",
+                        description=f"Rule {rule_name} matched {source_file if evidence_root is not None else sample.name}",
                         risk_score=7.5 if severity in {"high", "critical"} else 5.0,
                         tags=["yara", severity],
                         related={
-                            "file": str(sample),
+                            "file": source_file,
                             "rule_name": rule_name,
                             "rule_file": str(rule_file),
                             "tags": tags,

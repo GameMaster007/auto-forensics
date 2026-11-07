@@ -4,7 +4,7 @@ from pathlib import Path
 
 from auto_forensics.db import Database
 from auto_forensics.ioc_pipeline import extract_iocs
-from auto_forensics.models import IOC, BinaryFeature, Finding, IOCEnrichment, TimelineEvent
+from auto_forensics.models import IOC, BinaryFeature, Citation, Finding, IOCEnrichment, TimelineEvent
 
 
 def test_extract_iocs_from_binary_findings_and_timeline():
@@ -29,6 +29,7 @@ def test_extract_iocs_from_binary_findings_and_timeline():
             confidence=0.8,
             tactic="execution",
             evidence=["contacted 203.0.113.55"],
+            citations=[Citation("event-1", "events.json", "a" * 64, row=1)],
         )
     ]
     timeline = [

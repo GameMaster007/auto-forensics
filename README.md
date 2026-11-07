@@ -83,6 +83,302 @@ report hash that does not match the manifest, exits 1. The hash omits
 `generated_at`, so the clock in the report does not cause a mismatch.
 Seed is 0. The mock does not sample, so its temperature stays null.
 
+Check a saved run without executing a detector or calling a model:
+
+```bash
+auto-forensics verify output/demo-synthetic/run_manifest.json
+```
+
+The command checks evidence hashes, configured rule and ATT&CK resource
+hashes, the saved report's canonical hash, and the files named by its
+citations. It reports added, missing, and modified evidence separately
+and exits 1 on a mismatch. `--input-dir` checks a relocated evidence
+copy. It does not decide whether a claim is true or authenticate a
+manifest that somebody has rewritten together with the report.
+`replay --input-dir` also selects a relocated or imported evidence copy.
+Replay reports both the recorded and checked evidence paths. Without
+that option, it uses the original path recorded in the manifest.
+
+New runs write manifest version 2, including the parser byte limit and
+resource hashes. Version 1 manifests remain readable with a warning
+about those missing checks. Replay stops before executing when evidence
+or recorded resources differ. Output must stay outside the evidence
+directory, and replay refuses to overwrite the original run directory.
+Run and replay output must also stay disjoint from configured rule and
+ATT&CK resource paths, including paths that do not yet exist.
+Repeated default replays use fresh `replay`, `replay-2`, … directories.
+The evidence inventory fails explicitly above 10,000 files or depth 20;
+it does not silently truncate the manifest. A change detected while a
+run is processing evidence prevents publication of that run.
+
+`auto-forensics --version` prints the package version.
+
+Published manifests also hash the Markdown, HTML, PDF (when available),
+STIX, and Navigator files. Analyst review logs are validated and hashed,
+and replay copies them into its output so the replay can itself be
+checked and replayed. A review checks run integrity first and refuses
+concurrent writers. `review --input-dir` selects relocated evidence.
+Starting a new run over an output directory containing analyst reviews
+is refused; choose a new output directory to preserve those decisions.
+Files are staged and replaced individually, with the manifest last.
+An interruption between replacements is detectable by `verify`.
+Replay holds the source and destination locks through review restoration,
+so a concurrent analyst decision cannot be replaced between replay stages.
+Imported reports must have valid field types and unique finding/IOC IDs
+before verification, review, or database synchronization can use them.
+JSON inputs and saved records have a maximum nesting depth of 128;
+nonfinite JSON numbers are refused consistently across Python versions.
+
+Managed ingestion is additive. A second ingest keeps the existing
+custody index and original provenance, stages new files before copying,
+and refuses a different file at an existing evidence path. JSONL exports
+are supported by both managed ingest and `run`.
+Managed ingest and analysis refuse a failed custody check. The analysis
+snapshot must also match the indexed hashes before execution and publication.
+Ingest commits its index, custody log, audit entry, and ready status together.
+A confirmed failure removes only newly published unchanged files and owned
+empty directories; uncertain commits preserve evidence for recovery.
+Filesystems without hard links use an exclusive, verified copy from staging.
+The managed case lock excludes analysis during that copy; a failed partial
+copy is removed only when its identity and copied bytes remain unchanged.
+
+Ingest responses include skipped-entry counts and up to 1,000 relative
+paths with reasons (unsupported artifact, file-size limit, symlink, or
+special file); a flag identifies truncated detail lists. Directory
+links are not traversed. Tree walks stop above 50,000 total entries or
+depth 20, including directories and excluded entries, before building
+an unbounded listing. Managed custody checks also report unexpected
+symlinks and special files, even though run inventories contain regular
+files only.
+
+Case archives are verified and staged before an imported case appears.
+Archive paths, duplicates, symlinks, expanded size, and every listed
+hash are checked. New archives declare whether they contain a plain
+SHA-256 checksum or an HMAC using the configured API-key hash. A plain
+checksum detects accidental changes; it does not authenticate the
+sender. A keyed importer requires HMAC for version-2 archives and refuses
+a public-checksum downgrade. Unkeyed checksum archives remain supported
+without an authenticity claim. Legacy archives must match the configured
+key, or the historical public checksum in an unkeyed instance, and meet
+the same path and size rules. API export destinations are
+confined to `$AUTO_FORENSICS_HOME/exports` (relative names are accepted),
+and API imports honor the configured ingest roots. CLI export accepts
+an explicit destination outside the case itself.
+Export binds the archived evidence inventory to the managed custody
+index and refuses modified, missing, or unindexed evidence. Both compressed
+and expanded archive limits include the manifest. Import applies the
+same evidence count and depth bounds as analysis before publication.
+Portable archives reject Windows device names, alternate streams, trailing
+spaces or periods, and differently spelled case aliases in parent paths.
+Imported case records, custody hashes, and their audit entry commit in
+one database transaction. A confirmed failure removes the new case
+directory; an uncertain database commit preserves evidence and reports
+the recovery condition. A process crash between filesystem publication
+and database commit still requires operator recovery.
+
+An analyst records a decision on that same output directory. The
+default status stays `analyst-unverified` until this command runs:
+
+```bash
+auto-forensics review \
+  --output-dir output/demo-synthetic \
+  --finding-id FINDING-ID \
+  --decision accept \
+  --actor "A. Analyst" \
+  --note "The cited row supports the draft."
+```
+
+`--decision` is `accept`, `reject`, or `annotate`. Annotate requires
+`--note` and does not change the decision. The command appends
+`analyst_reviews.jsonl` (actor, time, note) and rewrites the report.
+A second accept or reject is refused unless `--override` is set. The
+earlier log line stays. Replay reads that log and applies it again, so
+the report hash still matches. A rejected finding is `analyst-rejected`
+and its verification is `not verified`. It is not in
+`verified_finding_ids`. `verification: supported` on any other finding
+is still the machine check, not an analyst decision.
+
+For a managed case, use `--case-id CASE-ID` in place of `--output-dir`.
+This updates both the report and the database view shown by the API:
+
+```bash
+auto-forensics review --case-id case-001 --finding-id FINDING-ID \
+  --decision accept --actor "A. Analyst"
+auto-forensics check-case --case-id case-001
+```
+
+`check-case` compares current evidence with the custody index, checks
+the saved run, and compares the database findings, timeline, and IOCs with the
+report. It makes no model calls and exits nonzero on a mismatch. A case
+that has not been analyzed can still pass its custody check.
+Database JSON display defaults retain `_json_errors` diagnostics.
+Integrity checks reject those diagnostics even when a default happens
+to equal the saved report's value. Case views remain readable so damaged
+records can be identified and recovered.
+
+If a standalone review changed a managed case's report, an import has
+not restored its database views, or a database update was interrupted,
+`auto-forensics sync-report --case-id CASE-ID` rebuilds the findings,
+timeline, and IOCs in one database transaction after verifying evidence, resources,
+report artifacts, and review hashes. It preserves the report bytes,
+analyst notes, and enrichment cache. It refuses changed evidence; it
+does not repair or conceal custody failures. Referenced rule resources
+must remain available to verify an imported run. Report publication and
+database updates are separate transactions; a failed database update
+reports that the review was saved and needs synchronization.
+Verification also folds analyst decisions from the log and checks report
+status, actor, time, notes, and derived analyst counts. Checksummed producer
+data with contradictory or unlogged acceptance fails verification.
+
+IOC enrichment results live in the case overview and database cache;
+saved reports and analyst decisions retain their recorded content.
+Configure `AUTO_FORENSICS_VIRUSTOTAL_API_KEY`,
+`AUTO_FORENSICS_MALWAREBAZAAR_API_KEY`, or
+`AUTO_FORENSICS_ABUSEIPDB_API_KEY` to enable the corresponding provider.
+MalwareBazaar uses its required `Auth-Key` header. Requests are limited
+to applicable providers whose cache entry is missing or expired.
+Responses are bounded to 4 MiB and validated before creating a verdict.
+Provider failures remain failed lookups, and invalid legacy cache entries
+are skipped until refreshed. No provider is queried by default.
+Model responses are bounded to 8 MiB and use the same finite JSON and
+depth checks. Invalid responses leave the workflow on its existing
+fallback path. API-key and authorization headers are withheld from
+redirected requests. OpenAI-compatible base URLs may include `/v1`.
+Report endpoints accept unchanged regular UTF-8 files up to 64 MiB and
+refuse symlinks, directories, and special files. An unreadable saved report
+leaves the case overview available with a `report_error` diagnostic.
+
+The API exposes the same operations through
+`GET /api/cases/{case_id}/integrity`,
+`POST /api/cases/{case_id}/sync-report`, and
+`POST /api/cases/{case_id}/findings/{finding_id}/review`. The review body
+contains `decision`, `actor`, optional `note`, and optional `override`.
+These routes use the existing API-key policy. Conflicting reviews or
+failed integrity checks return HTTP 409.
+
+Citation verification hashes and inspects the same captured bytes. Binary
+windows stay bounded in memory; record parsers read a private temporary
+snapshot so a source replacement after hashing cannot supply a new claim.
+
+Reports validate their full saved schema before publication. Projected
+text fields and reviewer names reject NUL characters before writes; raw
+JSON metadata and finding review notes retain literal NUL as escaped JSON.
+Finding IDs and reviewer names reject NUL before any review write.
+Float fields accept integers only
+when their values are exactly representable in the database's floating
+point format. Synchronization also treats signed zero consistently.
+
+Blocking analysis, import/export, and database operations run outside
+the API event loop, so health checks and status streams can remain
+responsive. Concurrent background requests within a server worker for
+the same active job accept one submission. Status polling reads the latest
+shared database job even when another worker started it. Server shutdown
+drains accepted jobs before closing database connections.
+
+Database migrations are transactional on SQLite and PostgreSQL. Finding
+IDs are scoped to a case, so analyzing the same artifact in another
+case does not overwrite it. Full technique, confidence-range, machine
+verification, and analyst review details are retained. An unrecognized
+legacy finding-table layout or a newer schema is refused rather than
+rebuilt destructively; preserve a database backup before upgrading.
+
+Timeline network/process links require a known matching source host or
+IP and a preceding process within 120 seconds. When a network record
+has a process ID, that ID must also match. Links retain the process
+artifact ID and their temporal basis for analyst inspection. Unknown
+hosts and model-generated process hints do not supply observed process
+candidates. Packet beacon timing is grouped separately for each source
+IP, destination IP, destination port, and protocol.
+
+`auto-forensics inspect-binary PATH` inspects one local file without
+creating a case or executing it. Hashes, byte frequencies, and fixed
+keyword locations are collected in one streaming pass over the entire
+file. The scan recognizes ASCII and UTF-16LE keywords, including matches
+across chunk boundaries, and records offsets and encodings. It keeps at
+most 256 locations while retaining the first match for every detected
+keyword/encoding pair; total counts and truncation are explicit. PE
+import inspection is an additional optional parse. Keywords and entropy
+are triage signals that still require analyst interpretation.
+
+Case reports include these locations, and binary drafts cite the first
+location of their representative keyword. The verifier re-reads that
+window using the corresponding ASCII/UTF-16LE representation. Nested
+binary paths are relative to the evidence root; separate sources with
+the same filename or hash retain separate citation identities.
+
+The built-in Sigma adapter supports a literal keyword subset of the
+[Sigma specification](https://sigmahq.io/sigma-specification/specification/sigma-rules-specification.html#keywords-search):
+one named string-list selector with `condition` equal to that selector,
+or a selector containing `"|all": [strings]`. A legacy `keywords` list
+may omit `condition`. Matching is case insensitive over normalized
+event description, type, and source. Category/product/service constraints
+must match known event provenance; missing provenance does not match.
+
+Each matching event produces its own cited finding. Only keywords that
+matched that event are included as evidence, so an OR rule does not
+claim every keyword occurred. Field maps, filters, boolean conditions,
+wildcards, and unsupported modifiers are skipped and recorded under
+`summary.sigma_rules`, including bounded skipped-rule details. This is
+not a general Sigma backend. Keyword findings stop explicitly above
+10,000 matches; rules over 4 MiB are skipped with a recorded reason.
+
+Observable identities preserve URL path, query, fragment, and credential
+case while normalizing scheme/host and numeric ports. Case-distinct URLs
+remain separate and sort deterministically. Extracted hashes must have
+MD5, SHA-1, or SHA-256 lengths. Repeated observations retain all source
+paths/citations. Cited evidence sentences contribute finding observables
+and populate `ioc_refs`; titles, recommendations, and generated timeline
+hints do not create observations. These are observable candidates, not
+automatic findings of maliciousness.
+
+STIX exports use [STIX 2.1](https://docs.oasis-open.org/cti/stix/v2.1/os/stix-v2.1-os.html)
+standard URL, domain, address, file-hash, and observed-data objects.
+Findings are review-bearing notes grouped by case. They preserve
+citations, current review state, and available review history. Candidate
+counts represent exported records; occurrence counts are not inferred.
+Analysis time is explicitly identified when source observation times
+are absent or invalid. Unsupported observable types/values remain
+visible as unmapped-candidate notes. IDs use a deterministic,
+producer-specific UUID namespace.
+
+Reviews regenerate STIX and Navigator alongside the report formats.
+Navigator layer 4.5 colors show accepted, unverified, mixed, and rejected
+states; an all-rejected technique is disabled and has score zero.
+Scores summarize active machine confidence rather than detection
+coverage. Publication rejects nonfinite JSON and reports above the
+64 MiB verification limit, preserving any earlier published run.
+
+Timestamp ordering uses the same ISO clock normalization on Python
+3.10–3.12, including compact forms, comma/dot fractional seconds, and
+Windows seven-digit fractions. Sub-microsecond digits are truncated for
+ordering while original timestamps remain in the report. Database views
+sort by parsed time across UTC offsets and place unknown clocks last.
+
+Every new run resets draft review fields to unverified, including
+plugin-provided findings. Analyst acceptance comes from the review log.
+Invalid, boolean, and nonfinite model scores use the documented numeric
+defaults rather than becoming maximum confidence.
+Filename-only Prefetch and fallback MFT/memory records retain an unknown
+event time. A copied file's modification time is not treated as execution
+or acquisition time, so relocating unchanged evidence does not alter those
+timeline records.
+
+Legacy finding-key migrations refuse custom schema behavior they cannot
+preserve, including noncanonical column types/defaults, dependent foreign
+keys, custom constraints/indexes,
+triggers, collations, PostgreSQL policies/rules/grants, and annotations.
+The original schema and records remain intact for a reviewed manual migration.
+
+This work is packaged as the unpublished development version
+`0.2.0.dev1`. The CLI, API metadata, and manifest record that same
+version. Archived runs can still be checked with `verify`; replay and
+review require their recorded tool version so changed algorithms do
+not silently rewrite an older run. A missing version also prevents
+execution. Start a separate case/output for a new-version analysis.
+Generated egg-info is excluded from source control and recreated by
+the build. The base wheel has no runtime dependencies; server, parsers,
+PDF, and database extras remain optional.
+
 `--llm off` uses the same citation rule with a score-based heuristic
 and no draft wording from the mock. `--llm ollama` calls a local
 Ollama-compatible endpoint at temperature 0. If that endpoint is down,
@@ -197,7 +493,7 @@ More detail is in `ARCHITECTURE.md` and `docs/ROADMAP.md`.
 | --- | --- |
 | `artifact_id` | Id from the record, or a stable id derived from the file hash |
 | `source_file` | File the parser read |
-| `row` | 1-based record index for JSON, or 1-based file line for CSV and text |
+| `row` | 1-based record index for JSON, or 1-based file line for CSV and text. A multiline CSV record cites its final physical line. |
 | `offset` | Byte offset. Binary findings use 0, meaning the whole file |
 | `sha256` | Hash of the source file |
 
@@ -250,6 +546,10 @@ so each rule name becomes a claim. A Plaso row becomes a claim only
 when the export already tagged it (`tag` in JSONL, or `notes` starting
 with `tag:` in l2tcsv). Other Plaso rows stay on the timeline.
 
+Hayabusa `--iso-8601` timestamps may have seven fractional digits and a
+trailing `Z`. Those are stored with six digits and `+00:00`, so they
+sort on Python 3.10 instead of falling through as untimed.
+
 The field text is untrusted evidence. The recommendation is fixed
 wording from this program. When a row is sent to a model, it sits
 inside the `<<<EVIDENCE_DATA` fence with the rest of the case. A
@@ -267,8 +567,11 @@ sentence in the export does not become an instruction.
 - YARA matches cite the file at offset 0 when rules and `yara-python`
   are installed. A YARA finding with no claim sentence is kept when
   the file hash matches, because the finding is a detector label.
-- There is no analyst accept or reject command. Every finding is
-  `analyst-unverified`. `verification: supported` is the verifier.
+- `auto-forensics review` records accept, reject, or annotate on a
+  run directory. The default is still `analyst-unverified`. A
+  rejected finding is not verified. `verification: supported` on a
+  finding that has not been rejected is the verifier, not an analyst
+  decision.
 - Replay compares input hashes and the canonical report hash. It does
   not compare the raw report file, because that file contains
   `generated_at`.

@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 from .api import main as api_main
+from .binary_analysis import analyze_binary
 from .config import AppConfig
+from .integrity import verify_run
 from .pipeline import PipelineConfig, run_case
 from .replay import replay_manifest
+from .reviews import ReviewError, record_review
 from .security import SecurityError
 from .service import AutoForensicsService
+from .version import __version__
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -17,6 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="auto-forensics",
         description="Draft cited forensic findings for an analyst to verify.",
     )
+    parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
 
     init_case = sub.add_parser("init", help="Create or return a case workspace.")
@@ -70,8 +76,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_llm_argument(run)
 
+    review = sub.add_parser("review", help="Accept, reject, or annotate one finding in a run or managed case.")
+    review.add_argument("--input-dir", type=Path, default=None, help="Evidence directory for an imported or relocated run.")
+    review_target = review.add_mutually_exclusive_group(required=True)
+    review_target.add_argument("--output-dir", type=Path, help="Directory that contains case_report.json.")
+    review_target.add_argument("--case-id", help="Managed case; also update its database view.")
+    review.add_argument("--finding-id", required=True, help="Finding id from the report.")
+    review.add_argument("--decision", required=True, choices=["accept", "reject", "annotate"])
+    review.add_argument("--actor", required=True, help="Name recorded in the custody log.")
+    review.add_argument("--note", default="", help="Annotation. Required for annotate.")
+    review.add_argument(
+        "--override",
+        action="store_true",
+        help="Record a new accept or reject after one is already stored. The earlier line stays in the log.",
+    )
+
     replay = sub.add_parser("replay", help="Re-run a manifest and compare input and report hashes.")
     replay.add_argument("manifest", type=Path, help="Path to run_manifest.json.")
+    replay.add_argument("--input-dir", type=Path, default=None, help="Replay a relocated or imported copy of the recorded evidence.")
     replay.add_argument(
         "--output-dir",
         type=Path,
@@ -79,11 +101,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory for the replayed report. Defaults to a replay directory beside the manifest.",
     )
 
-    export_case = sub.add_parser("export", help="Export case as signed zip archive.")
+    verify = sub.add_parser("verify", help="Check a run's evidence and stored report without executing a model.")
+    verify.add_argument("manifest", type=Path, help="Path to run_manifest.json.")
+    verify.add_argument("--input-dir", type=Path, default=None, help="Check a relocated copy of the evidence.")
+
+    check_case = sub.add_parser("check-case", help="Compare managed evidence custody, report hashes, and database views.")
+    check_case.add_argument("--case-id", required=True)
+    sync_report = sub.add_parser("sync-report", help="Restore findings and timeline database views from a verified saved report.")
+    sync_report.add_argument("--case-id", required=True)
+
+    inspect_binary = sub.add_parser("inspect-binary", help="Read hashes, entropy, imports, and located keywords without executing a binary.")
+    inspect_binary.add_argument("path", type=Path)
+
+    export_case = sub.add_parser("export", help="Export case as an integrity-checked zip archive.")
     export_case.add_argument("--case-id", required=True, help="Case identifier.")
     export_case.add_argument("--dest", required=True, type=Path, help="Destination zip file path.")
 
-    import_case = sub.add_parser("import", help="Import case from signed zip archive.")
+    import_case = sub.add_parser("import", help="Import a bounded, integrity-checked zip archive.")
     import_case.add_argument("--archive", required=True, type=Path, help="Archive zip path.")
     import_case.add_argument("--case-id", default=None, help="Optional case ID override.")
 
@@ -235,14 +269,59 @@ def main() -> None:
             print(json.dumps(report_obj.to_dict(), indent=2))
             return
 
+        if args.command == "review":
+            if args.case_id:
+                if args.input_dir is not None:
+                    parser.error("--input-dir applies only to review --output-dir; managed cases use their custody directory")
+                entry = ensure_service().review_finding(
+                    args.case_id, finding_id=args.finding_id, decision=args.decision,
+                    actor=args.actor, note=args.note, override=args.override,
+                )
+            else:
+                entry = record_review(
+                    args.output_dir, finding_id=args.finding_id, decision=args.decision,
+                    actor=args.actor, note=args.note, override=args.override, input_dir=args.input_dir,
+                )
+            print(json.dumps(entry, indent=2))
+            return
+
         if args.command == "replay":
-            result = replay_manifest(args.manifest, output_dir=args.output_dir)
+            result = replay_manifest(args.manifest, output_dir=args.output_dir, input_dir=args.input_dir)
             print(json.dumps(result, indent=2))
             if not result["match"]:
                 raise SystemExit(1)
             return
+
+        if args.command == "verify":
+            result = verify_run(args.manifest, input_dir=args.input_dir)
+            print(json.dumps(result, indent=2))
+            if not result["match"]:
+                raise SystemExit(1)
+            return
+
+        if args.command == "check-case":
+            result = ensure_service().check_case_integrity(args.case_id)
+            print(json.dumps(result, indent=2))
+            if not result["match"]:
+                raise SystemExit(1)
+            return
+
+        if args.command == "sync-report":
+            print(json.dumps(ensure_service().sync_case_report(args.case_id), indent=2))
+            return
+
+        if args.command == "inspect-binary":
+            print(json.dumps(asdict(analyze_binary(args.path)), indent=2))
+            return
+    except ReviewError as exc:
+        raise SystemExit(f"Review refused: {exc}") from exc
     except SecurityError as exc:
         raise SystemExit(f"Security validation failed: {exc}") from exc
+    except OSError as exc:
+        raise SystemExit(f"File operation failed: {exc}") from exc
+    finally:
+        if service is not None:
+            service.close()
 
     raise SystemExit(f"Unknown command: {args.command}")
 

@@ -1,3 +1,0 @@
-[console_scripts]
-auto-forensics = auto_forensics.cli:main
-auto-forensics-api = auto_forensics.api:main

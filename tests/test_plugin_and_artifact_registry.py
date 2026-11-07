@@ -112,7 +112,7 @@ def test_parse_evtx_xml_record_maps_event_id_to_attack_metadata():
 
 def test_beaconing_events_from_flows_flags_low_jitter_intervals():
     flows = {
-        ("198.51.100.22", 443, "tcp"): [
+        ("192.0.2.1", "198.51.100.22", 443, "tcp"): [
             1708170000.0,
             1708170060.1,
             1708170120.0,
@@ -126,6 +126,7 @@ def test_beaconing_events_from_flows_flags_low_jitter_intervals():
     assert len(events) == 1
     assert events[0].event_type == "c2_beacon_suspected"
     assert events[0].metadata["dst_ip"] == "198.51.100.22"
+    assert events[0].metadata["src_ip"] == "192.0.2.1"
     assert events[0].metadata["beacon_score"] > 8.0
 
 

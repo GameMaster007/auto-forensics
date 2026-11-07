@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import logging
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +16,7 @@ from .artifacts import discover_artifacts
 from .attack_mapper import apply_attack_mapping, build_attack_navigator_layer, load_attack_techniques
 from .case_store import MemoryCaseStore
 from .citations import (
+    CitationKey,
     catalog_from_citations,
     citation_for_binary,
     citation_from_event,
@@ -21,25 +24,33 @@ from .citations import (
     file_citation,
 )
 from .event_detectors import findings_from_artifact_events
+from .file_ops import directory_lock, publish_directory_files
 from .ioc_pipeline import extract_iocs
 from .llama_workflow import LlamaWorkflow, MockLlamaWorkflow, heuristic_fallback, prompt_template_text
 from .manifest import (
+    REPORT_ARTIFACT_NAMES,
     build_run_manifest,
     canonical_report_sha256,
+    hash_analysis_resources,
     hash_input_tree,
+    hash_output_files,
     prompt_template_sha256,
+    read_run_manifest,
+    serialize_report,
+    validate_file_inventory,
     write_run_manifest,
 )
 from .models import ArtifactEvent, BinaryFeature, CaseReport, Citation, Finding, TimelineEvent, utc_now_iso
 from .pdf_report import write_pdf_report
 from .plugins import PluginRegistry
-from .security import stays_in_tree
+from .security import SecurityError, bounded_tree_paths, sha256_file, stays_in_tree, validate_case_id
 from .sigma_rules import evaluate_sigma_rules
 from .stix_export import build_stix_bundle
-from .timeline import normalize_timeline
+from .timeline import normalize_timeline, timeline_sort_key
 from .timeline_imports import findings_from_imported_timelines
 from .tools import ToolRegistry
 from .verifier import MockClaimJudge, resolve_verifier_mode, verifier_limit_name, verify_findings
+from .version import __version__
 from .workers import PIPELINE_WORKER
 from .yara_detector import scan_paths_with_yara
 
@@ -62,11 +73,50 @@ class PipelineConfig:
     llm_provider: str | None = None
     seed: int = 0
     verifier_judge: str | None = None
+    expected_input_files: list[dict[str, Any]] | None = None
+    require_safe_input_tree: bool = False
 
 
 def _severity_rank(value: str) -> int:
     mapping = {"critical": 4, "high": 3, "medium": 2, "low": 1}
     return mapping.get(value.lower(), 0)
+
+
+def _unique_finding_ids(findings: list[Finding]) -> list[Finding]:
+    """Keep exact duplicates once and disambiguate reused detector IDs.
+
+    Exported artifact IDs may be reused on different rows. Their citations
+    remain distinct, so both findings must survive without colliding in a
+    case's database or analyst review log.
+    """
+    groups: dict[str, list[Finding]] = {}
+    for finding in findings:
+        if not isinstance(finding.finding_id, str) or not finding.finding_id.strip() or len(finding.finding_id) > 128:
+            raise SecurityError("A detector returned an invalid finding identifier")
+        groups.setdefault(finding.finding_id, []).append(finding)
+    occupied = set(groups)
+    result: list[Finding] = []
+    for original, group in groups.items():
+        if len(group) == 1:
+            result.extend(group)
+            continue
+        payloads = [(json.dumps(asdict(finding), sort_keys=True, allow_nan=False), finding) for finding in group]
+        seen: set[str] = set()
+        for payload, finding in payloads:
+            if payload in seen:
+                continue
+            seen.add(payload)
+            attempt = 0
+            while True:
+                digest = hashlib.sha256(f"{original}:{attempt}:{payload}".encode("utf-8")).hexdigest()[:32]
+                candidate = f"fdg-{digest}"
+                if candidate not in occupied:
+                    break
+                attempt += 1
+            finding.finding_id = candidate
+            occupied.add(candidate)
+            result.append(finding)
+    return result
 
 
 def _build_summary(
@@ -94,10 +144,23 @@ def _build_summary(
             for f in top
         ],
         "timeline_events": len(timeline),
+        **_analyst_summary(findings),
     }
     if model_summary:
         base["llama_summary"] = model_summary
     return base
+
+
+def _analyst_summary(findings: list[Finding]) -> dict[str, Any]:
+    """Counts an analyst accept as verified. A reject is not verified."""
+    accepted = [item.finding_id for item in findings if item.review_status == "accepted"]
+    rejected = sum(1 for item in findings if item.review_status == "rejected")
+    return {
+        "analyst_accepted": len(accepted),
+        "analyst_rejected": rejected,
+        "analyst_unverified": len(findings) - len(accepted) - rejected,
+        "verified_finding_ids": accepted,
+    }
 
 
 def _to_markdown(report: CaseReport) -> str:
@@ -115,6 +178,12 @@ def _to_markdown(report: CaseReport) -> str:
         lines.append(f"  - SHA256: `{binary.sha256}`")
         lines.append(f"  - Entropy: `{binary.entropy}`")
         lines.append(f"  - Suspicious score: `{binary.suspicious_score}`")
+        if binary.strings_scanned_bytes:
+            lines.append(f"  - Keyword scan: {binary.strings_scanned_bytes} bytes, {binary.string_match_count} matches")
+            for match in binary.string_matches[:10]:
+                lines.append(f"  - String `{match.keyword}` at byte {match.offset} ({match.encoding})")
+            if binary.string_matches_truncated or len(binary.string_matches) > 10:
+                lines.append("  - Additional string locations are listed or marked truncated in the JSON report.")
         if binary.rationale:
             lines.append(f"  - Rationale: {'; '.join(binary.rationale)}")
     lines.append("")
@@ -128,7 +197,11 @@ def _to_markdown(report: CaseReport) -> str:
         if item.recommendation:
             lines.append(f"  - Recommendation: {item.recommendation}")
         lines.append(f"  - Status: {_review_label(item)}")
-        if item.verification:
+        if item.review_note:
+            lines.append(f"  - Analyst note: {item.review_note}")
+        if item.review_status == "rejected":
+            lines.append("  - Verification: not verified")
+        elif item.verification:
             lines.append(f"  - Verification: {item.verification}")
         if item.citations:
             for citation in item.citations:
@@ -140,11 +213,15 @@ def _to_markdown(report: CaseReport) -> str:
     verdicts = report.summary.get("verification") or []
     if not verdicts:
         lines.append("- No verdicts recorded.")
+    rejected_ids = {item.finding_id for item in report.findings if item.review_status == "rejected"}
     for item in verdicts:
         if isinstance(item, dict):
+            suffix = ""
+            if item.get("finding_id") in rejected_ids:
+                suffix = " (analyst-rejected, not verified)"
             lines.append(
                 f"- {item.get('verdict')}: `{item.get('finding_id')}` "
-                f"({item.get('judge')}) {item.get('reason')}"
+                f"({item.get('judge')}) {item.get('reason')}{suffix}"
             )
     lines.append("")
     lines.append("## IOCs")
@@ -161,8 +238,42 @@ def _to_markdown(report: CaseReport) -> str:
 
 
 def _to_html(report: CaseReport) -> str:
-    payload = json.dumps(report.to_dict())
+    # Evidence is untrusted even in a local report. HTML's parser recognizes
+    # </script> inside a JavaScript string, so JSON escaping alone is insufficient.
+    payload = json.dumps(report.to_dict()).replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
     escaped_case = html.escape(report.case_id)
+    # Render evidence before JavaScript runs, including when served under the
+    # API's strict CSP or viewed with scripts disabled. The script only enhances
+    # these already readable tables with filtering.
+    def esc(value: object) -> str:
+        return html.escape(str(value) if value is not None else "")
+
+    def table(headers: list[str], rows: list[list[object]]) -> str:
+        head = "<thead><tr>" + "".join(f"<th>{esc(value)}</th>" for value in headers) + "</tr></thead>"
+        body = "".join("<tr>" + "".join(f"<td>{esc(value)}</td>" for value in row) + "</tr>" for row in rows)
+        if not body:
+            body = f'<tr><td colspan="{len(headers)}">No records.</td></tr>'
+        return head + "<tbody>" + body + "</tbody>"
+
+    findings_table = table(
+        ["Severity", "Title", "Tactic", "Technique", "Confidence", "Review", "Citation"],
+        [[item.severity, item.title, item.tactic, item.technique_id or "", item.confidence,
+          _review_label(item) + " · " + (item.verification or "unverified"),
+          "; ".join(_format_citation(citation) for citation in item.citations)] for item in report.findings],
+    )
+    timeline_table = table(
+        ["Timestamp", "Type", "Source", "Description"],
+        [[item.timestamp, item.event_type, item.source, item.description] for item in report.timeline],
+    )
+    ioc_table = table(
+        ["Type", "Value", "Sources"],
+        [[item.ioc_type, item.value, ", ".join(item.sources)] for item in report.iocs],
+    )
+    kpis = "".join(
+        f'<span class="kpi">{label}: <strong>{esc(report.summary.get(key, 0))}</strong></span>'
+        for label, key in [("Findings", "total_findings"), ("Timeline", "timeline_events"),
+                           ("IOCs", "ioc_count"), ("ATT&amp;CK techniques", "attack_technique_coverage")]
+    )
     return f"""<!DOCTYPE html>
 <html lang=\"en\">
 <head>
@@ -202,22 +313,22 @@ def _to_html(report: CaseReport) -> str:
     <section class=\"card\">
       <h1>Case Report: {escaped_case}</h1>
       <p class=\"meta\">Generated at <strong>{html.escape(report.generated_at)}</strong></p>
-      <div class=\"meta\" id=\"kpis\"></div>
+      <div class=\"meta\" id=\"kpis\">{kpis}</div>
     </section>
     <section class=\"card\">
       <h2>Findings</h2>
-      <table id=\"findings\"></table>
+      <table id=\"findings\">{findings_table}</table>
     </section>
     <section class=\"card\">
       <h2>Timeline</h2>
-      <div class=\"toolbar\">
+      <div class=\"toolbar\" id=\"timelineToolbar\" hidden>
         <label>Filter event type <input id=\"typeFilter\" placeholder=\"e.g. dns_query\" /></label>
       </div>
-      <table id=\"timeline\"></table>
+      <table id=\"timeline\">{timeline_table}</table>
     </section>
     <section class=\"card\">
       <h2>IOCs</h2>
-      <table id=\"iocs\"></table>
+      <table id=\"iocs\">{ioc_table}</table>
     </section>
   </main>
   <script>
@@ -226,13 +337,15 @@ def _to_html(report: CaseReport) -> str:
       return String(value === undefined || value === null ? "" : value)
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
     }}
     document.getElementById("kpis").innerHTML = [
-      `<span class=\"kpi\">Findings: <strong>${{report.summary.total_findings || 0}}</strong></span>`,
-      `<span class=\"kpi\">Timeline: <strong>${{report.summary.timeline_events || 0}}</strong></span>`,
-      `<span class=\"kpi\">IOCs: <strong>${{report.summary.ioc_count || 0}}</strong></span>`,
-      `<span class=\"kpi\">ATT&CK techniques: <strong>${{report.summary.attack_technique_coverage || 0}}</strong></span>`
+      `<span class=\"kpi\">Findings: <strong>${{esc(report.summary.total_findings || 0)}}</strong></span>`,
+      `<span class=\"kpi\">Timeline: <strong>${{esc(report.summary.timeline_events || 0)}}</strong></span>`,
+      `<span class=\"kpi\">IOCs: <strong>${{esc(report.summary.ioc_count || 0)}}</strong></span>`,
+      `<span class=\"kpi\">ATT&CK techniques: <strong>${{esc(report.summary.attack_technique_coverage || 0)}}</strong></span>`
     ].join("");
 
     function renderFindings() {{
@@ -243,13 +356,23 @@ def _to_html(report: CaseReport) -> str:
         `<td>${{esc(item.tactic)}}</td>` +
         `<td>${{esc(item.technique_id || "")}}</td>` +
         `<td>${{esc(item.confidence)}}</td>` +
-        `<td>${{esc(item.review_status || "unverified")}}${{item.verification ? " · " + esc(item.verification) : ""}}</td>` +
+        `<td>${{esc(reviewLabel(item))}}</td>` +
         `<td>${{esc(citeLabel(item))}}</td>` +
         `</tr>`
       ).join("");
       document.getElementById("findings").innerHTML =
         `<thead><tr><th>Severity</th><th>Title</th><th>Tactic</th><th>Technique</th><th>Confidence</th><th>Review</th><th>Citation</th></tr></thead>` +
         `<tbody>${{rows || "<tr><td colspan='7'>No findings.</td></tr>"}}</tbody>`;
+    }}
+
+    function reviewLabel(item) {{
+      const status = item.review_status || "unverified";
+      let label = "analyst-unverified";
+      if (status === "accepted") label = "analyst-accepted";
+      if (status === "rejected") return "analyst-rejected · not verified";
+      if (item.verification) label += " · " + item.verification;
+      if (item.review_actor) label += " by " + item.review_actor;
+      return label;
     }}
 
     function citeLabel(item) {{
@@ -293,6 +416,7 @@ def _to_html(report: CaseReport) -> str:
     renderFindings();
     renderTimeline("");
     renderIocs();
+    document.getElementById("timelineToolbar").hidden = false;
     document.getElementById("typeFilter").addEventListener("input", (event) => renderTimeline(event.target.value));
   </script>
 </body>
@@ -313,7 +437,18 @@ def resolve_llm_provider(config: PipelineConfig) -> str:
 
 def _review_label(item: Finding) -> str:
     who = "LLM-generated" if item.origin == "llm" else item.origin
-    return f"worker {item.worker}; {who}, analyst-{item.review_status}"
+    if item.review_status == "accepted":
+        decision = "analyst-accepted"
+    elif item.review_status == "rejected":
+        decision = "analyst-rejected"
+    else:
+        decision = "analyst-unverified"
+    label = f"worker {item.worker}; {who}, {decision}"
+    if item.review_actor:
+        label += f" by {item.review_actor}"
+    if item.review_at:
+        label += f" at {item.review_at}"
+    return label
 
 
 def _format_citation(citation: Citation) -> str:
@@ -328,7 +463,7 @@ def _evidence_catalog(
     input_dir: Path,
     artifacts: list[ArtifactEvent],
     binary_features: list[BinaryFeature],
-) -> dict[tuple[str, str], Citation]:
+) -> dict[CitationKey, Citation]:
     pointers: list[Citation] = []
     for event in artifacts:
         pointer = citation_from_event(event)
@@ -364,7 +499,51 @@ def _claim_judge(mode: str, workflow: LlamaWorkflow | MockLlamaWorkflow | None) 
     return None
 
 
+def _prepare_pipeline_config(config: PipelineConfig) -> PipelineConfig:
+    config = replace(config, input_dir=config.input_dir.resolve(), output_dir=config.output_dir.resolve())
+    if config.output_dir.is_relative_to(config.input_dir):
+        raise SecurityError("The output directory must be outside the evidence directory")
+    from .manifest import validate_output_resource_paths
+
+    validate_output_resource_paths(config.output_dir, {
+        "rules_dir": config.rules_dir, "sigma_rules_dir": config.sigma_rules_dir,
+        "attack_stix_path": config.attack_stix_path,
+    })
+    return config
+
+
 def run_case(config: PipelineConfig) -> CaseReport:
+    """Run one pipeline while excluding other writers to its output directory."""
+    config = _prepare_pipeline_config(config)
+    with directory_lock(config.output_dir):
+        return run_case_locked(config)
+
+
+def run_case_locked(config: PipelineConfig) -> CaseReport:
+    """Run while the caller holds the output lock through later publication."""
+    config = _prepare_pipeline_config(config)
+    review_path = config.output_dir / "analyst_reviews.jsonl"
+    if review_path.exists() or review_path.is_symlink():
+        raise SecurityError("This output contains analyst reviews; use a new output directory for a new run")
+    return _run_case(config)
+
+
+def _pipeline_inputs(config: PipelineConfig) -> list[dict[str, Any]]:
+    from .integrity import compare_inventory
+
+    rows = hash_input_tree(config.input_dir)
+    if config.require_safe_input_tree:
+        for path in bounded_tree_paths(config.input_dir):
+            if path.is_symlink() or (not path.is_dir() and not path.is_file()):
+                raise SecurityError("Managed evidence contains a symlink or special file")
+    if config.expected_input_files is not None:
+        validate_file_inventory(config.expected_input_files)
+        if any(compare_inventory(config.expected_input_files, rows).values()):
+            raise SecurityError("Evidence no longer matches the required custody or replay inventory; report was not published")
+    return rows
+
+
+def _run_case(config: PipelineConfig) -> CaseReport:
     """Parse a directory, draft findings, drop uncited drafts, and write a manifest.
 
     This function is the ``pipeline`` worker. It is the only worker that
@@ -372,6 +551,23 @@ def run_case(config: PipelineConfig) -> CaseReport:
     records those calls plus the findings. There is no orchestrator.
     """
     started_at = utc_now_iso()
+    validate_case_id(config.case_id)
+    if type(config.seed) is not int:
+        raise SecurityError("The model seed must be an integer")
+    if config.llm_provider not in {None, "off", "mock", "ollama", "openai_compatible"}:
+        raise SecurityError("Unknown model provider")
+    evidence_root = config.input_dir.resolve()
+    if config.output_dir.resolve().is_relative_to(evidence_root):
+        raise SecurityError("The output directory must be outside the evidence directory")
+    if type(config.max_text_bytes) is not int or config.max_text_bytes < 1:
+        raise SecurityError("max_text_bytes must be a positive integer")
+    input_files = _pipeline_inputs(config)
+    resource_paths = {
+        "rules_dir": config.rules_dir,
+        "sigma_rules_dir": config.sigma_rules_dir,
+        "attack_stix_path": config.attack_stix_path,
+    }
+    resources = hash_analysis_resources(resource_paths)
     store = MemoryCaseStore()
     tools = ToolRegistry(worker=PIPELINE_WORKER, store=store)
     plugin_registry = config.plugin_registry or PluginRegistry()
@@ -400,10 +596,15 @@ def run_case(config: PipelineConfig) -> CaseReport:
 
     def analyze_binaries(found: list[Path]) -> list[BinaryFeature]:
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix="af-binary") as pool:
-            return list(pool.map(plugin_registry.analyze_binary, found))
+            features = list(pool.map(plugin_registry.analyze_binary, found))
+        for path, feature in zip(found, features):
+            # The framework owns source provenance, including distinct files
+            # that share a basename or the same content hash.
+            feature.path = str(path.relative_to(config.input_dir))
+        return features
 
     def yara_scan(candidates: list[Path]) -> tuple[list[Finding], list[TimelineEvent]]:
-        return scan_paths_with_yara(candidates, config.rules_dir)
+        return scan_paths_with_yara(candidates, config.rules_dir, evidence_root=config.input_dir)
 
     def event_findings(parsed: list[ArtifactEvent]) -> list[Finding]:
         return findings_from_artifact_events(parsed) + findings_from_imported_timelines(parsed)
@@ -443,8 +644,10 @@ def run_case(config: PipelineConfig) -> CaseReport:
     ) -> list[Finding]:
         return plugin_registry.detectors.detect(parsed, features, timeline)
 
+    sigma_diagnostics: dict[str, Any] = {}
+
     def sigma_findings(timeline: list[TimelineEvent]) -> list[Finding]:
-        return evaluate_sigma_rules(timeline, config.sigma_rules_dir or config.rules_dir)
+        return evaluate_sigma_rules(timeline, config.sigma_rules_dir or config.rules_dir, diagnostics=sigma_diagnostics)
 
     tools.allow("parse_artifacts", parse_artifacts)
     tools.allow("analyze_binaries", analyze_binaries)
@@ -482,7 +685,15 @@ def run_case(config: PipelineConfig) -> CaseReport:
     timeline = normalize_timeline(artifacts, binary_features, generated_hints)
     findings.extend(tools.call("builtin_detectors", artifacts, binary_features, timeline))
     findings.extend(tools.call("sigma_rules", timeline))
+    # New drafts cannot inherit analyst decisions supplied by a model or
+    # plugin. Only the reviewed sidecar workflow can set these fields.
+    for finding in findings:
+        finding.review_status = "unverified"
+        finding.analyst_verified = False
+        finding.review_actor = finding.review_at = finding.review_note = ""
+        finding.verification = finding.machine_verification = ""
     findings, dropped_uncited = drop_uncited(findings, catalog)
+    findings = _unique_finding_ids(findings)
     judge_mode = resolve_verifier_mode(provider, config.verifier_judge)
     judge = _claim_judge(judge_mode, workflow)
     live_llm = provider in {"ollama", "openai_compatible"}
@@ -516,6 +727,7 @@ def run_case(config: PipelineConfig) -> CaseReport:
     summary["dropped_unsupported"] = dropped_unsupported
     summary["verification"] = [item.to_dict() for item in verdicts]
     summary["llm_provider"] = provider
+    summary["sigma_rules"] = sigma_diagnostics
     report = CaseReport(
         case_id=config.case_id,
         generated_at=utc_now_iso(),
@@ -525,51 +737,126 @@ def run_case(config: PipelineConfig) -> CaseReport:
         summary=summary,
         iocs=iocs,
     )
-    config.output_dir.mkdir(parents=True, exist_ok=True)
-    (config.output_dir / "case_report.json").write_text(
-        json.dumps(report.to_dict(), indent=2), encoding="utf-8"
-    )
-    (config.output_dir / "case_report.md").write_text(_to_markdown(report), encoding="utf-8")
-    (config.output_dir / "case_report.html").write_text(_to_html(report), encoding="utf-8")
-    (config.output_dir / "attack_navigator_layer.json").write_text(
-        json.dumps(navigator_layer, indent=2),
-        encoding="utf-8",
-    )
-    (config.output_dir / "case_stix_bundle.json").write_text(
-        json.dumps(build_stix_bundle(report), indent=2),
-        encoding="utf-8",
-    )
-    write_pdf_report(report, config.output_dir / "case_report.pdf")
-    report_path = config.output_dir / "case_report.json"
-    model_name = "none"
-    if provider == "mock":
-        model_name = MockLlamaWorkflow.model
-    elif provider in {"ollama", "openai_compatible"}:
-        model_name = config.llama_model
-    manifest = build_run_manifest(
-        case_id=config.case_id,
-        started_at=started_at,
-        finished_at=utc_now_iso(),
-        input_dir=str(config.input_dir.resolve()),
-        input_files=hash_input_tree(config.input_dir),
-        provider=provider,
-        model_name=model_name,
-        endpoint=config.llama_endpoint if provider == "ollama" else config.openai_compatible_endpoint,
-        seed=config.seed,
-        prompt_sent=provider in {"ollama", "openai_compatible"},
-        prompt_template_sha256_value=prompt_template_sha256(prompt_template_text()),
-        finding_count=len(findings),
-        dropped_uncited=dropped_uncited,
-        dropped_unsupported=dropped_unsupported,
-        report_name=report_path.name,
-        report_sha256=canonical_report_sha256(report.to_dict()),
-        workers=store.workers(),
-        tool_calls=[call.to_dict() for call in store.tool_calls()],
-        verifier=verifier_limit_name(judge_mode),
-        verification=[item.to_dict() for item in verdicts],
-        rules_dir=str(config.rules_dir) if config.rules_dir else None,
-        sigma_rules_dir=str(config.sigma_rules_dir) if config.sigma_rules_dir else None,
-        attack_stix_path=str(config.attack_stix_path) if config.attack_stix_path else None,
-    )
-    write_run_manifest(config.output_dir / "run_manifest.json", manifest)
+    if _pipeline_inputs(config) != input_files:
+        raise SecurityError("Evidence changed during analysis; the report was not published")
+    if hash_analysis_resources(resource_paths) != resources:
+        raise SecurityError("Analysis resources changed during analysis; the report was not published")
+    with tempfile.TemporaryDirectory(prefix=".af-publish-", dir=config.output_dir.parent) as temporary:
+        render_dir = Path(temporary)
+        render_dir.mkdir(parents=True, exist_ok=True)
+        (render_dir / "case_report.json").write_text(
+            serialize_report(report.to_dict()), encoding="utf-8"
+        )
+        (render_dir / "case_report.md").write_text(_to_markdown(report), encoding="utf-8")
+        (render_dir / "case_report.html").write_text(_to_html(report), encoding="utf-8")
+        (render_dir / "attack_navigator_layer.json").write_text(
+            json.dumps(navigator_layer, indent=2),
+            encoding="utf-8",
+        )
+        (render_dir / "case_stix_bundle.json").write_text(
+            json.dumps(build_stix_bundle(report), indent=2),
+            encoding="utf-8",
+        )
+        if not write_pdf_report(report, render_dir / "case_report.pdf"):
+            (render_dir / "case_report.pdf").unlink(missing_ok=True)
+        report_path = render_dir / "case_report.json"
+        model_name = "none"
+        if provider == "mock":
+            model_name = MockLlamaWorkflow.model
+        elif provider in {"ollama", "openai_compatible"}:
+            model_name = config.llama_model
+        manifest = build_run_manifest(
+            case_id=config.case_id,
+            started_at=started_at,
+            finished_at=utc_now_iso(),
+            input_dir=str(config.input_dir.resolve()),
+            input_files=input_files,
+            provider=provider,
+            model_name=model_name,
+            endpoint=config.llama_endpoint if provider == "ollama" else config.openai_compatible_endpoint,
+            seed=config.seed,
+            prompt_sent=provider in {"ollama", "openai_compatible"},
+            prompt_template_sha256_value=prompt_template_sha256(prompt_template_text()),
+            finding_count=len(findings),
+            dropped_uncited=dropped_uncited,
+            dropped_unsupported=dropped_unsupported,
+            report_name=report_path.name,
+            report_sha256=canonical_report_sha256(report.to_dict()),
+            workers=store.workers(),
+            tool_calls=[call.to_dict() for call in store.tool_calls()],
+            verifier=verifier_limit_name(judge_mode),
+            verification=[item.to_dict() for item in verdicts],
+            rules_dir=str(config.rules_dir.resolve()) if config.rules_dir else None,
+            sigma_rules_dir=str(config.sigma_rules_dir.resolve()) if config.sigma_rules_dir else None,
+            attack_stix_path=str(config.attack_stix_path.resolve()) if config.attack_stix_path else None,
+            resources=resources,
+            max_text_bytes=config.max_text_bytes,
+        )
+        manifest["artifacts"] = hash_output_files(render_dir)
+        write_run_manifest(render_dir / "run_manifest.json", manifest)
+        publish_directory_files(render_dir, config.output_dir, obsolete=REPORT_ARTIFACT_NAMES)
     return report
+
+
+def rewrite_published_report(
+    report: CaseReport,
+    output_dir: Path,
+    *,
+    review_log: str | None = None,
+    review_count: int = 0,
+    review_log_content: str | None = None,
+) -> str:
+    """Rewrite the report files and the manifest hash after a review.
+
+    ``generated_at`` stays the time of the original run. The review
+    time is stored on the finding and in the custody log. All export
+    formats are regenerated so their review state stays consistent.
+    """
+    report.summary.update(_analyst_summary(report.findings))
+    payload = report.to_dict()
+    digest = canonical_report_sha256(payload)
+    manifest_path = output_dir / "run_manifest.json"
+    manifest = read_run_manifest(manifest_path)
+    if manifest.get("tool_version") != __version__:
+        raise SecurityError("Report rewriting requires the tool version recorded in the manifest")
+    manifest["output"]["sha256"] = digest
+    manifest["finding_count"] = len(report.findings)
+    with tempfile.TemporaryDirectory(prefix=".af-review-", dir=output_dir.parent) as temporary:
+        staging = Path(temporary)
+        review_times: dict[str, str] = {}
+        entries: list[dict[str, Any]] = []
+        if review_log:
+            from .reviews import read_review_log
+
+            if review_log_content is None:
+                review_log_content = (output_dir / review_log).read_bytes().decode("utf-8")
+            with (staging / review_log).open("w", encoding="utf-8", newline="\n") as handle:
+                handle.write(review_log_content)
+            entries = read_review_log(staging / review_log)
+            if len(entries) != review_count:
+                raise SecurityError("Review log count differs from the requested publication")
+            for entry in entries:
+                previous = review_times.get(entry["finding_id"], entry["at"])
+                review_times[entry["finding_id"]] = max(previous, entry["at"], key=timeline_sort_key)
+            manifest["analyst_reviews"] = {
+                "log": review_log, "entries": review_count,
+                "sha256": sha256_file(staging / review_log),
+                "size_bytes": (staging / review_log).stat().st_size,
+            }
+        (staging / "case_report.json").write_text(serialize_report(payload), encoding="utf-8")
+        (staging / "case_report.md").write_text(_to_markdown(report), encoding="utf-8")
+        (staging / "case_report.html").write_text(_to_html(report), encoding="utf-8")
+        if not write_pdf_report(report, staging / "case_report.pdf"):
+            (staging / "case_report.pdf").unlink(missing_ok=True)
+        stix_path = manifest.get("paths", {}).get("attack_stix_path")
+        techniques = load_attack_techniques(Path(stix_path) if stix_path else None)
+        (staging / "attack_navigator_layer.json").write_text(
+            json.dumps(build_attack_navigator_layer(report.case_id, report.findings, techniques), indent=2), encoding="utf-8",
+        )
+        (staging / "case_stix_bundle.json").write_text(
+            json.dumps(build_stix_bundle(report, review_times=review_times, review_history=entries), indent=2), encoding="utf-8",
+        )
+        manifest["artifacts"] = hash_output_files(staging)
+        write_run_manifest(staging / "run_manifest.json", manifest)
+        publish_directory_files(staging, output_dir, obsolete=REPORT_ARTIFACT_NAMES)
+    return digest

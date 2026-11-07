@@ -57,14 +57,67 @@ def _create_case_with_artifacts(client, tmp_path: Path, case_id: str) -> None:
     assert ingested.status_code == 200
 
 
-def test_api_case_jobs_and_cleanup_endpoints(tmp_path: Path):
+@pytest.mark.parametrize("operation,field", [("ingest", "source_dir"), ("export", "destination_path"), ("import", "archive_path")])
+@pytest.mark.parametrize("value", ["\x00start", "end\x00", "nested\x00path"])
+def test_filesystem_api_paths_reject_nul_before_any_case_mutation(tmp_path, operation, field, value):
+    pytest.importorskip("fastapi")
+    TestClient = pytest.importorskip("fastapi.testclient").TestClient
+    with TestClient(create_app(_config(tmp_path)), base_url="http://127.0.0.1", raise_server_exceptions=False) as client:
+        assert client.post("/api/cases", json={"case_id": "nul-path-case"}).status_code == 200
+        before = client.get("/api/cases/nul-path-case").json()
+        route = "/api/cases/import" if operation == "import" else f"/api/cases/nul-path-case/{operation}"
+        response = client.post(route, json={field: value})
+        assert response.status_code == 422
+        assert response.json()["error"] == "validation_error"
+        assert client.get("/api/cases/nul-path-case").json() == before
+
+
+def test_html_report_has_evidence_with_strict_csp_and_without_scripts(tmp_path: Path, offline_enrichment: None):
+    from html.parser import HTMLParser
+
+    pytest.importorskip("fastapi")
+    TestClient = pytest.importorskip("fastapi.testclient").TestClient
+    with TestClient(create_app(_config(tmp_path)), base_url="http://127.0.0.1") as client:
+        case_id = "case-static-report"
+        _create_case_with_artifacts(client, tmp_path, case_id)
+        analyzed = client.post(f"/api/cases/{case_id}/analyze", json={"enable_llama": False})
+        assert analyzed.status_code == 200
+        response = client.get(f"/api/cases/{case_id}/report", params={"fmt": "html"})
+        assert response.status_code == 200
+        policy = response.headers["Content-Security-Policy"]
+        assert "script-src 'self'" in policy and "'unsafe-inline'" not in policy
+        assert '<table id="timeline"><thead>' in response.text
+
+        class VisibleText(HTMLParser):
+            in_script = False
+            text = ""
+
+            def handle_starttag(self, tag, attrs):
+                if tag == "script":
+                    self.in_script = True
+
+            def handle_endtag(self, tag):
+                if tag == "script":
+                    self.in_script = False
+
+            def handle_data(self, data):
+                if not self.in_script:
+                    self.text += data
+
+        parsed = VisibleText()
+        parsed.feed(response.text)
+        assert "sample process" in parsed.text
+        assert "unit-test" in parsed.text
+
+
+def test_api_case_jobs_and_cleanup_endpoints(tmp_path: Path, offline_enrichment: None):
     pytest.importorskip("fastapi")
     testclient_module = pytest.importorskip("fastapi.testclient")
     TestClient = testclient_module.TestClient
 
     cfg = _config(tmp_path)
     app = create_app(cfg)
-    client = TestClient(app)
+    client = TestClient(app, base_url="http://127.0.0.1")
 
     case_id = "case-api-jobs-001"
     _create_case_with_artifacts(client, tmp_path, case_id)
@@ -127,3 +180,13 @@ def test_api_case_jobs_and_cleanup_endpoints(tmp_path: Path):
     cleanup_default = client.post("/api/admin/jobs/cleanup", json={})
     assert cleanup_default.status_code == 200
     assert cleanup_default.json()["retention_days"] == cfg.job_retention_days
+
+
+def test_api_rejects_an_untrusted_host(tmp_path: Path):
+    pytest.importorskip("fastapi")
+    testclient_module = pytest.importorskip("fastapi.testclient")
+    app = create_app(_config(tmp_path))
+    with testclient_module.TestClient(app, base_url="http://untrusted.example") as client:
+        response = client.get("/api/cases")
+    assert response.status_code == 400
+    assert "Invalid host header" in response.text

@@ -6,16 +6,20 @@ import hashlib
 import hmac
 import json
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .config import AppConfig
+from .reviews import ReviewError
 from .security import SecurityError, confine_path, validate_case_id
 from .service import AutoForensicsService
+from .version import __version__
 
 FASTAPI_AVAILABLE = True
 try:
     from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+    from fastapi.concurrency import run_in_threadpool
     from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
     from fastapi.exceptions import RequestValidationError
     from fastapi.middleware.cors import CORSMiddleware
@@ -61,7 +65,7 @@ class CaseCreateRequest(BaseModel):
 
 
 class IngestRequest(BaseModel):
-    source_dir: str = Field(min_length=1, max_length=4096)
+    source_dir: str = Field(min_length=1, max_length=4096, pattern=r"^[^\x00]+$")
 
 
 class AnalyzeRequest(BaseModel):
@@ -69,21 +73,28 @@ class AnalyzeRequest(BaseModel):
 
 
 class NoteCreateRequest(BaseModel):
-    content: str = Field(min_length=1, max_length=10000)
-    author: str = Field(default="analyst", min_length=1, max_length=128)
+    content: str = Field(min_length=1, max_length=10000, pattern=r"^[^\x00]+$")
+    author: str = Field(default="analyst", min_length=1, max_length=128, pattern=r"^[^\x00]+$")
 
 
 class CaseExportRequest(BaseModel):
-    destination_path: str = Field(min_length=1, max_length=4096)
+    destination_path: str = Field(min_length=1, max_length=4096, pattern=r"^[^\x00]+$")
 
 
 class CaseImportRequest(BaseModel):
-    archive_path: str = Field(min_length=1, max_length=4096)
+    archive_path: str = Field(min_length=1, max_length=4096, pattern=r"^[^\x00]+$")
     case_id_override: str | None = Field(default=None, min_length=2, max_length=64)
 
 
 class JobCleanupRequest(BaseModel):
     retention_days: int | None = Field(default=None, ge=0, le=3650)
+
+
+class FindingReviewRequest(BaseModel):
+    decision: Literal["accept", "reject", "annotate"]
+    actor: str = Field(min_length=1, max_length=120, pattern=r"^[^\x00]+$")
+    note: str = Field(default="", max_length=2000)
+    override: bool = False
 
 
 def _dashboard_html() -> str:
@@ -111,12 +122,21 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     config = config or AppConfig.from_env()
     service = AutoForensicsService(config)
     api_guard = _api_key_guard(config)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        try:
+            yield
+        finally:
+            await run_in_threadpool(service.close)
+
     app = FastAPI(
         title="Auto Forensics Framework",
-        version="1.0.0",
+        version=__version__,
         docs_url=None if config.production else "/docs",
         redoc_url=None,
         openapi_url=None if config.production else "/openapi.json",
+        lifespan=lifespan,
     )
 
     @app.exception_handler(HTTPException)
@@ -197,11 +217,11 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         return response
 
     @app.get("/", response_class=HTMLResponse)
-    async def dashboard() -> str:
+    def dashboard() -> str:
         return _dashboard_html()
 
     @app.get("/assets/{filename}")
-    async def assets(filename: str):
+    def assets(filename: str):
         web_root = Path(__file__).resolve().parent / "web"
         safe_name = Path(filename).name
         asset = confine_path(web_root, web_root / safe_name)
@@ -220,52 +240,75 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/api/admin/migrations", response_class=JSONResponse, dependencies=[Depends(api_guard)])
-    async def migration_status() -> dict[str, Any]:
+    def migration_status() -> dict[str, Any]:
         return service.db_migration_status()
 
     @app.post("/api/admin/migrations", response_class=JSONResponse, dependencies=[Depends(api_guard)])
-    async def run_migrations() -> dict[str, Any]:
+    def run_migrations() -> dict[str, Any]:
         return service.run_db_migrations()
 
     @app.post("/api/admin/jobs/cleanup", response_class=JSONResponse, dependencies=[Depends(api_guard)])
-    async def cleanup_jobs(body: JobCleanupRequest) -> dict[str, Any]:
+    def cleanup_jobs(body: JobCleanupRequest) -> dict[str, Any]:
         return service.cleanup_job_history(retention_days=body.retention_days)
 
     @app.post("/api/cases", response_class=JSONResponse, dependencies=[Depends(api_guard)])
-    async def create_case(body: CaseCreateRequest) -> dict[str, Any]:
+    def create_case(body: CaseCreateRequest) -> dict[str, Any]:
         try:
             return service.create_case(validate_case_id(body.case_id))
         except SecurityError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/cases/import", response_class=JSONResponse, dependencies=[Depends(api_guard)])
-    async def import_case(body: CaseImportRequest) -> dict[str, Any]:
+    def import_case(body: CaseImportRequest) -> dict[str, Any]:
         try:
             override = validate_case_id(body.case_id_override) if body.case_id_override else None
-            return service.import_case_archive(Path(body.archive_path), case_id_override=override)
+            archive_path = service._validate_ingest_source(Path(body.archive_path))
+            return service.import_case_archive(archive_path, case_id_override=override)
         except SecurityError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/cases", response_class=JSONResponse, dependencies=[Depends(api_guard)])
-    async def list_cases() -> list[dict[str, Any]]:
+    def list_cases() -> list[dict[str, Any]]:
         return service.list_cases()
 
     @app.get("/api/cases/{case_id}", response_class=JSONResponse, dependencies=[Depends(api_guard)])
-    async def get_case(case_id: str) -> dict[str, Any]:
+    def get_case(case_id: str) -> dict[str, Any]:
         try:
             return service.case_overview(validate_case_id(case_id))
         except SecurityError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/api/cases/{case_id}/search", response_class=JSONResponse, dependencies=[Depends(api_guard)])
-    async def search_case(case_id: str, q: str = Query(min_length=1), limit: int = Query(default=100, ge=1, le=500)):
+    def search_case(case_id: str, q: str = Query(min_length=1, pattern=r"^[^\x00]+$"), limit: int = Query(default=100, ge=1, le=500)):
         try:
             return service.search_case(validate_case_id(case_id), q, limit=limit)
         except SecurityError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    @app.get("/api/cases/{case_id}/integrity", response_class=JSONResponse, dependencies=[Depends(api_guard)])
+    def case_integrity(case_id: str) -> dict[str, Any]:
+        try:
+            return service.check_case_integrity(validate_case_id(case_id))
+        except SecurityError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/cases/{case_id}/sync-report", response_class=JSONResponse, dependencies=[Depends(api_guard)])
+    def sync_report(case_id: str) -> dict[str, Any]:
+        try:
+            return service.sync_case_report(validate_case_id(case_id))
+        except SecurityError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/cases/{case_id}/findings/{finding_id}/review", response_class=JSONResponse, dependencies=[Depends(api_guard)])
+    def review_finding(case_id: str, finding_id: str, body: FindingReviewRequest) -> dict[str, Any]:
+        try:
+            return service.review_finding(validate_case_id(case_id), finding_id=finding_id, decision=body.decision,
+                                          actor=body.actor, note=body.note, override=body.override)
+        except (SecurityError, ReviewError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @app.get("/api/cases/{case_id}/jobs", response_class=JSONResponse, dependencies=[Depends(api_guard)])
-    async def list_case_jobs(
+    def list_case_jobs(
         case_id: str,
         job_type: str | None = Query(default=None, pattern="^(analysis|enrichment)$"),
         limit: int = Query(default=100, ge=1, le=500),
@@ -276,28 +319,33 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/cases/{case_id}/ingest", response_class=JSONResponse, dependencies=[Depends(api_guard)])
-    async def ingest_case(case_id: str, body: IngestRequest) -> dict[str, Any]:
+    def ingest_case(case_id: str, body: IngestRequest) -> dict[str, Any]:
         try:
             return service.ingest_case(validate_case_id(case_id), Path(body.source_dir))
         except SecurityError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/cases/{case_id}/export", response_class=JSONResponse, dependencies=[Depends(api_guard)])
-    async def export_case(case_id: str, body: CaseExportRequest) -> dict[str, Any]:
+    def export_case(case_id: str, body: CaseExportRequest) -> dict[str, Any]:
         try:
-            return service.export_case_archive(validate_case_id(case_id), Path(body.destination_path))
+            export_root = config.data_dir / "exports"
+            requested = Path(body.destination_path).expanduser()
+            if not requested.is_absolute():
+                requested = export_root / requested
+            destination = confine_path(export_root, requested)
+            return service.export_case_archive(validate_case_id(case_id), destination)
         except SecurityError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/cases/{case_id}/analyze", response_class=JSONResponse, dependencies=[Depends(api_guard)])
-    async def analyze_case(case_id: str, body: AnalyzeRequest) -> dict[str, Any]:
+    def analyze_case(case_id: str, body: AnalyzeRequest) -> dict[str, Any]:
         try:
             return service.analyze_case(validate_case_id(case_id), enable_llama=body.enable_llama)
         except SecurityError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/cases/{case_id}/analyze/async", response_class=JSONResponse, dependencies=[Depends(api_guard)])
-    async def analyze_case_async(case_id: str, body: AnalyzeRequest) -> dict[str, Any]:
+    def analyze_case_async(case_id: str, body: AnalyzeRequest) -> dict[str, Any]:
         try:
             return service.analyze_case_async(validate_case_id(case_id), enable_llama=body.enable_llama)
         except SecurityError as exc:
@@ -311,11 +359,11 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         if not stream:
-            return JSONResponse(content=service.get_case_status(safe_case_id))
+            return JSONResponse(content=await run_in_threadpool(service.get_case_status, safe_case_id))
 
         async def event_stream():
             while True:
-                status = service.get_case_status(safe_case_id)
+                status = await run_in_threadpool(service.get_case_status, safe_case_id)
                 yield f"data: {json.dumps(status)}\n\n"
                 if status.get("state") in {"complete", "failed", "not_found"}:
                     break
@@ -324,7 +372,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     @app.post("/api/cases/{case_id}/enrich/async", response_class=JSONResponse, dependencies=[Depends(api_guard)])
-    async def enrich_case_async(case_id: str) -> dict[str, Any]:
+    def enrich_case_async(case_id: str) -> dict[str, Any]:
         try:
             return service.enrich_case_iocs_async(validate_case_id(case_id))
         except SecurityError as exc:
@@ -338,11 +386,11 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         if not stream:
-            return JSONResponse(content=service.get_case_enrichment_status(safe_case_id))
+            return JSONResponse(content=await run_in_threadpool(service.get_case_enrichment_status, safe_case_id))
 
         async def enrich_event_stream():
             while True:
-                status = service.get_case_enrichment_status(safe_case_id)
+                status = await run_in_threadpool(service.get_case_enrichment_status, safe_case_id)
                 yield f"data: {json.dumps(status)}\n\n"
                 if status.get("state") in {"complete", "failed", "not_found", "not_started"}:
                     break
@@ -351,14 +399,14 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         return StreamingResponse(enrich_event_stream(), media_type="text/event-stream")
 
     @app.get("/api/cases/{case_id}/notes", response_class=JSONResponse, dependencies=[Depends(api_guard)])
-    async def list_notes(case_id: str) -> list[dict[str, Any]]:
+    def list_notes(case_id: str) -> list[dict[str, Any]]:
         try:
             return service.list_case_notes(validate_case_id(case_id))
         except SecurityError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/api/cases/{case_id}/notes", response_class=JSONResponse, dependencies=[Depends(api_guard)])
-    async def create_note(case_id: str, body: NoteCreateRequest) -> dict[str, Any]:
+    def create_note(case_id: str, body: NoteCreateRequest) -> dict[str, Any]:
         try:
             return service.add_case_note(
                 validate_case_id(case_id),
@@ -369,7 +417,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/cases/{case_id}/report", dependencies=[Depends(api_guard)])
-    async def report(case_id: str, fmt: str = Query(default="json", pattern="^(json|md|html|navigator|stix)$")):
+    def report(case_id: str, fmt: str = Query(default="json", pattern="^(json|md|html|navigator|stix)$")):
         try:
             payload = service.get_report(validate_case_id(case_id), fmt=fmt)
         except SecurityError as exc:

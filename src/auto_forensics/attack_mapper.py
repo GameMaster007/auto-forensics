@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import math
+import re
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -112,34 +114,41 @@ def build_attack_navigator_layer(
     findings: list[Finding],
     techniques: dict[str, AttackTechnique],
 ) -> dict[str, Any]:
-    score_by_technique: dict[str, float] = {}
+    by_technique: dict[str, list[Finding]] = {}
     for finding in findings:
-        tid = finding.technique_id
-        if not tid:
+        tid = finding.sub_technique or finding.technique_id
+        if not re.fullmatch(r"T\d{4}(?:\.\d{3})?", tid):
             continue
-        score_by_technique[tid] = max(score_by_technique.get(tid, 0.0), finding.confidence)
+        by_technique.setdefault(tid, []).append(finding)
 
     techniques_payload: list[dict[str, Any]] = []
-    for tid, confidence in sorted(score_by_technique.items()):
-        technique = techniques.get(tid)
-        comment = ""
-        if technique is not None:
-            comment = technique.name
+    for tid, matching in sorted(by_technique.items()):
+        states = Counter(item.review_status if item.review_status in {"accepted", "rejected"} else "unverified" for item in matching)
+        active = [item for item in matching if item.review_status != "rejected"]
+        confidence = max((item.confidence for item in active if type(item.confidence) in {int, float} and 0 <= item.confidence <= 1 and math.isfinite(item.confidence)), default=0.0)
+        technique = techniques.get(tid) or techniques.get(tid.split(".")[0])
+        state = "mixed" if states["accepted"] and states["unverified"] else "accepted" if states["accepted"] else "unverified" if active else "rejected"
+        colors = {"accepted": "#2563eb", "unverified": "#d97706", "mixed": "#7c3aed", "rejected": "#9ca3af"}
+        comment = (technique.name + "; " if technique else "") + "; ".join(f"{name}={states[name]}" for name in ("accepted", "unverified", "rejected"))
         techniques_payload.append(
             {
                 "techniqueID": tid,
                 "score": round(confidence * 100),
                 "comment": comment,
+                "enabled": bool(active), "color": colors[state],
+                "metadata": [{"name": "review state", "value": state},
+                             {"name": "finding IDs", "value": ", ".join(sorted(item.finding_id for item in matching))}],
             }
         )
 
-    tactic_counts = Counter(f.tactic for f in findings if f.tactic)
+    tactic_counts = Counter(f.tactic for f in findings if f.tactic and f.review_status != "rejected")
     metadata = [{"name": tactic, "value": str(count)} for tactic, count in sorted(tactic_counts.items())]
+    metadata.append({"name": "score meaning", "value": "machine confidence; analyst state is shown by color"})
     return {
         "name": f"Auto Forensics {case_id}",
-        "version": "4.6",
+        "versions": {"layer": "4.5", "navigator": "4.9.0"},
         "domain": "enterprise-attack",
-        "description": f"Automatically generated ATT&CK coverage for case {case_id}",
+        "description": f"Forensic technique annotations for case {case_id}. Scores are machine confidence; colors show analyst review state.",
         "techniques": techniques_payload,
         "metadata": metadata,
         "gradient": {
@@ -147,7 +156,10 @@ def build_attack_navigator_layer(
             "minValue": 0,
             "maxValue": 100,
         },
-        "legendItems": [],
+        "legendItems": [{"label": label, "color": color} for label, color in (
+            ("Analyst accepted", "#2563eb"), ("Analyst unverified", "#d97706"),
+            ("Mixed accepted/unverified", "#7c3aed"), ("All findings rejected (disabled)", "#9ca3af"),
+        )],
         "showTacticRowBackground": True,
         "tacticRowBackground": "#f4f4f4",
         "selectTechniquesAcrossTactics": True,

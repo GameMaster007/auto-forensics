@@ -203,17 +203,26 @@ pre {
   font-size: 0.78rem;
 }
 
-.heat-bar-wrap {
+.heat-bar {
+  display: block;
+  width: 100%;
   margin-top: 0.3rem;
   height: 0.5rem;
+  border: 0;
   border-radius: 999px;
   background: #d9e5dc;
   overflow: hidden;
 }
 
-.heat-bar {
-  height: 100%;
-  border-radius: inherit;
+.heat-bar::-webkit-progress-bar {
+  background: #d9e5dc;
+}
+
+.heat-bar::-webkit-progress-value {
+  background: linear-gradient(90deg, #0f6f58, #d86a2b);
+}
+
+.heat-bar::-moz-progress-bar {
   background: linear-gradient(90deg, #0f6f58, #d86a2b);
 }
 

@@ -30,7 +30,7 @@ def test_confine_path_rejects_escape(tmp_path: Path):
         pass
 
 
-def test_case_lifecycle_end_to_end(tmp_path: Path):
+def test_case_lifecycle_end_to_end(tmp_path: Path, offline_enrichment: None):
     data_dir = tmp_path / "data"
     cfg = AppConfig(
         data_dir=data_dir,
@@ -102,7 +102,7 @@ def test_case_lifecycle_end_to_end(tmp_path: Path):
     assert search["counts"]["timeline"] >= 1
 
 
-def test_async_analysis_status_transitions(tmp_path: Path):
+def test_async_analysis_status_transitions(tmp_path: Path, offline_enrichment: None):
     data_dir = tmp_path / "data"
     cfg = AppConfig(
         data_dir=data_dir,

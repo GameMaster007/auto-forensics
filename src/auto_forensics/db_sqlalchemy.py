@@ -1,13 +1,33 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .migrations import LATEST_SCHEMA_VERSION, MIGRATION_STEPS
-from .models import IOC, Finding, IOCEnrichment, TimelineEvent, citations_as_json, decode_finding_row, utc_now_iso
+from .enrichment_validation import enrichment_payload
+from .migrations import (
+    LATEST_SCHEMA_VERSION,
+    MIGRATION_STEPS,
+    SchemaVersionError,
+    added_column,
+    preserve_finding_columns,
+    validate_finding_rebuild,
+)
+from .models import (
+    IOC,
+    Finding,
+    IOCEnrichment,
+    TimelineEvent,
+    citations_as_json,
+    decode_finding_row,
+    decode_row_json,
+    finding_details_as_json,
+    utc_now_iso,
+)
+from .timeline import parse_iso, timeline_sort_key
 
 
 class SQLAlchemyDatabase:
@@ -40,6 +60,13 @@ class SQLAlchemyDatabase:
             engine_kwargs["pool_timeout"] = max(1, int(pool_timeout_seconds))
             engine_kwargs["pool_recycle"] = max(60, int(pool_recycle_seconds))
         self.engine = sa.create_engine(database_url, **engine_kwargs)
+        if self.engine.dialect.name == "sqlite":
+            @sa.event.listens_for(self.engine, "connect")
+            def enable_foreign_keys(connection: Any, record: Any) -> None:
+                del record
+                cursor = connection.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
         md = sa.MetaData()
 
         self.cases = sa.Table(
@@ -70,7 +97,7 @@ class SQLAlchemyDatabase:
         self.findings = sa.Table(
             "findings",
             md,
-            sa.Column("finding_id", sa.String(128), primary_key=True),
+            sa.Column("finding_id", sa.String(128), nullable=False),
             sa.Column("case_id", sa.String(128), sa.ForeignKey("cases.case_id", ondelete="CASCADE"), nullable=False),
             sa.Column("title", sa.Text, nullable=False),
             sa.Column("severity", sa.String(32), nullable=False),
@@ -83,6 +110,8 @@ class SQLAlchemyDatabase:
             sa.Column("origin", sa.String(32), nullable=False, server_default=sa.text("'detector'")),
             sa.Column("review_status", sa.String(32), nullable=False, server_default=sa.text("'unverified'")),
             sa.Column("worker", sa.String(64), nullable=False, server_default=sa.text("'pipeline'")),
+            sa.Column("details_json", sa.Text, nullable=False, server_default=sa.text("'{}'")),
+            sa.PrimaryKeyConstraint("case_id", "finding_id"),
         )
 
         self.timeline = sa.Table(
@@ -185,8 +214,14 @@ class SQLAlchemyDatabase:
             sa.Column("updated_at", sa.Text, nullable=False),
         )
 
-        md.create_all(self.engine)
-        self.run_migrations()
+        try:
+            with self.engine.begin() as con:
+                self._lock_schema(con)
+                md.create_all(con)
+                self._run_migrations(con)
+        except Exception:
+            self.engine.dispose()
+            raise
 
     def _rows(self, result: Any) -> list[dict[str, Any]]:
         return [dict(row._mapping) for row in result]
@@ -209,32 +244,108 @@ class SQLAlchemyDatabase:
         with self.engine.begin() as con:
             return self._rows(con.execute(stmt))
 
-    def run_migrations(self) -> dict[str, Any]:
-        current = self.get_schema_version()
-        applied: list[dict[str, Any]] = []
-        with self.engine.begin() as con:
-            for step in MIGRATION_STEPS:
-                if step.version <= current:
-                    continue
-                for statement in step.sql_statements:
-                    try:
-                        con.exec_driver_sql(statement)
-                    except Exception as exc:
-                        text = str(exc).lower()
-                        if "duplicate column" in text or "already exists" in text:
-                            continue
-                        raise
-                applied_at = utc_now_iso()
-                con.execute(
-                    self.schema_migrations.insert().values(
-                        version=step.version,
-                        name=step.name,
-                        applied_at=applied_at,
-                    )
-                )
-                current = step.version
-                applied.append({"version": step.version, "name": step.name, "applied_at": applied_at})
+    def _lock_schema(self, con: Any) -> None:
+        if self.engine.dialect.name == "sqlite":
+            con.exec_driver_sql("BEGIN IMMEDIATE")
+        elif self.engine.dialect.name == "postgresql":
+            # One transaction-scoped application lock per database prevents
+            # concurrent workers from applying the same schema migration.
+            con.exec_driver_sql("SELECT pg_advisory_xact_lock(4707763809633354309)")
 
+    def run_migrations(self) -> dict[str, Any]:
+        with self.engine.begin() as con:
+            self._lock_schema(con)
+            return self._run_migrations(con)
+
+    def _run_migrations(self, con: Any) -> dict[str, Any]:
+        current = int(con.execute(self.sa.select(self.sa.func.max(self.schema_migrations.c.version))).scalar_one_or_none() or 0)
+        if self.engine.dialect.name == "sqlite":
+            current = max(current, int(con.exec_driver_sql("PRAGMA user_version").scalar_one()))
+        if current > LATEST_SCHEMA_VERSION:
+            raise SchemaVersionError("Database schema is newer than this program; refusing a downgrade")
+        applied: list[dict[str, Any]] = []
+        for step in MIGRATION_STEPS:
+            if step.version <= current:
+                continue
+            primary_key = set(self.sa.inspect(con).get_pk_constraint("findings")["constrained_columns"])
+            statements = () if step.name == "scope_finding_ids_to_case" and primary_key == {"case_id", "finding_id"} else step.sql_statements
+            if step.name == "scope_finding_ids_to_case" and statements:
+                inspector = self.sa.inspect(con)
+                incoming = any(
+                    foreign_key.get("referred_table", "").lower() == "findings"
+                    for table in inspector.get_table_names()
+                    for foreign_key in inspector.get_foreign_keys(table)
+                )
+                if self.engine.dialect.name == "sqlite":
+                    triggers = con.exec_driver_sql("SELECT 1 FROM sqlite_master WHERE type='trigger' AND tbl_name='findings'").first()
+                    table_sql = con.exec_driver_sql("SELECT sql FROM sqlite_master WHERE type='table' AND name='findings'").scalar_one()
+                    custom_metadata = bool(re.search(r"\bCOLLATE\b", table_sql, re.IGNORECASE))
+                else:
+                    triggers = con.exec_driver_sql(
+                        "SELECT 1 FROM information_schema.triggers WHERE event_object_table='findings' AND event_object_schema=current_schema()"
+                    ).first()
+                    # Dropping/recreating a PostgreSQL relation also discards
+                    # row policies, rules, grants, annotations and column
+                    # collations that ordinary reflection does not expose.
+                    custom_metadata = bool(con.exec_driver_sql("""
+                        SELECT c.relrowsecurity OR c.relforcerowsecurity OR c.relacl IS NOT NULL
+                            OR c.reloptions IS NOT NULL OR c.relkind <> 'r' OR c.relispartition
+                            OR pg_get_userbyid(c.relowner) <> current_user
+                            OR EXISTS (SELECT 1 FROM pg_policy WHERE polrelid=c.oid)
+                            OR EXISTS (SELECT 1 FROM pg_rewrite WHERE ev_class=c.oid)
+                            OR EXISTS (SELECT 1 FROM pg_description WHERE objoid=c.oid AND classoid='pg_class'::regclass)
+                            OR EXISTS (SELECT 1 FROM pg_seclabel WHERE objoid=c.oid AND classoid='pg_class'::regclass)
+                            OR EXISTS (
+                                SELECT 1 FROM pg_attribute a JOIN pg_type t ON t.oid=a.atttypid
+                                WHERE a.attrelid=c.oid AND a.attnum > 0 AND NOT a.attisdropped
+                                  AND (a.attcollation <> t.typcollation OR a.attidentity <> '' OR a.attgenerated <> ''
+                                       OR a.attoptions IS NOT NULL OR a.attfdwoptions IS NOT NULL)
+                            )
+                        FROM pg_class c WHERE c.oid='findings'::regclass
+                    """).scalar_one())
+                foreign_keys = inspector.get_foreign_keys("findings")
+                extra_schema = bool(inspector.get_check_constraints("findings") or inspector.get_unique_constraints("findings") or triggers or custom_metadata)
+                extra_schema = extra_schema or any(
+                    key.get("referred_schema") not in {None, inspector.default_schema_name} for key in foreign_keys
+                )
+                validate_finding_rebuild(
+                    {item["name"] for item in inspector.get_columns("findings")}, incoming_references=incoming,
+                    indexes=inspector.get_indexes("findings"), foreign_keys=foreign_keys, extra_constraints=extra_schema,
+                )
+                if self.engine.dialect.name == "sqlite":
+                    # SQLite reflection maps DOUBLE PRECISION to REAL. Use its
+                    # stored declarations so a rebuild does not rewrite types.
+                    columns = [
+                        {"name": row[1], "type": row[2], "nullable": not row[3], "default": row[4],
+                         "computed": bool(row[6])}
+                        for row in con.exec_driver_sql("PRAGMA table_xinfo(findings)")
+                    ]
+                else:
+                    columns = [
+                        {**column, "type": column["type"].compile(dialect=self.engine.dialect)}
+                        for column in inspector.get_columns("findings")
+                    ]
+                statements = preserve_finding_columns(statements, columns, dialect=self.engine.dialect.name)
+            for statement in statements:
+                column = added_column(statement)
+                if column and column[1] in {item["name"] for item in self.sa.inspect(con).get_columns(column[0])}:
+                    continue
+                con.exec_driver_sql(statement)
+            applied_at = utc_now_iso()
+            con.execute(
+                self.schema_migrations.insert().values(
+                    version=step.version,
+                    name=step.name,
+                    applied_at=applied_at,
+                )
+            )
+            current = step.version
+            applied.append({"version": step.version, "name": step.name, "applied_at": applied_at})
+
+        if current >= 6 and set(self.sa.inspect(con).get_pk_constraint("findings")["constrained_columns"]) != {"case_id", "finding_id"}:
+            raise RuntimeError("Finding key schema disagrees with the recorded migration version")
+        if self.engine.dialect.name == "sqlite":
+            con.exec_driver_sql(f"PRAGMA user_version = {current}")
         return {
             "current_version": current,
             "latest_version": LATEST_SCHEMA_VERSION,
@@ -255,6 +366,48 @@ class SQLAlchemyDatabase:
                     last_error=None,
                 )
             )
+
+    def import_case_records(
+        self, case_id: str, evidence_dir: Path, output_dir: Path,
+        artifacts: list[dict[str, Any]], provenance: dict[str, Any],
+    ) -> None:
+        """Commit the imported identity, custody baseline, and audit together."""
+        now = utc_now_iso()
+        with self.engine.begin() as con:
+            con.execute(self.cases.insert().values(
+                case_id=case_id, created_at=now, updated_at=now, status="ready",
+                evidence_dir=str(evidence_dir), output_dir=str(output_dir), last_error=None,
+            ))
+            self._write_artifact_custody(con, case_id, artifacts, now)
+            con.execute(self.audit_log.insert().values(
+                case_id=case_id, action="case_imported", actor="system", details_json=json.dumps(provenance), created_at=now,
+            ))
+
+    def _write_artifact_custody(self, con: Any, case_id: str, artifacts: list[dict[str, Any]], now: str) -> None:
+        con.execute(self.artifacts.delete().where(self.artifacts.c.case_id == case_id))
+        if artifacts:
+            con.execute(self.artifacts.insert(), [{
+                "case_id": case_id, "rel_path": item["rel_path"], "artifact_type": item["artifact_type"],
+                "size_bytes": item["size_bytes"], "sha256": item["sha256"], "ingested_at": now,
+                "metadata_json": json.dumps(item.get("metadata", {})),
+            } for item in artifacts])
+            con.execute(self.evidence_hash_log.insert(), [{
+                "case_id": case_id, "rel_path": item["rel_path"], "sha256": item["sha256"],
+                "size_bytes": item["size_bytes"], "logged_at": now,
+            } for item in artifacts])
+
+    def ingest_case_records(self, case_id: str, artifacts: list[dict[str, Any]], provenance: dict[str, Any]) -> None:
+        now = utc_now_iso()
+        with self.engine.begin() as con:
+            result = con.execute(self.cases.update().where(self.cases.c.case_id == case_id).values(
+                status="ready", last_error=None, updated_at=now,
+            ))
+            if result.rowcount != 1:
+                raise ValueError("Case disappeared before ingest persistence")
+            self._write_artifact_custody(con, case_id, artifacts, now)
+            con.execute(self.audit_log.insert().values(
+                case_id=case_id, action="case_ingested", actor="system", details_json=json.dumps(provenance), created_at=now,
+            ))
 
     def list_cases(self) -> list[dict[str, Any]]:
         stmt = self.sa.select(self.cases).order_by(self.cases.c.updated_at.desc())
@@ -302,52 +455,61 @@ class SQLAlchemyDatabase:
     def replace_findings_and_timeline(
         self, case_id: str, findings: list[Finding], timeline: list[TimelineEvent]
     ) -> None:
-        now = utc_now_iso()
         with self.engine.begin() as con:
-            con.execute(self.findings.delete().where(self.findings.c.case_id == case_id))
-            con.execute(self.timeline.delete().where(self.timeline.c.case_id == case_id))
+            self._write_findings_timeline(con, case_id, findings, timeline)
 
-            if findings:
-                con.execute(
-                    self.findings.insert(),
-                    [
-                        {
-                            "finding_id": f.finding_id,
-                            "case_id": case_id,
-                            "title": f.title,
-                            "severity": f.severity,
-                            "confidence": f.confidence,
-                            "tactic": f.tactic,
-                            "evidence_json": json.dumps(f.evidence),
-                            "recommendation": f.recommendation,
-                            "created_at": now,
-                            "citations_json": citations_as_json(f.citations),
-                            "origin": f.origin,
-                            "review_status": f.review_status,
-                            "worker": f.worker,
-                        }
-                        for f in findings
-                    ],
-                )
+    def _write_findings_timeline(self, con: Any, case_id: str, findings: list[Finding], timeline: list[TimelineEvent]) -> None:
+        now = utc_now_iso()
+        con.execute(self.findings.delete().where(self.findings.c.case_id == case_id))
+        con.execute(self.timeline.delete().where(self.timeline.c.case_id == case_id))
 
-            if timeline:
-                con.execute(
-                    self.timeline.insert(),
-                    [
-                        {
-                            "case_id": case_id,
-                            "timestamp": t.timestamp,
-                            "source": t.source,
-                            "event_type": t.event_type,
-                            "description": t.description,
-                            "risk_score": t.risk_score,
-                            "tags_json": json.dumps(t.tags),
-                            "related_json": json.dumps(t.related),
-                            "created_at": now,
-                        }
-                        for t in timeline
-                    ],
-                )
+        if findings:
+            con.execute(
+                self.findings.insert(),
+                [
+                    {
+                        "finding_id": f.finding_id,
+                        "case_id": case_id,
+                        "title": f.title,
+                        "severity": f.severity,
+                        "confidence": float(f.confidence),
+                        "tactic": f.tactic,
+                        "evidence_json": json.dumps(f.evidence),
+                        "recommendation": f.recommendation,
+                        "created_at": now,
+                        "citations_json": citations_as_json(f.citations),
+                        "origin": f.origin,
+                        "review_status": f.review_status,
+                        "worker": f.worker,
+                        "details_json": finding_details_as_json(f),
+                    }
+                    for f in findings
+                ],
+            )
+
+        if timeline:
+            con.execute(
+                self.timeline.insert(),
+                [
+                    {
+                        "case_id": case_id,
+                        "timestamp": t.timestamp,
+                        "source": t.source,
+                        "event_type": t.event_type,
+                        "description": t.description,
+                        "risk_score": float(t.risk_score),
+                        "tags_json": json.dumps(t.tags),
+                        "related_json": json.dumps(t.related),
+                        "created_at": now,
+                    }
+                    for t in timeline
+                ],
+            )
+
+    def replace_report_projection(self, case_id: str, findings: list[Finding], timeline: list[TimelineEvent], iocs: list[IOC]) -> None:
+        with self.engine.begin() as con:
+            self._write_findings_timeline(con, case_id, findings, timeline)
+            self._write_case_iocs(con, case_id, iocs)
 
     def get_artifacts(self, case_id: str) -> list[dict[str, Any]]:
         stmt = (
@@ -366,7 +528,7 @@ class SQLAlchemyDatabase:
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            item["metadata"] = json.loads(item.pop("metadata_json"))
+            decode_row_json(item, "metadata_json", "metadata", dict)
             out.append(item)
         return out
 
@@ -385,6 +547,7 @@ class SQLAlchemyDatabase:
                 self.findings.c.origin,
                 self.findings.c.review_status,
                 self.findings.c.worker,
+                self.findings.c.details_json,
             )
             .where(self.findings.c.case_id == case_id)
             .order_by(self.findings.c.created_at.desc())
@@ -392,6 +555,17 @@ class SQLAlchemyDatabase:
         with self.engine.begin() as con:
             rows = self._rows(con.execute(stmt))
         return [decode_finding_row(row) for row in rows]
+
+    def update_finding_reviews(self, case_id: str, findings: list[Finding]) -> None:
+        with self.engine.begin() as con:
+            for finding in findings:
+                result = con.execute(
+                    self.findings.update().where(
+                        (self.findings.c.case_id == case_id) & (self.findings.c.finding_id == finding.finding_id)
+                    ).values(review_status=finding.review_status, details_json=finding_details_as_json(finding))
+                )
+                if result.rowcount != 1:
+                    raise ValueError("A reviewed finding is not indexed in this case")
 
     def get_timeline(self, case_id: str) -> list[dict[str, Any]]:
         stmt = (
@@ -406,41 +580,44 @@ class SQLAlchemyDatabase:
                 self.timeline.c.created_at,
             )
             .where(self.timeline.c.case_id == case_id)
-            .order_by(self.timeline.c.created_at.asc())
+            .order_by(self.timeline.c.timeline_pk.asc())
         )
         with self.engine.begin() as con:
             rows = self._rows(con.execute(stmt))
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            item["tags"] = json.loads(item.pop("tags_json"))
-            item["related"] = json.loads(item.pop("related_json"))
+            decode_row_json(item, "tags_json", "tags", list)
+            decode_row_json(item, "related_json", "related", dict)
             out.append(item)
-        out.sort(key=lambda x: (x.get("timestamp") or x.get("created_at") or ""))
+        out.sort(key=lambda row: timeline_sort_key(row.get("timestamp")))
         return out
 
     def replace_case_iocs(self, case_id: str, iocs: list[IOC]) -> None:
-        now = utc_now_iso()
         with self.engine.begin() as con:
-            con.execute(self.case_iocs.delete().where(self.case_iocs.c.case_id == case_id))
-            if iocs:
-                con.execute(
-                    self.case_iocs.insert(),
-                    [
-                        {
-                            "case_id": case_id,
-                            "ioc_id": ioc.ioc_id,
-                            "ioc_type": ioc.ioc_type,
-                            "value": ioc.value,
-                            "first_seen": ioc.first_seen,
-                            "last_seen": ioc.last_seen,
-                            "sources_json": json.dumps(ioc.sources),
-                            "metadata_json": json.dumps(ioc.metadata),
-                            "created_at": now,
-                        }
-                        for ioc in iocs
-                    ],
-                )
+            self._write_case_iocs(con, case_id, iocs)
+
+    def _write_case_iocs(self, con: Any, case_id: str, iocs: list[IOC]) -> None:
+        now = utc_now_iso()
+        con.execute(self.case_iocs.delete().where(self.case_iocs.c.case_id == case_id))
+        if iocs:
+            con.execute(
+                self.case_iocs.insert(),
+                [
+                    {
+                        "case_id": case_id,
+                        "ioc_id": ioc.ioc_id,
+                        "ioc_type": ioc.ioc_type,
+                        "value": ioc.value,
+                        "first_seen": ioc.first_seen,
+                        "last_seen": ioc.last_seen,
+                        "sources_json": json.dumps(ioc.sources),
+                        "metadata_json": json.dumps(ioc.metadata),
+                        "created_at": now,
+                    }
+                    for ioc in iocs
+                ],
+            )
 
     def get_case_iocs(self, case_id: str) -> list[dict[str, Any]]:
         stmt = (
@@ -461,8 +638,8 @@ class SQLAlchemyDatabase:
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            item["sources"] = json.loads(item.pop("sources_json"))
-            item["metadata"] = json.loads(item.pop("metadata_json"))
+            decode_row_json(item, "sources_json", "sources", list)
+            decode_row_json(item, "metadata_json", "metadata", dict)
             out.append(item)
         return out
 
@@ -489,14 +666,11 @@ class SQLAlchemyDatabase:
             return None
 
         fetched_at = str(row._mapping["fetched_at"])
+        payload = enrichment_payload(row._mapping["confidence"], row._mapping["details_json"], provider=provider, verdict=row._mapping["verdict"])
+        fetched_dt = parse_iso(fetched_at, require_timezone=True)
+        if payload is None or fetched_dt is None:
+            return None
         if ttl_minutes > 0:
-            clean = fetched_at.replace("Z", "+00:00")
-            try:
-                fetched_dt = datetime.fromisoformat(clean)
-            except ValueError:
-                return None
-            if fetched_dt.tzinfo is None:
-                fetched_dt = fetched_dt.replace(tzinfo=timezone.utc)
             if (datetime.now(timezone.utc) - fetched_dt).total_seconds() > (ttl_minutes * 60):
                 return None
 
@@ -505,41 +679,33 @@ class SQLAlchemyDatabase:
             ioc_id="",
             provider=provider,
             verdict=str(row._mapping["verdict"]),
-            confidence=float(row._mapping["confidence"]),
-            details=json.loads(str(row._mapping["details_json"])),
+            confidence=payload[0],
+            details=payload[1],
             fetched_at=fetched_at,
         )
 
     def upsert_ioc_enrichment_cache(self, ioc_type: str, value: str, enrichment: IOCEnrichment) -> None:
         now = enrichment.fetched_at or utc_now_iso()
+        if enrichment_payload(enrichment.confidence, enrichment.details, provider=enrichment.provider, verdict=enrichment.verdict) is None or parse_iso(now, require_timezone=True) is None:
+            raise ValueError("Enrichment cache requires finite valid data and a timezone-aware fetch time")
+        values = {
+            "ioc_type": ioc_type, "value": value, "provider": enrichment.provider,
+            "verdict": enrichment.verdict, "confidence": enrichment.confidence,
+            "details_json": json.dumps(enrichment.details, allow_nan=False), "fetched_at": now,
+        }
+        # Cache entries are shared between cases; a case lock cannot make a
+        # separate UPDATE/INSERT pair atomic for concurrent provider results.
+        if self.engine.dialect.name == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert
+        else:
+            from sqlalchemy.dialects.sqlite import insert
+        statement = insert(self.ioc_enrichment_cache).values(**values)
+        statement = statement.on_conflict_do_update(
+            index_elements=["ioc_type", "value", "provider"],
+            set_={key: getattr(statement.excluded, key) for key in ("verdict", "confidence", "details_json", "fetched_at")},
+        )
         with self.engine.begin() as con:
-            update_stmt = (
-                self.ioc_enrichment_cache.update()
-                .where(
-                    self.ioc_enrichment_cache.c.ioc_type == ioc_type,
-                    self.ioc_enrichment_cache.c.value == value,
-                    self.ioc_enrichment_cache.c.provider == enrichment.provider,
-                )
-                .values(
-                    verdict=enrichment.verdict,
-                    confidence=enrichment.confidence,
-                    details_json=json.dumps(enrichment.details),
-                    fetched_at=now,
-                )
-            )
-            result = con.execute(update_stmt)
-            if int(result.rowcount or 0) == 0:
-                con.execute(
-                    self.ioc_enrichment_cache.insert().values(
-                        ioc_type=ioc_type,
-                        value=value,
-                        provider=enrichment.provider,
-                        verdict=enrichment.verdict,
-                        confidence=enrichment.confidence,
-                        details_json=json.dumps(enrichment.details),
-                        fetched_at=now,
-                    )
-                )
+            con.execute(statement)
 
     def get_case_ioc_enrichments(self, case_id: str) -> list[dict[str, Any]]:
         stmt = (
@@ -574,7 +740,10 @@ class SQLAlchemyDatabase:
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            item["details"] = json.loads(item.pop("details_json"))
+            payload = enrichment_payload(item["confidence"], item.pop("details_json"), provider=item["provider"], verdict=item["verdict"])
+            if payload is None or parse_iso(item["fetched_at"], require_timezone=True) is None:
+                continue
+            item["confidence"], item["details"] = payload
             out.append(item)
         return out
 
@@ -679,7 +848,7 @@ class SQLAlchemyDatabase:
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            item["details"] = json.loads(item.pop("details_json"))
+            decode_row_json(item, "details_json", "details", dict)
             out.append(item)
         return out
 
@@ -741,7 +910,7 @@ class SQLAlchemyDatabase:
                 self.analysis_jobs.c.updated_at,
             )
             .where(self.analysis_jobs.c.case_id == case_id, self.analysis_jobs.c.job_type == job_type)
-            .order_by(self.analysis_jobs.c.updated_at.desc())
+            .order_by(self.analysis_jobs.c.created_at.desc(), self.analysis_jobs.c.updated_at.desc(), self.analysis_jobs.c.job_id.desc())
             .limit(1)
         )
         with self.engine.begin() as con:
@@ -749,11 +918,7 @@ class SQLAlchemyDatabase:
         if row is None:
             return None
         item = dict(row._mapping)
-        result_json = item.pop("result_json", None)
-        try:
-            item["result"] = json.loads(result_json) if result_json else None
-        except (json.JSONDecodeError, TypeError):
-            item["result"] = None
+        decode_row_json(item, "result_json", "result", dict, nullable=True)
         return item
 
     def list_case_jobs(
@@ -783,11 +948,7 @@ class SQLAlchemyDatabase:
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            result_json = item.pop("result_json", None)
-            try:
-                item["result"] = json.loads(result_json) if result_json else None
-            except (json.JSONDecodeError, TypeError):
-                item["result"] = None
+            decode_row_json(item, "result_json", "result", dict, nullable=True)
             out.append(item)
         return out
 
@@ -822,6 +983,7 @@ class SQLAlchemyDatabase:
                 self.findings.c.origin,
                 self.findings.c.review_status,
                 self.findings.c.worker,
+                self.findings.c.details_json,
             )
             .where(
                 self.findings.c.case_id == case_id,
@@ -892,15 +1054,15 @@ class SQLAlchemyDatabase:
         timeline_out: list[dict[str, Any]] = []
         for row in timeline_rows:
             item = dict(row)
-            item["tags"] = json.loads(item.pop("tags_json"))
-            item["related"] = json.loads(item.pop("related_json"))
+            decode_row_json(item, "tags_json", "tags", list)
+            decode_row_json(item, "related_json", "related", dict)
             timeline_out.append(item)
 
         ioc_out: list[dict[str, Any]] = []
         for row in ioc_rows:
             item = dict(row)
-            item["sources"] = json.loads(item.pop("sources_json"))
-            item["metadata"] = json.loads(item.pop("metadata_json"))
+            decode_row_json(item, "sources_json", "sources", list)
+            decode_row_json(item, "metadata_json", "metadata", dict)
             ioc_out.append(item)
 
         return {

@@ -22,16 +22,50 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install
-        run: python -m pip install -e ".[dev,db,sigma]"
+        run: python -m pip install -e ".[dev,db,sigma,server,pe,pcap,yara,pdf,evtx,registry]"
       - name: Test
         run: python -m pytest -q
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16@sha256:933463a6c8eba2b9f5cd414138738cd8d5519cd2c471214c222652f547a66a32
+        env:
+          POSTGRES_USER: af_ci
+          POSTGRES_DB: af_ci
+          POSTGRES_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U af_ci -d af_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      AUTO_FORENSICS_TEST_POSTGRES_URL: postgresql+psycopg://af_ci:ci-${{ github.run_id }}-${{ github.run_attempt }}@127.0.0.1:5432/af_ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install -e ".[dev,db,sigma,server]"
+      - name: PostgreSQL and migration regressions
+        run: >-
+          python -m pytest tests/test_case_scoped_findings.py
+          tests/test_migration_extensions.py tests/test_migration_column_metadata.py
+          tests/test_enrichment_integrity.py tests/test_projection_corruption.py
+          tests/test_ioc_projection_integrity.py tests/test_review_log_integrity.py
+          tests/test_cross_worker_status.py tests/test_report_numeric_projection.py
+          tests/test_report_text_projection.py tests/test_review_text_atomicity.py
+          tests/test_search_input_integrity.py
+          tests/test_postgres_optional.py -q --tb=short
 
   gitleaks:
     name: secret-scan

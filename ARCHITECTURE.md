@@ -75,6 +75,23 @@ Evidence sent to a model is JSON inside a `<<<EVIDENCE_DATA` fence. The instruct
 - CSP and anti-caching headers for dashboard/API responses
 - Prepared SQL statements only
 
+## Finding persistence and schema compatibility
+
+Finding IDs are stable within a case. Both database backends enforce the
+composite key `(case_id, finding_id)`, so two cases may analyze identical
+evidence without colliding. Migration 6 preserves the existing finding
+rows while replacing the old global key. Schema changes run in a
+transaction; SQLite uses a savepoint when the caller already has one.
+PostgreSQL schema initialization uses a transaction-scoped advisory lock,
+and existing columns are inspected before executing ADD COLUMN steps.
+SQLite foreign keys are enabled on every connection. A newer database
+schema is refused rather than downgraded.
+
+Within a run, reused detector IDs on different cited rows are
+disambiguated deterministically before verification. Identical repeated
+submissions are kept once. Verifier verdicts, report rows, and analyst
+review IDs therefore refer to the same unique finding identities.
+
 ## Cross-Platform Notes
 
 - Uses `pathlib` and standard Python filesystem APIs

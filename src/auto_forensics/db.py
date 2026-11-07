@@ -1,14 +1,35 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from .migrations import LATEST_SCHEMA_VERSION, MIGRATION_STEPS
-from .models import IOC, Finding, IOCEnrichment, TimelineEvent, citations_as_json, decode_finding_row, utc_now_iso
+from .enrichment_validation import enrichment_payload
+from .migrations import (
+    LATEST_SCHEMA_VERSION,
+    MIGRATION_STEPS,
+    SchemaVersionError,
+    added_column,
+    preserve_finding_columns,
+    validate_finding_rebuild,
+)
+from .models import (
+    IOC,
+    Finding,
+    IOCEnrichment,
+    TimelineEvent,
+    citations_as_json,
+    decode_finding_row,
+    decode_row_json,
+    finding_details_as_json,
+    utc_now_iso,
+)
+from .timeline import parse_iso, timeline_sort_key
 
 SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
@@ -39,7 +60,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
 CREATE INDEX IF NOT EXISTS idx_artifacts_case ON artifacts(case_id);
 
 CREATE TABLE IF NOT EXISTS findings (
-    finding_id TEXT PRIMARY KEY,
+    finding_id TEXT NOT NULL,
     case_id TEXT NOT NULL,
     title TEXT NOT NULL,
     severity TEXT NOT NULL,
@@ -48,6 +69,7 @@ CREATE TABLE IF NOT EXISTS findings (
     evidence_json TEXT NOT NULL,
     recommendation TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    PRIMARY KEY(case_id, finding_id),
     FOREIGN KEY(case_id) REFERENCES cases(case_id) ON DELETE CASCADE
 );
 
@@ -168,6 +190,7 @@ class Database:
     def connect(self) -> Iterator[sqlite3.Connection]:
         con = sqlite3.connect(self.path)
         con.row_factory = sqlite3.Row
+        con.execute("PRAGMA foreign_keys=ON")
         try:
             yield con
             con.commit()
@@ -179,8 +202,33 @@ class Database:
 
     def init_schema(self) -> None:
         with self.connect() as con:
-            con.executescript(SCHEMA_SQL)
+            self._enable_wal(con)
+            con.execute("BEGIN IMMEDIATE")
+            for statement in SCHEMA_SQL.split(";"):
+                if statement.strip() and not statement.strip().upper().startswith("PRAGMA "):
+                    con.execute(statement)
             self.run_migrations(con)
+
+    @staticmethod
+    def _enable_wal(con: sqlite3.Connection) -> None:
+        # Changing journal mode can return SQLITE_BUSY immediately even
+        # with the connection's busy timeout. Another initializer may be
+        # making the same change. Retry only that contention, before DDL.
+        deadline = time.monotonic() + 5.0
+        delay = 0.01
+        while True:
+            try:
+                if str(con.execute("PRAGMA journal_mode").fetchone()[0]).lower() != "wal":
+                    con.execute("PRAGMA journal_mode=WAL")
+                return
+            except sqlite3.OperationalError as exc:
+                code = getattr(exc, "sqlite_errorcode", None)
+                busy = (code is not None and code & 0xFF in {5, 6}) or str(exc) in {"database is locked", "database table is locked"}
+                remaining = deadline - time.monotonic()
+                if not busy or remaining <= 0:
+                    raise
+                time.sleep(min(delay, remaining))
+                delay = min(delay * 2, 0.1)
 
     def get_schema_version(self) -> int:
         with self.connect() as con:
@@ -204,8 +252,14 @@ class Database:
             con = sqlite3.connect(self.path)
             con.row_factory = sqlite3.Row
             close_after = True
-
+        owns_transaction = not con.in_transaction
+        savepoint = False
         try:
+            if owns_transaction:
+                con.execute("PRAGMA foreign_keys=ON")
+                con.execute("BEGIN IMMEDIATE")
+            con.execute("SAVEPOINT auto_forensics_migrations")
+            savepoint = True
             con.execute(
                 """
                 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -216,20 +270,55 @@ class Database:
                 """
             )
             row = con.execute("PRAGMA user_version").fetchone()
-            current = int(row[0]) if row else 0
+            recorded = con.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+            current = max(int(row[0]) if row else 0, int(recorded or 0))
+            if current > LATEST_SCHEMA_VERSION:
+                raise SchemaVersionError("Database schema is newer than this program; refusing a downgrade")
             applied: list[dict[str, Any]] = []
 
             for step in MIGRATION_STEPS:
                 if step.version <= current:
                     continue
-                for statement in step.sql_statements:
-                    try:
-                        con.executescript(statement)
-                    except sqlite3.OperationalError as exc:
-                        text = str(exc).lower()
-                        if "duplicate column name" in text or "already exists" in text:
+                primary_key = {row[1] for row in con.execute("PRAGMA table_info(findings)") if row[5]}
+                statements = () if step.name == "scope_finding_ids_to_case" and primary_key == {"case_id", "finding_id"} else step.sql_statements
+                if step.name == "scope_finding_ids_to_case" and statements:
+                    tables = [row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+                    incoming = any(
+                        str(foreign_key[2]).lower() == "findings"
+                        for table in tables
+                        for foreign_key in con.execute('PRAGMA foreign_key_list("' + table.replace('"', '""') + '")')
+                    )
+                    indexes = []
+                    for index in con.execute("PRAGMA index_list(findings)"):
+                        if index[3] == "pk":
                             continue
-                        raise
+                        index_name = index[1].replace('"', '""')
+                        indexes.append({
+                            "name": index[1], "unique": bool(index[2]),
+                            "column_names": [row[2] for row in con.execute(f'PRAGMA index_info("{index_name}")')],
+                            "dialect_options": {"partial": True} if index[4] else {},
+                        })
+                    foreign_keys = [{
+                        "constrained_columns": [key[3]], "referred_table": key[2], "referred_columns": [key[4]],
+                        "options": {"onupdate": key[5], "ondelete": key[6]},
+                    } for key in con.execute("PRAGMA foreign_key_list(findings)")]
+                    table_sql = con.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='findings'").fetchone()[0]
+                    custom_constraints = bool(re.search(r"\b(?:CHECK|UNIQUE|COLLATE)\b", table_sql, re.IGNORECASE))
+                    triggers = con.execute("SELECT 1 FROM sqlite_master WHERE type='trigger' AND tbl_name='findings'").fetchone()
+                    validate_finding_rebuild(
+                        {row[1] for row in con.execute("PRAGMA table_info(findings)")}, incoming_references=incoming,
+                        indexes=indexes, foreign_keys=foreign_keys, extra_constraints=custom_constraints or bool(triggers),
+                    )
+                    statements = preserve_finding_columns(statements, [
+                        {"name": row[1], "type": row[2], "nullable": not row[3], "default": row[4],
+                         "computed": bool(row[6])}
+                        for row in con.execute("PRAGMA table_xinfo(findings)")
+                    ], dialect="sqlite")
+                for statement in statements:
+                    column = added_column(statement)
+                    if column and column[1] in {row[1] for row in con.execute(f"PRAGMA table_info({column[0]})")}:
+                        continue
+                    con.execute(statement)
                 applied_at = utc_now_iso()
                 con.execute(
                     """
@@ -242,13 +331,25 @@ class Database:
                 current = step.version
                 applied.append({"version": step.version, "name": step.name, "applied_at": applied_at})
 
-            if close_after:
+            if current >= 6 and {row[1] for row in con.execute("PRAGMA table_info(findings)") if row[5]} != {"case_id", "finding_id"}:
+                raise sqlite3.DatabaseError("Finding key schema disagrees with the recorded migration version")
+            con.execute(f"PRAGMA user_version = {current}")
+            con.execute("RELEASE SAVEPOINT auto_forensics_migrations")
+            savepoint = False
+            if owns_transaction:
                 con.commit()
             return {
                 "current_version": current,
                 "latest_version": LATEST_SCHEMA_VERSION,
                 "applied": applied,
             }
+        except Exception:
+            if savepoint:
+                con.execute("ROLLBACK TO SAVEPOINT auto_forensics_migrations")
+                con.execute("RELEASE SAVEPOINT auto_forensics_migrations")
+            if owns_transaction:
+                con.rollback()
+            raise
         finally:
             if close_after:
                 con.close()
@@ -262,6 +363,48 @@ class Database:
                 VALUES(?, ?, ?, 'created', ?, ?, NULL)
                 """,
                 (case_id, now, now, str(evidence_dir), str(output_dir)),
+            )
+
+    def import_case_records(
+        self, case_id: str, evidence_dir: Path, output_dir: Path,
+        artifacts: list[dict[str, Any]], provenance: dict[str, Any],
+    ) -> None:
+        """Commit the imported identity, custody baseline, and audit together."""
+        now = utc_now_iso()
+        with self.connect() as con:
+            con.execute(
+                "INSERT INTO cases(case_id, created_at, updated_at, status, evidence_dir, output_dir, last_error) "
+                "VALUES(?, ?, ?, 'ready', ?, ?, NULL)",
+                (case_id, now, now, str(evidence_dir), str(output_dir)),
+            )
+            self._write_artifact_custody(con, case_id, artifacts, now)
+            con.execute(
+                "INSERT INTO audit_log(case_id, action, actor, details_json, created_at) VALUES(?, 'case_imported', 'system', ?, ?)",
+                (case_id, json.dumps(provenance), now),
+            )
+
+    def _write_artifact_custody(self, con: sqlite3.Connection, case_id: str, artifacts: list[dict[str, Any]], now: str) -> None:
+        con.execute("DELETE FROM artifacts WHERE case_id=?", (case_id,))
+        con.executemany(
+            "INSERT INTO artifacts(case_id, rel_path, artifact_type, size_bytes, sha256, ingested_at, metadata_json) VALUES(?, ?, ?, ?, ?, ?, ?)",
+            [(case_id, item["rel_path"], item["artifact_type"], item["size_bytes"], item["sha256"], now,
+              json.dumps(item.get("metadata", {}))) for item in artifacts],
+        )
+        con.executemany(
+            "INSERT INTO evidence_hash_log(case_id, rel_path, sha256, size_bytes, logged_at) VALUES(?, ?, ?, ?, ?)",
+            [(case_id, item["rel_path"], item["sha256"], item["size_bytes"], now) for item in artifacts],
+        )
+
+    def ingest_case_records(self, case_id: str, artifacts: list[dict[str, Any]], provenance: dict[str, Any]) -> None:
+        now = utc_now_iso()
+        with self.connect() as con:
+            result = con.execute("UPDATE cases SET status='ready', last_error=NULL, updated_at=? WHERE case_id=?", (now, case_id))
+            if result.rowcount != 1:
+                raise ValueError("Case disappeared before ingest persistence")
+            self._write_artifact_custody(con, case_id, artifacts, now)
+            con.execute(
+                "INSERT INTO audit_log(case_id, action, actor, details_json, created_at) VALUES(?, 'case_ingested', 'system', ?, ?)",
+                (case_id, json.dumps(provenance), now),
             )
 
     def list_cases(self) -> list[dict[str, Any]]:
@@ -317,59 +460,68 @@ class Database:
     def replace_findings_and_timeline(
         self, case_id: str, findings: list[Finding], timeline: list[TimelineEvent]
     ) -> None:
-        now = utc_now_iso()
         with self.connect() as con:
-            con.execute("DELETE FROM findings WHERE case_id = ?", (case_id,))
-            con.execute("DELETE FROM timeline WHERE case_id = ?", (case_id,))
-            con.executemany(
-                """
-                INSERT INTO findings(
-                    finding_id, case_id, title, severity, confidence, tactic,
-                    evidence_json, recommendation, created_at,
-                    citations_json, origin, review_status, worker
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        f.finding_id,
-                        case_id,
-                        f.title,
-                        f.severity,
-                        f.confidence,
-                        f.tactic,
-                        json.dumps(f.evidence),
-                        f.recommendation,
-                        now,
-                        citations_as_json(f.citations),
-                        f.origin,
-                        f.review_status,
-                        f.worker,
-                    )
-                    for f in findings
-                ],
-            )
-            con.executemany(
-                """
-                INSERT INTO timeline(
-                    case_id, timestamp, source, event_type, description,
-                    risk_score, tags_json, related_json, created_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        case_id,
-                        t.timestamp,
-                        t.source,
-                        t.event_type,
-                        t.description,
-                        t.risk_score,
-                        json.dumps(t.tags),
-                        json.dumps(t.related),
-                        now,
-                    )
-                    for t in timeline
-                ],
-            )
+            self._write_findings_timeline(con, case_id, findings, timeline)
+
+    def _write_findings_timeline(self, con: Any, case_id: str, findings: list[Finding], timeline: list[TimelineEvent]) -> None:
+        now = utc_now_iso()
+        con.execute("DELETE FROM findings WHERE case_id = ?", (case_id,))
+        con.execute("DELETE FROM timeline WHERE case_id = ?", (case_id,))
+        con.executemany(
+            """
+            INSERT INTO findings(
+                finding_id, case_id, title, severity, confidence, tactic,
+                evidence_json, recommendation, created_at,
+                citations_json, origin, review_status, worker, details_json
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    f.finding_id,
+                    case_id,
+                    f.title,
+                    f.severity,
+                    float(f.confidence),
+                    f.tactic,
+                    json.dumps(f.evidence),
+                    f.recommendation,
+                    now,
+                    citations_as_json(f.citations),
+                    f.origin,
+                    f.review_status,
+                    f.worker,
+                    finding_details_as_json(f),
+                )
+                for f in findings
+            ],
+        )
+        con.executemany(
+            """
+            INSERT INTO timeline(
+                case_id, timestamp, source, event_type, description,
+                risk_score, tags_json, related_json, created_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    case_id,
+                    t.timestamp,
+                    t.source,
+                    t.event_type,
+                    t.description,
+                    float(t.risk_score),
+                    json.dumps(t.tags),
+                    json.dumps(t.related),
+                    now,
+                )
+                for t in timeline
+            ],
+        )
+
+    def replace_report_projection(self, case_id: str, findings: list[Finding], timeline: list[TimelineEvent], iocs: list[IOC]) -> None:
+        with self.connect() as con:
+            self._write_findings_timeline(con, case_id, findings, timeline)
+            self._write_case_iocs(con, case_id, iocs)
 
     def get_artifacts(self, case_id: str) -> list[dict[str, Any]]:
         with self.connect() as con:
@@ -380,7 +532,7 @@ class Database:
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            item["metadata"] = json.loads(item.pop("metadata_json"))
+            decode_row_json(item, "metadata_json", "metadata", dict)
             out.append(item)
         return out
 
@@ -389,64 +541,70 @@ class Database:
             rows = con.execute(
                 """
                 SELECT finding_id, title, severity, confidence, tactic, evidence_json, recommendation,
-                       created_at, citations_json, origin, review_status, worker
+                       created_at, citations_json, origin, review_status, worker, details_json
                 FROM findings WHERE case_id = ? ORDER BY created_at DESC
                 """,
                 (case_id,),
             ).fetchall()
         return [decode_finding_row(dict(row)) for row in rows]
 
+    def update_finding_reviews(self, case_id: str, findings: list[Finding]) -> None:
+        """Update review metadata without replacing evidence or timestamps."""
+        with self.connect() as con:
+            for finding in findings:
+                result = con.execute(
+                    "UPDATE findings SET review_status=?, details_json=? WHERE case_id=? AND finding_id=?",
+                    (finding.review_status, finding_details_as_json(finding), case_id, finding.finding_id),
+                )
+                if result.rowcount != 1:
+                    raise ValueError("A reviewed finding is not indexed in this case")
+
     def get_timeline(self, case_id: str) -> list[dict[str, Any]]:
         with self.connect() as con:
             rows = con.execute(
                 """
                 SELECT timestamp, source, event_type, description, risk_score, tags_json, related_json, created_at
-                FROM timeline WHERE case_id = ? ORDER BY COALESCE(timestamp, created_at) ASC
+                FROM timeline WHERE case_id = ? ORDER BY timeline_pk ASC
                 """,
                 (case_id,),
             ).fetchall()
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            raw_tags = item.pop("tags_json")
-            raw_related = item.pop("related_json")
-            try:
-                item["tags"] = json.loads(raw_tags)
-            except (json.JSONDecodeError, TypeError):
-                item["tags"] = []
-            try:
-                item["related"] = json.loads(raw_related)
-            except (json.JSONDecodeError, TypeError):
-                item["related"] = {}
+            decode_row_json(item, "tags_json", "tags", list)
+            decode_row_json(item, "related_json", "related", dict)
             out.append(item)
-        return out
+        return sorted(out, key=lambda row: timeline_sort_key(row.get("timestamp")))
 
     def replace_case_iocs(self, case_id: str, iocs: list[IOC]) -> None:
-        now = utc_now_iso()
         with self.connect() as con:
-            con.execute("DELETE FROM case_iocs WHERE case_id = ?", (case_id,))
-            con.executemany(
-                """
-                INSERT INTO case_iocs(
-                    case_id, ioc_id, ioc_type, value, first_seen, last_seen,
-                    sources_json, metadata_json, created_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        case_id,
-                        ioc.ioc_id,
-                        ioc.ioc_type,
-                        ioc.value,
-                        ioc.first_seen,
-                        ioc.last_seen,
-                        json.dumps(ioc.sources),
-                        json.dumps(ioc.metadata),
-                        now,
-                    )
-                    for ioc in iocs
-                ],
-            )
+            self._write_case_iocs(con, case_id, iocs)
+
+    def _write_case_iocs(self, con: Any, case_id: str, iocs: list[IOC]) -> None:
+        now = utc_now_iso()
+        con.execute("DELETE FROM case_iocs WHERE case_id = ?", (case_id,))
+        con.executemany(
+            """
+            INSERT INTO case_iocs(
+                case_id, ioc_id, ioc_type, value, first_seen, last_seen,
+                sources_json, metadata_json, created_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    case_id,
+                    ioc.ioc_id,
+                    ioc.ioc_type,
+                    ioc.value,
+                    ioc.first_seen,
+                    ioc.last_seen,
+                    json.dumps(ioc.sources),
+                    json.dumps(ioc.metadata),
+                    now,
+                )
+                for ioc in iocs
+            ],
+        )
 
     def get_case_iocs(self, case_id: str) -> list[dict[str, Any]]:
         with self.connect() as con:
@@ -460,8 +618,8 @@ class Database:
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            item["sources"] = json.loads(item.pop("sources_json"))
-            item["metadata"] = json.loads(item.pop("metadata_json"))
+            decode_row_json(item, "sources_json", "sources", list)
+            decode_row_json(item, "metadata_json", "metadata", dict)
             out.append(item)
         return out
 
@@ -485,15 +643,12 @@ class Database:
             return None
 
         fetched_at = str(row["fetched_at"])
+        payload = enrichment_payload(row["confidence"], row["details_json"], provider=provider, verdict=row["verdict"])
+        fetched_dt = parse_iso(fetched_at, require_timezone=True)
+        if payload is None or fetched_dt is None:
+            return None
         if ttl_minutes > 0:
-            clean = fetched_at.replace("Z", "+00:00")
-            try:
-                fetched_dt = datetime.fromisoformat(clean)
-            except ValueError:
-                return None
             now_dt = datetime.now(timezone.utc)
-            if fetched_dt.tzinfo is None:
-                fetched_dt = fetched_dt.replace(tzinfo=timezone.utc)
             age_seconds = (now_dt - fetched_dt).total_seconds()
             if age_seconds > (ttl_minutes * 60):
                 return None
@@ -503,13 +658,15 @@ class Database:
             ioc_id="",
             provider=provider,
             verdict=str(row["verdict"]),
-            confidence=float(row["confidence"]),
-            details=json.loads(row["details_json"]),
+            confidence=payload[0],
+            details=payload[1],
             fetched_at=fetched_at,
         )
 
     def upsert_ioc_enrichment_cache(self, ioc_type: str, value: str, enrichment: IOCEnrichment) -> None:
-        now = utc_now_iso()
+        now = enrichment.fetched_at or utc_now_iso()
+        if enrichment_payload(enrichment.confidence, enrichment.details, provider=enrichment.provider, verdict=enrichment.verdict) is None or parse_iso(now, require_timezone=True) is None:
+            raise ValueError("Enrichment cache requires finite valid data and a timezone-aware fetch time")
         with self.connect() as con:
             con.execute(
                 """
@@ -528,7 +685,7 @@ class Database:
                     enrichment.provider,
                     enrichment.verdict,
                     enrichment.confidence,
-                    json.dumps(enrichment.details),
+                    json.dumps(enrichment.details, allow_nan=False),
                     enrichment.fetched_at or now,
                 ),
             )
@@ -549,7 +706,10 @@ class Database:
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            item["details"] = json.loads(item.pop("details_json"))
+            payload = enrichment_payload(item["confidence"], item.pop("details_json"), provider=item["provider"], verdict=item["verdict"])
+            if payload is None or parse_iso(item["fetched_at"], require_timezone=True) is None:
+                continue
+            item["confidence"], item["details"] = payload
             out.append(item)
         return out
 
@@ -662,7 +822,7 @@ class Database:
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            item["details"] = json.loads(item.pop("details_json"))
+            decode_row_json(item, "details_json", "details", dict)
             out.append(item)
         return out
 
@@ -715,7 +875,7 @@ class Database:
                 SELECT job_id, case_id, job_type, state, progress, message, error, result_json, created_at, updated_at
                 FROM analysis_jobs
                 WHERE case_id = ? AND job_type = ?
-                ORDER BY updated_at DESC
+                ORDER BY created_at DESC, updated_at DESC, job_id DESC
                 LIMIT 1
                 """,
                 (case_id, job_type),
@@ -723,11 +883,7 @@ class Database:
         if row is None:
             return None
         item = dict(row)
-        result_json = item.pop("result_json", None)
-        try:
-            item["result"] = json.loads(result_json) if result_json else None
-        except (json.JSONDecodeError, TypeError):
-            item["result"] = None
+        decode_row_json(item, "result_json", "result", dict, nullable=True)
         return item
 
     def list_case_jobs(
@@ -763,11 +919,7 @@ class Database:
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
-            result_json = item.pop("result_json", None)
-            try:
-                item["result"] = json.loads(result_json) if result_json else None
-            except (json.JSONDecodeError, TypeError):
-                item["result"] = None
+            decode_row_json(item, "result_json", "result", dict, nullable=True)
             out.append(item)
         return out
 
@@ -803,7 +955,7 @@ class Database:
             finding_rows = con.execute(
                 """
                 SELECT finding_id, title, severity, confidence, tactic, evidence_json, recommendation,
-                       created_at, citations_json, origin, review_status, worker
+                       created_at, citations_json, origin, review_status, worker, details_json
                 FROM findings
                 WHERE case_id = ?
                   AND (
@@ -856,15 +1008,15 @@ class Database:
         timeline_out: list[dict[str, Any]] = []
         for row in timeline_rows:
             item = dict(row)
-            item["tags"] = json.loads(item.pop("tags_json"))
-            item["related"] = json.loads(item.pop("related_json"))
+            decode_row_json(item, "tags_json", "tags", list)
+            decode_row_json(item, "related_json", "related", dict)
             timeline_out.append(item)
 
         ioc_out: list[dict[str, Any]] = []
         for row in ioc_rows:
             item = dict(row)
-            item["sources"] = json.loads(item.pop("sources_json"))
-            item["metadata"] = json.loads(item.pop("metadata_json"))
+            decode_row_json(item, "sources_json", "sources", list)
+            decode_row_json(item, "metadata_json", "metadata", dict)
             ioc_out.append(item)
 
         return {
