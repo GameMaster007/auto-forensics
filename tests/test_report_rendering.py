@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from html.parser import HTMLParser
@@ -55,6 +56,32 @@ def test_report_contains_escaped_evidence_before_any_script_runs():
     assert "b" not in parsed.tags
     assert '<table id="findings"><thead>' in rendered
     assert 'id="timelineToolbar" hidden' in rendered
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node is required for report JavaScript regression")
+def test_interactive_report_summary_values_remain_text():
+    attack = '<img src=x onerror="alert(1)">'
+    report = CaseReport("summary-text", "2026-11-07T00:00:00Z", [], [], [], {
+        key: attack for key in ("total_findings", "timeline_events", "ioc_count", "attack_technique_coverage")
+    })
+    script = re.search(r"<script>(.*?)</script>", _to_html(report), re.DOTALL)
+    assert script is not None
+    harness = r"""
+const fs = require('fs');
+const vm = require('vm');
+const elements = new Map();
+const document = {getElementById(id) {
+  if (!elements.has(id)) elements.set(id, {innerHTML:'', addEventListener(){}});
+  return elements.get(id);
+}};
+vm.runInNewContext(fs.readFileSync(0, 'utf8'), {document});
+console.log(elements.get('kpis').innerHTML);
+"""
+    result = subprocess.run(["node", "-e", harness], input=script[1], capture_output=True, text=True, check=True, timeout=10)
+    parsed = _VisibleReport()
+    parsed.feed(result.stdout)
+    assert "img" not in parsed.tags
+    assert " ".join(parsed.visible).count(attack) == 4
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node is required for dashboard JavaScript regression")

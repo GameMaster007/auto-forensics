@@ -342,10 +342,10 @@ def _to_html(report: CaseReport) -> str:
         .replace(/'/g, "&#39;");
     }}
     document.getElementById("kpis").innerHTML = [
-      `<span class=\"kpi\">Findings: <strong>${{report.summary.total_findings || 0}}</strong></span>`,
-      `<span class=\"kpi\">Timeline: <strong>${{report.summary.timeline_events || 0}}</strong></span>`,
-      `<span class=\"kpi\">IOCs: <strong>${{report.summary.ioc_count || 0}}</strong></span>`,
-      `<span class=\"kpi\">ATT&CK techniques: <strong>${{report.summary.attack_technique_coverage || 0}}</strong></span>`
+      `<span class=\"kpi\">Findings: <strong>${{esc(report.summary.total_findings || 0)}}</strong></span>`,
+      `<span class=\"kpi\">Timeline: <strong>${{esc(report.summary.timeline_events || 0)}}</strong></span>`,
+      `<span class=\"kpi\">IOCs: <strong>${{esc(report.summary.ioc_count || 0)}}</strong></span>`,
+      `<span class=\"kpi\">ATT&CK techniques: <strong>${{esc(report.summary.attack_technique_coverage || 0)}}</strong></span>`
     ].join("");
 
     function renderFindings() {{
