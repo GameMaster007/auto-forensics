@@ -7,7 +7,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from .migrations import LATEST_SCHEMA_VERSION, MIGRATION_STEPS, SchemaVersionError, added_column
+from .migrations import (
+    LATEST_SCHEMA_VERSION,
+    MIGRATION_STEPS,
+    SchemaVersionError,
+    added_column,
+    validate_finding_rebuild,
+)
 from .models import IOC, Finding, IOCEnrichment, TimelineEvent, citations_as_json, decode_finding_row, utc_now_iso
 
 SCHEMA_SQL = """
@@ -240,6 +246,8 @@ class Database:
                     continue
                 primary_key = {row[1] for row in con.execute("PRAGMA table_info(findings)") if row[5]}
                 statements = () if step.name == "scope_finding_ids_to_case" and primary_key == {"case_id", "finding_id"} else step.sql_statements
+                if step.name == "scope_finding_ids_to_case" and statements:
+                    validate_finding_rebuild({row[1] for row in con.execute("PRAGMA table_info(findings)")})
                 for statement in statements:
                     column = added_column(statement)
                     if column and column[1] in {row[1] for row in con.execute(f"PRAGMA table_info({column[0]})")}:

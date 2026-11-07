@@ -15,6 +15,22 @@ class SchemaVersionError(RuntimeError):
     """This program cannot safely modify a database created by newer code."""
 
 
+class SchemaCompatibilityError(RuntimeError):
+    """A table has an unrecognized layout that must not be rebuilt blindly."""
+
+
+FINDING_V5_COLUMNS = {
+    "finding_id", "case_id", "title", "severity", "confidence", "tactic",
+    "evidence_json", "recommendation", "created_at", "citations_json",
+    "origin", "review_status", "worker",
+}
+
+
+def validate_finding_rebuild(columns: set[str]) -> None:
+    if columns != FINDING_V5_COLUMNS:
+        raise SchemaCompatibilityError("Findings has an unrecognized column layout; refusing to discard data")
+
+
 MIGRATION_STEPS: tuple[MigrationStep, ...] = (
     MigrationStep(
         version=1,

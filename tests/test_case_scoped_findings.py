@@ -14,7 +14,12 @@ import pytest
 
 from auto_forensics.db import SCHEMA_SQL, Database
 from auto_forensics.db_sqlalchemy import SQLAlchemyDatabase
-from auto_forensics.migrations import LATEST_SCHEMA_VERSION, MIGRATION_STEPS, SchemaVersionError
+from auto_forensics.migrations import (
+    LATEST_SCHEMA_VERSION,
+    MIGRATION_STEPS,
+    SchemaCompatibilityError,
+    SchemaVersionError,
+)
 from auto_forensics.models import Citation, Finding
 from auto_forensics.pipeline import _unique_finding_ids
 
@@ -202,6 +207,20 @@ def test_failed_rebuild_rolls_back_table_data_and_migration_version(tmp_path: Pa
         assert not con.execute("SELECT name FROM sqlite_master WHERE name='findings_case_scoped'").fetchall()
         assert [row[1] for row in con.execute("PRAGMA table_info(findings)") if row[5]] == ["finding_id"]
     assert Database(path).get_schema_version() == LATEST_SCHEMA_VERSION
+
+
+@pytest.mark.parametrize("backend", ["sqlite", "sqlalchemy"])
+def test_unrecognized_legacy_columns_are_preserved_by_refusing_the_rebuild(tmp_path: Path, backend: str):
+    path = tmp_path / "custom-layout.db"
+    _legacy_database(path)
+    with sqlite3.connect(path) as con:
+        con.execute("ALTER TABLE findings ADD COLUMN external_annotation TEXT")
+        con.execute("UPDATE findings SET external_annotation='preserve custom data'")
+    with pytest.raises(SchemaCompatibilityError, match="refusing to discard data"):
+        Database(path) if backend == "sqlite" else SQLAlchemyDatabase(f"sqlite:///{path}")
+    with sqlite3.connect(path) as con:
+        assert con.execute("SELECT external_annotation FROM findings").fetchone()[0] == "preserve custom data"
+        assert con.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0] == 5
 
 
 @pytest.mark.parametrize("backend", ["sqlite", "sqlalchemy"])

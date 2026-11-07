@@ -6,7 +6,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from .migrations import LATEST_SCHEMA_VERSION, MIGRATION_STEPS, SchemaVersionError, added_column
+from .migrations import (
+    LATEST_SCHEMA_VERSION,
+    MIGRATION_STEPS,
+    SchemaVersionError,
+    added_column,
+    validate_finding_rebuild,
+)
 from .models import IOC, Finding, IOCEnrichment, TimelineEvent, citations_as_json, decode_finding_row, utc_now_iso
 
 
@@ -246,6 +252,8 @@ class SQLAlchemyDatabase:
                 continue
             primary_key = set(self.sa.inspect(con).get_pk_constraint("findings")["constrained_columns"])
             statements = () if step.name == "scope_finding_ids_to_case" and primary_key == {"case_id", "finding_id"} else step.sql_statements
+            if step.name == "scope_finding_ids_to_case" and statements:
+                validate_finding_rebuild({item["name"] for item in self.sa.inspect(con).get_columns("findings")})
             for statement in statements:
                 column = added_column(statement)
                 if column and column[1] in {item["name"] for item in self.sa.inspect(con).get_columns(column[0])}:
