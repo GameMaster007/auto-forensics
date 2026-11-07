@@ -135,10 +135,11 @@ def test_canonical_column_types_and_defaults_survive_the_key_migration(database_
 
 
 @pytest.mark.parametrize("backend", ["sqlite", "sqlalchemy"])
-def test_known_sqlalchemy_sqlite_column_variants_survive_rebuild(tmp_path, backend):
+@pytest.mark.parametrize("confidence_type", ["REAL", "FLOAT", "DOUBLE PRECISION"])
+def test_known_sqlalchemy_sqlite_column_variants_survive_rebuild(tmp_path, backend, confidence_type):
     path = tmp_path / "sqlalchemy-legacy.db"
     original = existing.SCHEMA_SQL
-    modified = original.replace("confidence REAL NOT NULL,", "confidence FLOAT NOT NULL,", 1)
+    modified = original.replace("confidence REAL NOT NULL,", f"confidence {confidence_type} NOT NULL,", 1)
     for name, length in (("finding_id", 128), ("case_id", 128), ("severity", 32), ("tactic", 128)):
         # Only the findings declaration changes; the native fixture's ID rewrite
         # still needs its expected finding_id declaration.

@@ -312,10 +312,20 @@ class SQLAlchemyDatabase:
                     {item["name"] for item in inspector.get_columns("findings")}, incoming_references=incoming,
                     indexes=inspector.get_indexes("findings"), foreign_keys=foreign_keys, extra_constraints=extra_schema,
                 )
-                columns = inspector.get_columns("findings")
-                statements = preserve_finding_columns(statements, [
-                    {**column, "type": column["type"].compile(dialect=self.engine.dialect)} for column in columns
-                ], dialect=self.engine.dialect.name)
+                if self.engine.dialect.name == "sqlite":
+                    # SQLite reflection maps DOUBLE PRECISION to REAL. Use its
+                    # stored declarations so a rebuild does not rewrite types.
+                    columns = [
+                        {"name": row[1], "type": row[2], "nullable": not row[3], "default": row[4],
+                         "computed": bool(row[6])}
+                        for row in con.exec_driver_sql("PRAGMA table_xinfo(findings)")
+                    ]
+                else:
+                    columns = [
+                        {**column, "type": column["type"].compile(dialect=self.engine.dialect)}
+                        for column in inspector.get_columns("findings")
+                    ]
+                statements = preserve_finding_columns(statements, columns, dialect=self.engine.dialect.name)
             for statement in statements:
                 column = added_column(statement)
                 if column and column[1] in {item["name"] for item in self.sa.inspect(con).get_columns(column[0])}:
