@@ -12,7 +12,7 @@ from .integrity import compare_inventory, verify_run
 from .manifest import hash_input_tree
 from .models import CaseReport, Finding, TimelineEvent
 from .reviews import load_case_report
-from .security import SecurityError
+from .security import SecurityError, bounded_tree_paths
 
 
 def verified_case_report(case: dict[str, Any]) -> CaseReport:
@@ -37,7 +37,15 @@ def custody_changes(db: DatabaseBackend, case: dict[str, Any]) -> dict[str, list
         {"path": row["rel_path"], "sha256": row["sha256"], "size_bytes": row["size_bytes"]}
         for row in db.get_artifacts(case["case_id"])
     ]
-    return compare_inventory(recorded, hash_input_tree(Path(case["evidence_dir"])))
+    root = Path(case["evidence_dir"])
+    changes = compare_inventory(recorded, hash_input_tree(root))
+    indexed = {row["path"] for row in recorded}
+    for path in bounded_tree_paths(root):
+        if path.is_symlink() or (not path.is_dir() and not path.is_file()):
+            relative = str(path.relative_to(root))
+            category = "modified" if relative in indexed else "added"
+            changes[category].append(relative)
+    return {key: sorted(set(paths)) for key, paths in changes.items()}
 
 
 def finding_projection_changes(report: CaseReport, rows: list[dict[str, Any]]) -> dict[str, list[str]]:

@@ -202,7 +202,8 @@ class AutoForensicsService:
                 raise SecurityError(f"Stored evidence no longer matches its custody hash: {relative}")
         self.db.set_case_status(case_id, "ingesting", None)
         try:
-            entries = self.case_manager.ingest_directory(case_id, source_dir)
+            intake = self.case_manager.ingest_directory_detailed(case_id, source_dir)
+            entries = intake.entries
             for entry in entries:
                 if entry.rel_path in previous:
                     entry.metadata = dict(previous[entry.rel_path].get("metadata") or {})
@@ -234,7 +235,8 @@ class AutoForensicsService:
             self.db.append_audit_log(
                 action="case_ingested",
                 actor="system",
-                details={"ingested_files": added_count, "total_evidence_files": len(entries), "source_dir": str(source_dir)},
+                details={"ingested_files": added_count, "total_evidence_files": len(entries), "source_dir": str(source_dir),
+                         "skipped_counts": intake.skipped_counts},
                 case_id=case_id,
             )
             self.db.set_case_status(case_id, "ready", None)
@@ -246,6 +248,9 @@ class AutoForensicsService:
             "evidence_dir": case["evidence_dir"],
             "ingested_files": added_count,
             "total_evidence_files": len(entries),
+            "skipped_entries": intake.skipped_entries,
+            "skipped_counts": intake.skipped_counts,
+            "skipped_entries_truncated": intake.skipped_entries_truncated,
         }
 
     def _validate_ingest_source(self, source_dir: Path) -> Path:

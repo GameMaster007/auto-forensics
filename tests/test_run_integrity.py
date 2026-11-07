@@ -165,6 +165,22 @@ def test_manifest_inventory_does_not_silently_truncate_or_omit_deep_files(tmp_pa
         hash_input_tree(tmp_path)
 
 
+def test_tree_traversal_is_bounded_even_when_directories_and_links_have_no_regular_files(tmp_path: Path):
+    from auto_forensics.security import bounded_tree_paths
+
+    for index in range(6):
+        (tmp_path / f"empty-{index}").mkdir()
+    with pytest.raises(SecurityError, match="entry limit"):
+        list(bounded_tree_paths(tmp_path, max_entries=5))
+    outside = tmp_path.parent / "outside-tree"
+    outside.mkdir(exist_ok=True)
+    (outside / "not-traversed.txt").write_text("outside")
+    (tmp_path / "linked-dir").symlink_to(outside, target_is_directory=True)
+    paths = list(bounded_tree_paths(tmp_path))
+    assert tmp_path / "linked-dir" in paths
+    assert not any(path.name == "not-traversed.txt" for path in paths)
+
+
 def test_changed_evidence_during_analysis_is_not_published(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     source = tmp_path / "evidence"
     source.mkdir()

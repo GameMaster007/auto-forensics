@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterator
 
 CASE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$")
 
@@ -19,6 +21,35 @@ class SecurityPolicy:
     max_text_bytes: int = 4 * 1024 * 1024
     follow_symlinks: bool = False
     max_archive_size_bytes: int = 1024 * 1024 * 1024
+
+
+def bounded_tree_paths(root: Path, *, max_entries: int = 50_000, max_depth: int = 20) -> Iterator[Path]:
+    """Walk without following directory links or materializing an unbounded tree.
+
+    Yield links and special entries too, so callers can explicitly skip or
+    reject them. Permission/read errors propagate instead of hiding files.
+    """
+    root = root.resolve()
+    if not root.is_dir():
+        raise SecurityError(f"Evidence directory does not exist: {root}")
+    if type(max_entries) is not int or max_entries < 1 or type(max_depth) is not int or max_depth < 1:
+        raise SecurityError("Traversal limits must be positive integers")
+    pending = [root]
+    visited = 0
+    while pending:
+        directory = pending.pop()
+        confine_without_symlinks(root, directory)
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                visited += 1
+                if visited > max_entries:
+                    raise SecurityError(f"Evidence exceeds the traversal entry limit ({max_entries})")
+                path = Path(entry.path)
+                if len(path.relative_to(root).parts) > max_depth:
+                    raise SecurityError(f"Evidence exceeds the maximum directory depth ({max_depth})")
+                yield path
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(path)
 
 
 def validate_case_id(case_id: str) -> str:

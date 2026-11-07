@@ -122,6 +122,22 @@ def test_changed_evidence_cannot_be_synced_into_a_clean_database_view(managed_se
     assert service.db.get_findings("managed-case") == before
 
 
+@pytest.mark.parametrize("kind", ["symlink", "fifo"])
+def test_new_unsafe_entries_in_managed_evidence_are_reported(managed_service, kind):
+    import os
+
+    service = managed_service
+    evidence = Path(service.require_case("managed-case")["evidence_dir"])
+    if kind == "symlink":
+        (evidence / "unexpected.log").symlink_to(evidence / "payload.bin")
+    else:
+        os.mkfifo(evidence / "unexpected.log")
+    integrity = service.check_case_integrity("managed-case")
+    assert integrity["match"] is False and integrity["custody_changes"]["added"] == ["unexpected.log"]
+    with pytest.raises(SecurityError, match="custody"):
+        service.sync_case_report("managed-case")
+
+
 def test_imported_report_can_restore_missing_database_views_without_changing_original_hashes(managed_service, tmp_path):
     service = managed_service
     finding = _finding(service)

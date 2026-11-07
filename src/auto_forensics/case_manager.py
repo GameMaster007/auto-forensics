@@ -9,6 +9,7 @@ from pathlib import Path
 from .security import (
     SecurityError,
     SecurityPolicy,
+    bounded_tree_paths,
     confine_without_symlinks,
     is_supported_artifact,
     sha256_file,
@@ -24,6 +25,14 @@ class ArtifactIndexEntry:
     size_bytes: int
     sha256: str
     metadata: dict[str, str]
+
+
+@dataclass(slots=True)
+class IngestResult:
+    entries: list[ArtifactIndexEntry]
+    skipped_entries: list[dict[str, str]]
+    skipped_counts: dict[str, int]
+    skipped_entries_truncated: bool
 
 
 class CaseManager:
@@ -52,6 +61,9 @@ class CaseManager:
         return evidence, output
 
     def ingest_directory(self, case_id: str, source_dir: Path) -> list[ArtifactIndexEntry]:
+        return self.ingest_directory_detailed(case_id, source_dir).entries
+
+    def ingest_directory_detailed(self, case_id: str, source_dir: Path) -> IngestResult:
         source_dir = source_dir.resolve()
         if not source_dir.exists() or not source_dir.is_dir():
             raise SecurityError(f"Source directory does not exist: {source_dir}")
@@ -62,17 +74,34 @@ class CaseManager:
         if self.cases_dir.resolve().is_relative_to(source_dir) or source_dir.is_relative_to(self.case_root(case_id)):
             raise SecurityError("Ingest source must not overlap the case storage tree")
         sources: list[tuple[Path, Path, int, str]] = []
-        for src in sorted(source_dir.rglob("*")):
+        skipped: list[dict[str, str]] = []
+        skipped_counts: dict[str, int] = {}
+
+        def skip(path: Path, reason: str) -> None:
+            skipped_counts[reason] = skipped_counts.get(reason, 0) + 1
+            if len(skipped) < 1000:
+                skipped.append({"path": str(path.relative_to(source_dir)), "reason": reason})
+
+        for src in sorted(bounded_tree_paths(source_dir)):
+            if src.is_symlink() and (not self.policy.follow_symlinks or src.is_dir()):
+                skip(src, "symlink")
+                continue
+            if src.is_dir():
+                continue
             if not src.is_file():
+                skip(src, "special_or_missing_file")
                 continue
             if not self.policy.follow_symlinks and not stays_in_tree(src, source_dir):
+                skip(src, "unsafe_path")
                 continue
             if not src.resolve().is_relative_to(source_dir):
                 raise SecurityError("Ingest source symlink escapes the source directory")
             if not is_supported_artifact(src):
+                skip(src, "unsupported_artifact")
                 continue
             size_bytes = src.stat().st_size
             if size_bytes > self.policy.max_file_size_bytes:
+                skip(src, "file_size_limit")
                 continue
 
             rel_path = src.relative_to(source_dir)
@@ -82,14 +111,16 @@ class CaseManager:
                 raise SecurityError("Maximum file count exceeded during ingestion")
 
         existing: dict[str, ArtifactIndexEntry] = {}
-        for path in sorted(evidence_dir.rglob("*")):
+        for path in sorted(bounded_tree_paths(evidence_dir)):
             if path.is_symlink():
                 raise SecurityError("Existing case evidence contains a symlink")
             if not stays_in_tree(path, evidence_dir):
+                if not path.is_dir():
+                    raise SecurityError("Existing case evidence contains a special or missing file")
                 continue
-            relative = str(path.relative_to(evidence_dir))
-            existing[relative] = ArtifactIndexEntry(
-                relative, path.suffix.lower().lstrip("."), path.stat().st_size,
+            relative_text = str(path.relative_to(evidence_dir))
+            existing[relative_text] = ArtifactIndexEntry(
+                relative_text, path.suffix.lower().lstrip("."), path.stat().st_size,
                 sha256_file(path), {"source_path": str(path)},
             )
         for _src, relative, size, digest in sources:
@@ -126,4 +157,7 @@ class CaseManager:
                 for path in reversed(added):
                     path.unlink(missing_ok=True)
                 raise
-        return [existing[key] for key in sorted(existing)]
+        return IngestResult(
+            [existing[key] for key in sorted(existing)], skipped, skipped_counts,
+            sum(skipped_counts.values()) > len(skipped),
+        )

@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from .file_ops import atomic_write_text
-from .security import SecurityError, read_limited_text, sha256_file, stays_in_tree
+from .security import SecurityError, bounded_tree_paths, read_limited_text, sha256_file, stays_in_tree
 from .version import __version__
 
 _DIGEST = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -147,17 +147,15 @@ def hash_input_tree(input_dir: Path, max_files: int = 10_000) -> list[dict[str, 
         raise SecurityError(f"Evidence directory does not exist: {input_dir}")
     if type(max_files) is not int or max_files < 1:
         raise SecurityError("The manifest file limit must be a positive integer")
-    for path in sorted(root.rglob("*")):
+    for path in bounded_tree_paths(root):
         if not stays_in_tree(path, root):
             continue
-        if len(path.relative_to(root).parts) > 20:
-            raise SecurityError("Evidence exceeds the maximum directory depth (20)")
         if len(rows) >= max_files:
             raise SecurityError(f"Evidence exceeds the manifest file limit ({max_files})")
         before = path.stat()
         digest = sha256_file(path).lower()
         after = path.stat()
-        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+        if not stays_in_tree(path, root) or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
             after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
         ):
             raise SecurityError(f"Evidence changed while hashing: {path.relative_to(root)}")
@@ -168,7 +166,7 @@ def hash_input_tree(input_dir: Path, max_files: int = 10_000) -> list[dict[str, 
                 "size_bytes": after.st_size,
             }
         )
-    return rows
+    return sorted(rows, key=lambda row: row["path"])
 
 
 def hash_analysis_resources(paths: dict[str, Path | None]) -> list[dict[str, Any]]:

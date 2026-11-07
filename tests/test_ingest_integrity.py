@@ -74,3 +74,47 @@ def test_case_paths_and_recursive_ingest_sources_are_confined(tmp_path: Path):
         manager.case_root("../escape")
     with pytest.raises(SecurityError, match="overlap"):
         manager.ingest_directory("ingest-case", tmp_path)
+
+
+def test_skipped_source_entries_are_reported_with_reasons(tmp_path: Path):
+    import os
+
+    manager = CaseManager(tmp_path / "cases", SecurityPolicy(max_file_size_bytes=32))
+    manager.init_case_dirs("ingest-case")
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "kept.txt").write_text("kept")
+    (source / "too-large.bin").write_bytes(b"x" * 33)
+    (source / "unsupported.xyz").write_bytes(b"excluded")
+    (source / "link.txt").symlink_to(source / "kept.txt")
+    os.mkfifo(source / "pipe.log")
+    intake = manager.ingest_directory_detailed("ingest-case", source)
+    assert [entry.rel_path for entry in intake.entries] == ["kept.txt"]
+    assert intake.skipped_counts == {"file_size_limit": 1, "unsupported_artifact": 1, "symlink": 1, "special_or_missing_file": 1}
+    assert len(intake.skipped_entries) == 4 and intake.skipped_entries_truncated is False
+
+
+def test_skipped_entry_details_have_an_explicit_bounded_sample(tmp_path: Path):
+    manager = CaseManager(tmp_path / "cases", SecurityPolicy())
+    manager.init_case_dirs("ingest-case")
+    source = tmp_path / "source"
+    source.mkdir()
+    for index in range(1001):
+        (source / f"{index}.unsupported").touch()
+    intake = manager.ingest_directory_detailed("ingest-case", source)
+    assert intake.entries == [] and intake.skipped_counts == {"unsupported_artifact": 1001}
+    assert len(intake.skipped_entries) == 1000 and intake.skipped_entries_truncated is True
+
+
+def test_special_entries_in_managed_evidence_refuse_additive_ingest(tmp_path: Path):
+    import os
+
+    manager = CaseManager(tmp_path / "cases", SecurityPolicy())
+    evidence, _output = manager.init_case_dirs("ingest-case")
+    os.mkfifo(evidence / "pipe.log")
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "new.txt").write_text("not copied")
+    with pytest.raises(SecurityError, match="special"):
+        manager.ingest_directory("ingest-case", source)
+    assert not (evidence / "new.txt").exists()

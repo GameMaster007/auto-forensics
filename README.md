@@ -123,6 +123,15 @@ custody index and original provenance, stages new files before copying,
 and refuses a different file at an existing evidence path. JSONL exports
 are supported by both managed ingest and `run`.
 
+Ingest responses include skipped-entry counts and up to 1,000 relative
+paths with reasons (unsupported artifact, file-size limit, symlink, or
+special file); a flag identifies truncated detail lists. Directory
+links are not traversed. Tree walks stop above 50,000 total entries or
+depth 20, including directories and excluded entries, before building
+an unbounded listing. Managed custody checks also report unexpected
+symlinks and special files, even though run inventories contain regular
+files only.
+
 Case archives are verified and staged before an imported case appears.
 Archive paths, duplicates, symlinks, expanded size, and every listed
 hash are checked. New archives declare whether they contain a plain
