@@ -304,21 +304,21 @@ def _read_row(path: Path, row: int) -> str | None:
             raw = json.loads(path.read_text(encoding="utf-8"))
             validate_json_nesting(raw)
         except (OSError, ValueError, RecursionError):
-            raw = None
-        if isinstance(raw, list):
-            records = [item for item in raw if isinstance(item, dict)]
-            if row <= len(records):
-                return _json_record_text(records[row - 1])
-        elif isinstance(raw, dict) and row == 1:
-            return _json_record_text(raw)
+            pass
+        else:
+            records = [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else [raw]
+            if row > len(records) or not isinstance(records[row - 1], dict):
+                return None
+            return _json_record_text(records[row - 1])
     if path.suffix.lower() == ".csv":
         return _csv_record_text(path, row)
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
+    lines = list(io.StringIO(text, newline="")) if path.suffix.lower() in {".json", ".jsonl"} else text.splitlines()
     if row <= len(lines):
-        line = lines[row - 1]
+        line = lines[row - 1].rstrip("\r\n")
         record = _json_object_line(line)
         if record is not None:
             return _json_record_text(record)
@@ -334,10 +334,13 @@ def _csv_record_text(path: Path, row: int) -> str | None:
     text. The raw line stays too, for a claim that quotes the line.
     """
     try:
-        text = path.read_text(encoding="utf-8", errors="replace").removeprefix("\ufeff")
+        with path.open("r", encoding="utf-8", errors="replace", newline="") as handle:
+            text = handle.read().removeprefix("\ufeff")
     except OSError:
         return None
-    lines = text.splitlines(keepends=True)
+    # Match csv.reader.line_num: Unicode separators inside a field are data,
+    # not additional physical lines that may shift another record's slice.
+    lines = list(io.StringIO(text, newline=""))
     reader = csv.DictReader(io.StringIO(text, newline=""))
     _ = reader.fieldnames
     previous_line = reader.line_num

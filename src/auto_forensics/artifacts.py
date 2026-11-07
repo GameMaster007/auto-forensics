@@ -142,15 +142,44 @@ def load_json_artifacts(path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> li
     except SecurityError:
         return []
     digest = sha256_file(path).lower()
+    if path.suffix.lower() == ".jsonl":
+        # JSONL always addresses object records by physical line. An array
+        # value on one line is not several logical records on other lines.
+        return _events_from_physical_json_lines(text, path.name, digest, allow_generic=True)
     try:
         raw = json.loads(text)
         validate_json_nesting(raw)
     except (ValueError, RecursionError):
-        from .timeline_imports import events_from_json_lines
-
-        return events_from_json_lines(text, path.name, digest)
+        return _events_from_physical_json_lines(text, path.name, digest)
     items = raw if isinstance(raw, list) else [raw]
     return _events_from_json_items(items, path.name, digest)
+
+
+def _events_from_physical_json_lines(
+    text: str, source_file: str, digest: str, *, allow_generic: bool = False,
+) -> list[ArtifactEvent]:
+    """Count LF/CRLF/CR lines without splitting Unicode inside JSON fields."""
+    from .timeline_imports import event_from_record
+
+    out: list[ArtifactEvent] = []
+    for line_number, line in enumerate(io.StringIO(text, newline=""), start=1):
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+            validate_json_nesting(item)
+        except (ValueError, RecursionError):
+            continue
+        if not isinstance(item, dict):
+            continue
+        event = event_from_record(item, source_file, digest, line_number)
+        if event is None and allow_generic:
+            source = str(item.get("source") or source_file)
+            event = _make_event(item, source=source, identity=f"{source_file}:{line_number}")
+            _stamp_provenance(event, source_file, digest, row=line_number)
+        if event is not None:
+            out.append(event)
+    return out
 
 
 def _events_from_json_items(
@@ -207,16 +236,20 @@ def load_csv_artifacts(path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> lis
 
 def load_txt_artifacts(path: Path, max_text_bytes: int = 4 * 1024 * 1024) -> list[ArtifactEvent]:
     out: list[ArtifactEvent] = []
-    try:
-        content = read_limited_text(path, max_text_bytes)
-    except SecurityError:
+    with path.open("rb") as handle:
+        data = handle.read(max_text_bytes + 1)
+    if len(data) > max_text_bytes:
         return out
+    # Surrogate escaping keeps undecodable bytes available for exact offset
+    # accounting. Event text still uses the existing replacement decoding.
+    content = data.decode("utf-8", errors="surrogateescape")
     digest = sha256_file(path).lower()
     offset = 0
     for line_number, line in enumerate(content.splitlines(keepends=True), start=1):
+        raw_line = line.encode("utf-8", errors="surrogateescape")
         start = offset
-        offset += len(line.encode("utf-8"))
-        text = line.strip()
+        offset += len(raw_line)
+        text = raw_line.decode("utf-8", errors="replace").strip()
         if not text:
             continue
         parts = [x.strip() for x in text.split("|", 2)]

@@ -9,6 +9,7 @@ fence.
 from __future__ import annotations
 
 import csv
+import io
 import json
 import re
 from typing import Any
@@ -103,7 +104,7 @@ def events_from_json_lines(text: str, source_file: str, digest: str) -> list[Art
     import json
 
     events: list[ArtifactEvent] = []
-    for line_number, line in enumerate(text.splitlines(), start=1):
+    for line_number, line in enumerate(io.StringIO(text, newline=""), start=1):
         stripped = line.strip()
         if not stripped:
             continue
