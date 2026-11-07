@@ -722,8 +722,7 @@ class AutoForensicsService:
             )
             if callable(progress_callback):
                 progress_callback("running", 70, "Persisting findings and timeline")
-            self.db.replace_findings_and_timeline(case_id, report.findings, report.timeline)
-            self.db.replace_case_iocs(case_id, report.iocs)
+            self.db.replace_report_projection(case_id, report.findings, report.timeline, report.iocs)
             if callable(progress_callback):
                 progress_callback("running", 85, "Running IOC enrichment")
             report.enrichments = self._enrich_iocs_with_cache(report.iocs)
@@ -820,12 +819,12 @@ class AutoForensicsService:
             if any(custody_changes(self.db, case).values()):
                 raise SecurityError("Evidence differs from its custody index; refusing to synchronize")
             report = verified_case_report(case)
-            self.db.replace_findings_and_timeline(case_id, report.findings, report.timeline)
+            self.db.replace_report_projection(case_id, report.findings, report.timeline, report.iocs)
             self.db.append_audit_log(
                 action="report_projection_synchronized", actor="system", case_id=case_id,
-                details={"findings": len(report.findings), "timeline_events": len(report.timeline)},
+                details={"findings": len(report.findings), "timeline_events": len(report.timeline), "iocs": len(report.iocs)},
             )
-        return {"case_id": case_id, "findings": len(report.findings), "timeline_events": len(report.timeline)}
+        return {"case_id": case_id, "findings": len(report.findings), "timeline_events": len(report.timeline), "iocs": len(report.iocs)}
 
     @_case_operation
     def review_finding(

@@ -138,12 +138,12 @@ def test_replay_excludes_review_writers_until_log_restoration_finishes(tmp_path:
     destination = tmp_path / "replayed"
     original = replay.apply_review_log
     attempts = []
-    def try_interleaved_review(output_dir, log_path):
+    def try_interleaved_review(output_dir, log_path, **kwargs):
         target = manifest.parent if review_target == "source" else destination
         with pytest.raises(ReviewError, match="busy"):
             record_review(target, finding_id=finding_id, decision="accept", actor="Bea", note="Must not be overwritten")
         attempts.append(target)
-        return original(output_dir, log_path)
+        return original(output_dir, log_path, **kwargs)
     monkeypatch.setattr(replay, "apply_review_log", try_interleaved_review)
     assert replay.replay_manifest(manifest, destination)["match"] is True
     assert len(attempts) == 1

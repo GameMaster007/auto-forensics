@@ -57,7 +57,7 @@ jobs:
       - name: Install
         run: python -m pip install -e ".[dev,db,sigma,server]"
       - name: PostgreSQL and migration regressions
-        run: python -m pytest tests/test_case_scoped_findings.py tests/test_migration_extensions.py tests/test_enrichment_integrity.py tests/test_postgres_optional.py -q
+        run: python -m pytest tests/test_case_scoped_findings.py tests/test_migration_extensions.py tests/test_enrichment_integrity.py tests/test_projection_corruption.py tests/test_ioc_projection_integrity.py tests/test_postgres_optional.py -q --tb=short
 
   gitleaks:
     name: secret-scan

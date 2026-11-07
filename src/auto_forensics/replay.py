@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .file_ops import directory_lock
-from .integrity import check_inputs, check_resources, check_review_log
+from .integrity import check_inputs, check_resources, checked_review_snapshot
 from .manifest import read_run_manifest, validate_output_resource_paths
 from .pipeline import PipelineConfig
 from .pipeline import run_case_locked as run_case
@@ -50,7 +50,7 @@ def _replay_manifest_locked(manifest_path: Path, output_dir: Path | None, input_
     if input_error:
         input_differences.append(input_error)
     resources_match, resource_error = check_resources(manifest)
-    reviews_match, review_error = check_review_log(manifest, manifest_path.parent)
+    reviews_match, review_error, review_entries, review_content = checked_review_snapshot(manifest, manifest_path.parent)
 
     model = manifest.get("model") if isinstance(manifest.get("model"), dict) else {}
     expected_sha = str(manifest.get("output", {}).get("sha256") or "")
@@ -78,7 +78,7 @@ def _replay_manifest_locked(manifest_path: Path, output_dir: Path | None, input_
             report = run_case(config_from_manifest(manifest, input_dir, destination))
             del report
             try:
-                if "analyst_reviews" in manifest and not apply_review_log(destination, manifest_path.parent / ANALYST_REVIEW_LOG):
+                if "analyst_reviews" in manifest and not apply_review_log(destination, manifest_path.parent / ANALYST_REVIEW_LOG, snapshot=(review_entries, review_content)):
                     review_error = "Review log names a finding missing from the replay"
             except ReviewError as exc:
                 review_error = str(exc)

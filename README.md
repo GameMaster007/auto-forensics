@@ -201,7 +201,7 @@ auto-forensics check-case --case-id case-001
 ```
 
 `check-case` compares current evidence with the custody index, checks
-the saved run, and compares the database findings and timeline with the
+the saved run, and compares the database findings, timeline, and IOCs with the
 report. It makes no model calls and exits nonzero on a mismatch. A case
 that has not been analyzed can still pass its custody check.
 Database JSON display defaults retain `_json_errors` diagnostics.
@@ -211,14 +211,17 @@ records can be identified and recovered.
 
 If a standalone review changed a managed case's report, an import has
 not restored its database views, or a database update was interrupted,
-`auto-forensics sync-report --case-id CASE-ID` rebuilds the findings and
-timeline from the saved report after verifying evidence, resources,
+`auto-forensics sync-report --case-id CASE-ID` rebuilds the findings,
+timeline, and IOCs in one database transaction after verifying evidence, resources,
 report artifacts, and review hashes. It preserves the report bytes,
 analyst notes, and enrichment cache. It refuses changed evidence; it
 does not repair or conceal custody failures. Referenced rule resources
 must remain available to verify an imported run. Report publication and
 database updates are separate transactions; a failed database update
 reports that the review was saved and needs synchronization.
+Verification also folds analyst decisions from the log and checks report
+status, actor, time, notes, and derived analyst counts. Checksummed producer
+data with contradictory or unlogged acceptance fails verification.
 
 IOC enrichment results live in the case overview and database cache;
 saved reports and analyst decisions retain their recorded content.

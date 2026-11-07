@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -66,7 +67,7 @@ def verify_run(manifest_path: Path, *, input_dir: Path | None = None) -> dict[st
     resources_match, resource_error = check_resources(manifest)
     errors = [error for error in (input_error, resource_error) if error]
     artifacts_match, artifact_changes = _check_artifacts(manifest, manifest_path.parent)
-    reviews_match, review_error = check_review_log(manifest, manifest_path.parent)
+    reviews_match, review_error, review_entries, _ = checked_review_snapshot(manifest, manifest_path.parent)
     if review_error:
         errors.append(review_error)
     actual_sha = ""
@@ -82,6 +83,13 @@ def verify_run(manifest_path: Path, *, input_dir: Path | None = None) -> dict[st
         if report.get("case_id") != manifest["case_id"]:
             raise SecurityError("Published report case identifier differs from its manifest")
         validate_report_data(report)
+        if reviews_match:
+            from .reviews import review_state_error
+
+            review_error = review_state_error(report, review_entries, require_summary=manifest.get("tool_version") == __version__)
+            if review_error:
+                reviews_match = False
+                errors.append(review_error)
         actual_sha = canonical_report_sha256(report)
         report_match = actual_sha == manifest["output"]["sha256"].lower()
         citations_match = _check_citation_files(report["findings"], manifest["input_files"])
@@ -126,25 +134,31 @@ def _check_artifacts(manifest: dict[str, Any], output_dir: Path) -> tuple[bool, 
 
 
 def check_review_log(manifest: dict[str, Any], output_dir: Path) -> tuple[bool, str]:
-    from .reviews import ReviewError, read_review_log
+    match, error, _, _ = checked_review_snapshot(manifest, output_dir)
+    return match, error
+
+
+def checked_review_snapshot(manifest: dict[str, Any], output_dir: Path) -> tuple[bool, str, list[dict[str, Any]], str]:
+    from .reviews import ReviewError, read_review_snapshot
 
     metadata = manifest.get("analyst_reviews")
     path = output_dir / "analyst_reviews.jsonl"
     if metadata is None:
-        return (False, "An unrecorded analyst review log exists") if path.exists() or path.is_symlink() else (True, "")
+        return (False, "An unrecorded analyst review log exists", [], "") if path.exists() or path.is_symlink() else (True, "", [], "")
     try:
         if not stays_in_tree(path, output_dir):
-            return False, "Analyst review log is missing or reached through a symlink"
-        entries = read_review_log(path)
+            return False, "Analyst review log is missing or reached through a symlink", [], ""
+        entries, content = read_review_snapshot(path)
         if len(entries) != metadata["entries"]:
-            return False, "Analyst review count does not match the manifest"
+            return False, "Analyst review count does not match the manifest", [], ""
+        raw = content.encode("utf-8")
         if "sha256" in metadata and (
-            path.stat().st_size != metadata["size_bytes"] or sha256_file(path) != metadata["sha256"].lower()
+            len(raw) != metadata["size_bytes"] or hashlib.sha256(raw).hexdigest() != metadata["sha256"].lower()
         ):
-            return False, "Analyst review log hash does not match the manifest"
+            return False, "Analyst review log hash does not match the manifest", [], ""
     except (OSError, ReviewError) as exc:
-        return False, str(exc)
-    return True, ""
+        return False, str(exc), [], ""
+    return True, "", entries, content
 
 
 def _check_citation_files(findings: list[Any], inputs: list[dict[str, Any]]) -> bool:

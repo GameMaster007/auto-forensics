@@ -10,7 +10,7 @@ The earlier line stays in the log.
 from __future__ import annotations
 
 import json
-from dataclasses import fields
+from dataclasses import fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +29,7 @@ from .models import (
 )
 from .pipeline import rewrite_published_report
 from .report_validation import validate_report_data
-from .security import SecurityError, read_limited_text, validate_json_nesting
+from .security import SecurityError, read_limited_text, read_regular_text, validate_json_nesting
 from .timeline import parse_iso
 from .version import __version__
 
@@ -107,7 +107,7 @@ def _record_review(
     clean_note = _clean_note(note, required=action == "annotate")
     clean_id = _clean_id(finding_id)
     log_path = output_dir / ANALYST_REVIEW_LOG
-    entries = read_review_log(log_path)
+    entries, previous = read_review_snapshot(log_path)
     if action in _DECISIONS and not override:
         prior = _latest_decision(entries, clean_id)
         if prior is not None:
@@ -126,7 +126,6 @@ def _record_review(
     }
     _validate_entry(entry)
     apply_entry(finding, entry)
-    previous = log_path.read_bytes().decode("utf-8") if log_path.exists() else ""
     if previous and not previous.endswith("\n"):
         previous += "\n"
     log_content = previous + json.dumps(entry, ensure_ascii=True, sort_keys=True) + "\n"
@@ -151,14 +150,13 @@ def apply_review_log(output_dir: Path, log_path: Path) -> bool:
         return apply_review_log_locked(output_dir, log_path)
 
 
-def apply_review_log_locked(output_dir: Path, log_path: Path) -> bool:
+def apply_review_log_locked(output_dir: Path, log_path: Path, *, snapshot: tuple[list[dict[str, Any]], str] | None = None) -> bool:
     """Restore source decisions while the caller holds the destination lock."""
-    if not log_path.exists() and not log_path.is_symlink():
+    if snapshot is None and not log_path.exists() and not log_path.is_symlink():
         return True
-    entries = read_review_log(log_path)
+    entries, content = read_review_snapshot(log_path) if snapshot is None else snapshot
     if not entries:
         return True
-    content = log_path.read_bytes().decode("utf-8")
     output_dir = output_dir.resolve()
     report = load_case_report(output_dir / "case_report.json")
     by_id = {item.finding_id: item for item in report.findings}
@@ -205,18 +203,20 @@ def apply_entry(finding: Finding, entry: dict[str, Any]) -> None:
 
 def read_review_log(path: Path) -> list[dict[str, Any]]:
     """Read the custody log. A broken line is an error, not a skipped review."""
+    return read_review_snapshot(path)[0]
+
+
+def read_review_snapshot(path: Path) -> tuple[list[dict[str, Any]], str]:
+    """Parse and copy exactly the same bounded log snapshot."""
     if path.is_symlink() or not path.is_file():
         if not path.exists() and not path.is_symlink():
-            return []
+            return [], ""
         raise ReviewError("analyst review log must be a regular file")
-    with path.open("rb") as handle:
-        raw = handle.read(8 * 1024 * 1024 + 1)
-    if len(raw) > 8 * 1024 * 1024:
-        raise ReviewError("analyst review log exceeds its size limit")
     try:
-        text = raw.decode("utf-8")
-    except UnicodeError as exc:
-        raise ReviewError("analyst review log is not UTF-8") from exc
+        text = read_regular_text(path, path.parent, 8 * 1024 * 1024)
+    except SecurityError as exc:
+        message = "analyst review log exceeds its size limit" if "size limit" in str(exc) else "analyst review log could not be read as bounded UTF-8"
+        raise ReviewError(message) from exc
     entries: list[dict[str, Any]] = []
     decided: set[str] = set()
     for line in text.splitlines():
@@ -235,7 +235,39 @@ def read_review_log(path: Path) -> list[dict[str, Any]]:
                 raise ReviewError("analyst review log silently overwrites a prior decision")
             decided.add(item["finding_id"])
         entries.append(item)
-    return entries
+    return entries, text
+
+
+def review_state_error(raw: dict[str, Any], entries: list[dict[str, Any]], *, require_summary: bool = False) -> str:
+    """Reconstruct analyst state from its log rather than trusting badges."""
+    observed = [_finding_from_dict(item) for item in raw["findings"]]
+    expected = {
+        finding.finding_id: replace(
+            finding, review_status="unverified", analyst_verified=False, review_actor="", review_at="", review_note="",
+            verification=finding.machine_verification or finding.verification, machine_verification="",
+        ) for finding in observed
+    }
+    for entry in entries:
+        finding = expected.get(entry["finding_id"])
+        if finding is None:
+            return "Analyst review log references a finding absent from the report"
+        apply_entry(finding, entry)
+    names = ("review_status", "analyst_verified", "review_actor", "review_at", "review_note", "verification", "machine_verification")
+    for finding in observed:
+        if any(getattr(finding, name) != getattr(expected[finding.finding_id], name) for name in names):
+            return "Report analyst review fields disagree with the recorded review log"
+    accepted = [finding.finding_id for finding in expected.values() if finding.review_status == "accepted"]
+    rejected = sum(finding.review_status == "rejected" for finding in expected.values())
+    counts = {"analyst_accepted": len(accepted), "analyst_rejected": rejected,
+              "analyst_unverified": len(observed) - len(accepted) - rejected}
+    summary = raw["summary"]
+    if any((require_summary or name in summary) and summary.get(name) != value for name, value in counts.items()):
+        return "Report analyst review counts disagree with the recorded review log"
+    if require_summary or "verified_finding_ids" in summary:
+        identifiers = summary.get("verified_finding_ids")
+        if not isinstance(identifiers, list) or len(identifiers) != len(accepted) or set(identifiers) != set(accepted):
+            return "Report analyst verified IDs disagree with the recorded review log"
+    return ""
 
 
 def _validate_entry(entry: dict[str, Any]) -> None:

@@ -440,53 +440,61 @@ class SQLAlchemyDatabase:
     def replace_findings_and_timeline(
         self, case_id: str, findings: list[Finding], timeline: list[TimelineEvent]
     ) -> None:
-        now = utc_now_iso()
         with self.engine.begin() as con:
-            con.execute(self.findings.delete().where(self.findings.c.case_id == case_id))
-            con.execute(self.timeline.delete().where(self.timeline.c.case_id == case_id))
+            self._write_findings_timeline(con, case_id, findings, timeline)
 
-            if findings:
-                con.execute(
-                    self.findings.insert(),
-                    [
-                        {
-                            "finding_id": f.finding_id,
-                            "case_id": case_id,
-                            "title": f.title,
-                            "severity": f.severity,
-                            "confidence": f.confidence,
-                            "tactic": f.tactic,
-                            "evidence_json": json.dumps(f.evidence),
-                            "recommendation": f.recommendation,
-                            "created_at": now,
-                            "citations_json": citations_as_json(f.citations),
-                            "origin": f.origin,
-                            "review_status": f.review_status,
-                            "worker": f.worker,
-                            "details_json": finding_details_as_json(f),
-                        }
-                        for f in findings
-                    ],
-                )
+    def _write_findings_timeline(self, con: Any, case_id: str, findings: list[Finding], timeline: list[TimelineEvent]) -> None:
+        now = utc_now_iso()
+        con.execute(self.findings.delete().where(self.findings.c.case_id == case_id))
+        con.execute(self.timeline.delete().where(self.timeline.c.case_id == case_id))
 
-            if timeline:
-                con.execute(
-                    self.timeline.insert(),
-                    [
-                        {
-                            "case_id": case_id,
-                            "timestamp": t.timestamp,
-                            "source": t.source,
-                            "event_type": t.event_type,
-                            "description": t.description,
-                            "risk_score": t.risk_score,
-                            "tags_json": json.dumps(t.tags),
-                            "related_json": json.dumps(t.related),
-                            "created_at": now,
-                        }
-                        for t in timeline
-                    ],
-                )
+        if findings:
+            con.execute(
+                self.findings.insert(),
+                [
+                    {
+                        "finding_id": f.finding_id,
+                        "case_id": case_id,
+                        "title": f.title,
+                        "severity": f.severity,
+                        "confidence": f.confidence,
+                        "tactic": f.tactic,
+                        "evidence_json": json.dumps(f.evidence),
+                        "recommendation": f.recommendation,
+                        "created_at": now,
+                        "citations_json": citations_as_json(f.citations),
+                        "origin": f.origin,
+                        "review_status": f.review_status,
+                        "worker": f.worker,
+                        "details_json": finding_details_as_json(f),
+                    }
+                    for f in findings
+                ],
+            )
+
+        if timeline:
+            con.execute(
+                self.timeline.insert(),
+                [
+                    {
+                        "case_id": case_id,
+                        "timestamp": t.timestamp,
+                        "source": t.source,
+                        "event_type": t.event_type,
+                        "description": t.description,
+                        "risk_score": t.risk_score,
+                        "tags_json": json.dumps(t.tags),
+                        "related_json": json.dumps(t.related),
+                        "created_at": now,
+                    }
+                    for t in timeline
+                ],
+            )
+
+    def replace_report_projection(self, case_id: str, findings: list[Finding], timeline: list[TimelineEvent], iocs: list[IOC]) -> None:
+        with self.engine.begin() as con:
+            self._write_findings_timeline(con, case_id, findings, timeline)
+            self._write_case_iocs(con, case_id, iocs)
 
     def get_artifacts(self, case_id: str) -> list[dict[str, Any]]:
         stmt = (
@@ -571,27 +579,30 @@ class SQLAlchemyDatabase:
         return out
 
     def replace_case_iocs(self, case_id: str, iocs: list[IOC]) -> None:
-        now = utc_now_iso()
         with self.engine.begin() as con:
-            con.execute(self.case_iocs.delete().where(self.case_iocs.c.case_id == case_id))
-            if iocs:
-                con.execute(
-                    self.case_iocs.insert(),
-                    [
-                        {
-                            "case_id": case_id,
-                            "ioc_id": ioc.ioc_id,
-                            "ioc_type": ioc.ioc_type,
-                            "value": ioc.value,
-                            "first_seen": ioc.first_seen,
-                            "last_seen": ioc.last_seen,
-                            "sources_json": json.dumps(ioc.sources),
-                            "metadata_json": json.dumps(ioc.metadata),
-                            "created_at": now,
-                        }
-                        for ioc in iocs
-                    ],
-                )
+            self._write_case_iocs(con, case_id, iocs)
+
+    def _write_case_iocs(self, con: Any, case_id: str, iocs: list[IOC]) -> None:
+        now = utc_now_iso()
+        con.execute(self.case_iocs.delete().where(self.case_iocs.c.case_id == case_id))
+        if iocs:
+            con.execute(
+                self.case_iocs.insert(),
+                [
+                    {
+                        "case_id": case_id,
+                        "ioc_id": ioc.ioc_id,
+                        "ioc_type": ioc.ioc_type,
+                        "value": ioc.value,
+                        "first_seen": ioc.first_seen,
+                        "last_seen": ioc.last_seen,
+                        "sources_json": json.dumps(ioc.sources),
+                        "metadata_json": json.dumps(ioc.metadata),
+                        "created_at": now,
+                    }
+                    for ioc in iocs
+                ],
+            )
 
     def get_case_iocs(self, case_id: str) -> list[dict[str, Any]]:
         stmt = (

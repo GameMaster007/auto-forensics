@@ -254,9 +254,11 @@ def decode_finding_row(row: dict[str, Any]) -> dict[str, Any]:
         decode_row_json(item, "citations_json", "citations", list)
     else:
         item["citations"] = []
-    item["origin"] = str(item.get("origin") or "detector")
-    item["review_status"] = str(item.get("review_status") or "unverified")
-    item["worker"] = str(item.get("worker") or "pipeline")
+    for name, default in (("origin", "detector"), ("review_status", "unverified"), ("worker", "pipeline")):
+        value = item.get(name)
+        if name in item and (not isinstance(value, str) or not value):
+            _json_error(item, name)
+        item[name] = str(value or default)
     item.setdefault("details_json", "{}")
     decode_row_json(item, "details_json", "_details", dict)
     details = item.pop("_details")

@@ -10,7 +10,7 @@ from typing import Any
 from .db_backend import DatabaseBackend
 from .integrity import compare_inventory, verify_run
 from .manifest import REPORT_ARTIFACT_NAMES, hash_input_tree
-from .models import CaseReport, Finding, TimelineEvent
+from .models import IOC, CaseReport, Finding, TimelineEvent
 from .reviews import load_case_report
 from .security import SecurityError, bounded_tree_paths
 
@@ -78,6 +78,20 @@ def _timeline_matches(report: CaseReport, rows: list[dict[str, Any]]) -> bool:
     return canonical(expected) == canonical(observed)
 
 
+def ioc_projection_changes(report: CaseReport, rows: list[dict[str, Any]]) -> dict[str, list[str]]:
+    expected = {item.ioc_id: asdict(item) for item in report.iocs}
+    names = {field.name for field in fields(IOC)}
+    observed = {row["ioc_id"]: {key: row.get(key) for key in names} for row in rows}
+    if len(expected) != len(report.iocs) or len(observed) != len(rows):
+        raise SecurityError("Report or database has duplicate IOC identities")
+    corrupt = {row["ioc_id"] for row in rows if row.get("_json_errors")}
+    return {
+        "missing": sorted(expected.keys() - observed.keys()),
+        "extra": sorted(observed.keys() - expected.keys()),
+        "modified": sorted(key for key in expected.keys() & observed.keys() if expected[key] != observed[key] or key in corrupt),
+    }
+
+
 def inspect_case_integrity(db: DatabaseBackend, case: dict[str, Any]) -> dict[str, Any]:
     """Inspect under the caller's case/output locks without running a model."""
     errors: list[str] = []
@@ -92,6 +106,7 @@ def inspect_case_integrity(db: DatabaseBackend, case: dict[str, Any]) -> dict[st
     present = (output / "run_manifest.json").exists() or (output / "run_manifest.json").is_symlink()
     run = None
     projection: dict[str, list[str]] | None = None
+    ioc_changes: dict[str, list[str]] | None = None
     timeline_match = None
     try:
         if present:
@@ -100,11 +115,13 @@ def inspect_case_integrity(db: DatabaseBackend, case: dict[str, Any]) -> dict[st
                 report = load_case_report(output / "case_report.json")
                 projection = finding_projection_changes(report, db.get_findings(case["case_id"]))
                 timeline_match = _timeline_matches(report, db.get_timeline(case["case_id"]))
-        elif any((output / name).exists() or (output / name).is_symlink() for name in (*REPORT_ARTIFACT_NAMES, "analyst_reviews.jsonl")) or db.get_findings(case["case_id"]) or db.get_timeline(case["case_id"]):
+                ioc_changes = ioc_projection_changes(report, db.get_case_iocs(case["case_id"]))
+        elif any((output / name).exists() or (output / name).is_symlink() for name in (*REPORT_ARTIFACT_NAMES, "analyst_reviews.jsonl")) or db.get_findings(case["case_id"]) or db.get_timeline(case["case_id"]) or db.get_case_iocs(case["case_id"]):
             errors.append("A report or database projection exists without its run manifest")
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         errors.append(f"Run check failed: {exc}")
-    projection_match = projection is not None and not any(projection.values()) and timeline_match is True
+    ioc_match = ioc_changes is not None and not any(ioc_changes.values())
+    projection_match = projection is not None and not any(projection.values()) and timeline_match is True and ioc_match
     return {
         "case_id": case["case_id"],
         "match": custody_match and not errors and (not present or bool(run and run["match"] and projection_match)),
@@ -115,5 +132,7 @@ def inspect_case_integrity(db: DatabaseBackend, case: dict[str, Any]) -> dict[st
         "projection_match": projection_match if present else None,
         "finding_changes": projection,
         "timeline_match": timeline_match,
+        "ioc_projection_match": ioc_match if present else None,
+        "ioc_changes": ioc_changes,
         "errors": errors,
     }

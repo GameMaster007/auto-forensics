@@ -454,60 +454,68 @@ class Database:
     def replace_findings_and_timeline(
         self, case_id: str, findings: list[Finding], timeline: list[TimelineEvent]
     ) -> None:
-        now = utc_now_iso()
         with self.connect() as con:
-            con.execute("DELETE FROM findings WHERE case_id = ?", (case_id,))
-            con.execute("DELETE FROM timeline WHERE case_id = ?", (case_id,))
-            con.executemany(
-                """
-                INSERT INTO findings(
-                    finding_id, case_id, title, severity, confidence, tactic,
-                    evidence_json, recommendation, created_at,
-                    citations_json, origin, review_status, worker, details_json
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        f.finding_id,
-                        case_id,
-                        f.title,
-                        f.severity,
-                        f.confidence,
-                        f.tactic,
-                        json.dumps(f.evidence),
-                        f.recommendation,
-                        now,
-                        citations_as_json(f.citations),
-                        f.origin,
-                        f.review_status,
-                        f.worker,
-                        finding_details_as_json(f),
-                    )
-                    for f in findings
-                ],
-            )
-            con.executemany(
-                """
-                INSERT INTO timeline(
-                    case_id, timestamp, source, event_type, description,
-                    risk_score, tags_json, related_json, created_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        case_id,
-                        t.timestamp,
-                        t.source,
-                        t.event_type,
-                        t.description,
-                        t.risk_score,
-                        json.dumps(t.tags),
-                        json.dumps(t.related),
-                        now,
-                    )
-                    for t in timeline
-                ],
-            )
+            self._write_findings_timeline(con, case_id, findings, timeline)
+
+    def _write_findings_timeline(self, con: Any, case_id: str, findings: list[Finding], timeline: list[TimelineEvent]) -> None:
+        now = utc_now_iso()
+        con.execute("DELETE FROM findings WHERE case_id = ?", (case_id,))
+        con.execute("DELETE FROM timeline WHERE case_id = ?", (case_id,))
+        con.executemany(
+            """
+            INSERT INTO findings(
+                finding_id, case_id, title, severity, confidence, tactic,
+                evidence_json, recommendation, created_at,
+                citations_json, origin, review_status, worker, details_json
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    f.finding_id,
+                    case_id,
+                    f.title,
+                    f.severity,
+                    f.confidence,
+                    f.tactic,
+                    json.dumps(f.evidence),
+                    f.recommendation,
+                    now,
+                    citations_as_json(f.citations),
+                    f.origin,
+                    f.review_status,
+                    f.worker,
+                    finding_details_as_json(f),
+                )
+                for f in findings
+            ],
+        )
+        con.executemany(
+            """
+            INSERT INTO timeline(
+                case_id, timestamp, source, event_type, description,
+                risk_score, tags_json, related_json, created_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    case_id,
+                    t.timestamp,
+                    t.source,
+                    t.event_type,
+                    t.description,
+                    t.risk_score,
+                    json.dumps(t.tags),
+                    json.dumps(t.related),
+                    now,
+                )
+                for t in timeline
+            ],
+        )
+
+    def replace_report_projection(self, case_id: str, findings: list[Finding], timeline: list[TimelineEvent], iocs: list[IOC]) -> None:
+        with self.connect() as con:
+            self._write_findings_timeline(con, case_id, findings, timeline)
+            self._write_case_iocs(con, case_id, iocs)
 
     def get_artifacts(self, case_id: str) -> list[dict[str, Any]]:
         with self.connect() as con:
@@ -563,31 +571,34 @@ class Database:
         return sorted(out, key=lambda row: timeline_sort_key(row.get("timestamp")))
 
     def replace_case_iocs(self, case_id: str, iocs: list[IOC]) -> None:
-        now = utc_now_iso()
         with self.connect() as con:
-            con.execute("DELETE FROM case_iocs WHERE case_id = ?", (case_id,))
-            con.executemany(
-                """
-                INSERT INTO case_iocs(
-                    case_id, ioc_id, ioc_type, value, first_seen, last_seen,
-                    sources_json, metadata_json, created_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        case_id,
-                        ioc.ioc_id,
-                        ioc.ioc_type,
-                        ioc.value,
-                        ioc.first_seen,
-                        ioc.last_seen,
-                        json.dumps(ioc.sources),
-                        json.dumps(ioc.metadata),
-                        now,
-                    )
-                    for ioc in iocs
-                ],
-            )
+            self._write_case_iocs(con, case_id, iocs)
+
+    def _write_case_iocs(self, con: Any, case_id: str, iocs: list[IOC]) -> None:
+        now = utc_now_iso()
+        con.execute("DELETE FROM case_iocs WHERE case_id = ?", (case_id,))
+        con.executemany(
+            """
+            INSERT INTO case_iocs(
+                case_id, ioc_id, ioc_type, value, first_seen, last_seen,
+                sources_json, metadata_json, created_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    case_id,
+                    ioc.ioc_id,
+                    ioc.ioc_type,
+                    ioc.value,
+                    ioc.first_seen,
+                    ioc.last_seen,
+                    json.dumps(ioc.sources),
+                    json.dumps(ioc.metadata),
+                    now,
+                )
+                for ioc in iocs
+            ],
+        )
 
     def get_case_iocs(self, case_id: str) -> list[dict[str, Any]]:
         with self.connect() as con:
