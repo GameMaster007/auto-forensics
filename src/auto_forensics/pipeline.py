@@ -604,7 +604,7 @@ def _run_case(config: PipelineConfig) -> CaseReport:
         return features
 
     def yara_scan(candidates: list[Path]) -> tuple[list[Finding], list[TimelineEvent]]:
-        return scan_paths_with_yara(candidates, config.rules_dir)
+        return scan_paths_with_yara(candidates, config.rules_dir, evidence_root=config.input_dir)
 
     def event_findings(parsed: list[ArtifactEvent]) -> list[Finding]:
         return findings_from_artifact_events(parsed) + findings_from_imported_timelines(parsed)

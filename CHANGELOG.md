@@ -8,6 +8,9 @@
   exclusive verified copy, preserving competing files and rolling back
   only unchanged partial data after failure. Refuse invalid finding IDs
   before review writes; retain escaped JSON review notes through replay.
+- Keep YARA citations and finding identities relative to the evidence
+  root so identical files under different hosts remain distinct and
+  replay still matches after evidence relocation.
 - Scope durable finding IDs to each case, preserving existing rows in a
   transactional compatibility migration. Failed table rebuilds roll back.
 - Preserve distinct cited rows when a detector reuses an ID within one
