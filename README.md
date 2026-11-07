@@ -156,7 +156,11 @@ Archive paths, duplicates, symlinks, expanded size, and every listed
 hash are checked. New archives declare whether they contain a plain
 SHA-256 checksum or an HMAC using the configured API-key hash. A plain
 checksum detects accidental changes; it does not authenticate the
-sender. Legacy archives that meet the path and size rules remain readable. API export destinations are
+sender. A keyed importer requires HMAC for version-2 archives and refuses
+a public-checksum downgrade. Unkeyed checksum archives remain supported
+without an authenticity claim. Legacy archives must match the configured
+key, or the historical public checksum in an unkeyed instance, and meet
+the same path and size rules. API export destinations are
 confined to `$AUTO_FORENSICS_HOME/exports` (relative names are accepted),
 and API imports honor the configured ingest roots. CLI export accepts
 an explicit destination outside the case itself.

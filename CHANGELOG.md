@@ -4,6 +4,9 @@
 
 ### Integrity fixes
 
+- Require HMAC on keyed version-2 archive imports, refusing an
+  attacker-selected public-checksum downgrade before case publication.
+  Preserve legacy archives that match the configured key.
 - Support managed ingestion on filesystems without hard links using an
   exclusive verified copy, preserving competing files and rolling back
   only unchanged partial data after failure. Refuse invalid finding IDs

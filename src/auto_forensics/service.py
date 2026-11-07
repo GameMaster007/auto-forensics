@@ -917,6 +917,11 @@ class AutoForensicsService:
         expected = manifest.get("signature")
         if not valid_digest(expected):
             raise SecurityError("Archive has an invalid integrity digest")
+        if (
+            self.config.api_key_hash and manifest.get("archive_version", 1) == 2
+            and manifest.get("integrity_algorithm") != "hmac-sha256"
+        ):
+            raise SecurityError("Keyed version-2 archive imports require HMAC authentication")
         unsigned = {key: value for key, value in manifest.items() if key != "signature"}
         if not hmac.compare_digest(expected.lower(), self._archive_signature(unsigned)):
             raise SecurityError("Archive integrity verification failed")

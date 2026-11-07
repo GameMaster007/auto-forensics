@@ -133,6 +133,53 @@ def test_keyed_archives_require_the_matching_key(tmp_path: Path):
     service.import_case_archive(path, case_id_override="keyed-copy")
 
 
+@pytest.mark.parametrize("version", [1, 2])
+def test_keyed_import_cannot_downgrade_to_a_public_archive_digest(tmp_path, version):
+    receiver = _service(tmp_path / "receiver", key="a" * 64)
+    payload = b"attacker-controlled synthetic evidence"
+    manifest = {"case_id": "archive-case", "files": [_row("evidence/planted.txt", payload)]}
+    if version == 2:
+        manifest.update(archive_version=2, integrity_algorithm="sha256")
+        digest = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+    else:
+        digest = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode() + b"auto-forensics").hexdigest()
+    manifest["signature"] = digest
+    path = tmp_path / "public-checksum.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps(manifest))
+        archive.writestr("evidence/planted.txt", payload)
+    with pytest.raises(SecurityError, match="HMAC|verification failed"):
+        receiver.import_case_archive(path)
+    assert receiver.db.get_case("archive-case") is None
+    assert not (receiver.config.cases_dir / "archive-case").exists()
+    assert not list(receiver.config.cases_dir.glob(".af-import-*"))
+
+
+def test_legacy_archives_with_the_matching_configured_key_remain_readable(tmp_path):
+    service = _service(tmp_path, key="a" * 64)
+    path = _archive(service, tmp_path / "legacy.zip", [_row("evidence/a.txt", b"synthetic")], [("evidence/a.txt", b"synthetic")])
+    result = service.import_case_archive(path)
+    assert result["archive_version"] == 1
+    assert service.db.get_artifacts("archive-case")[0]["rel_path"] == "a.txt"
+
+
+def test_unkeyed_legacy_checksum_archives_remain_readable(tmp_path):
+    service = _service(tmp_path)
+    path = _archive(service, tmp_path / "legacy.zip", [_row("evidence/a.txt", b"synthetic")], [("evidence/a.txt", b"synthetic")])
+    assert service.import_case_archive(path)["archive_version"] == 1
+
+
+def test_unkeyed_import_does_not_accept_an_hmac_without_its_key(tmp_path):
+    signer = _service(tmp_path / "signer", key="a" * 64)
+    signer.create_case("source-case")
+    path = tmp_path / "keyed.zip"
+    signer.export_case_archive("source-case", path)
+    receiver = _service(tmp_path / "receiver")
+    with pytest.raises(SecurityError, match="unavailable integrity key"):
+        receiver.import_case_archive(path)
+    assert receiver.db.get_case("source-case") is None
+
+
 def test_export_rejects_symlinks_and_a_destination_inside_the_case(tmp_path: Path):
     service = _service(tmp_path)
     case = service.create_case("source-case")
