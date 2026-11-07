@@ -13,6 +13,7 @@ from .migrations import (
     MIGRATION_STEPS,
     SchemaVersionError,
     added_column,
+    preserve_finding_columns,
     validate_finding_rebuild,
 )
 from .models import (
@@ -311,6 +312,10 @@ class SQLAlchemyDatabase:
                     {item["name"] for item in inspector.get_columns("findings")}, incoming_references=incoming,
                     indexes=inspector.get_indexes("findings"), foreign_keys=foreign_keys, extra_constraints=extra_schema,
                 )
+                columns = inspector.get_columns("findings")
+                statements = preserve_finding_columns(statements, [
+                    {**column, "type": column["type"].compile(dialect=self.engine.dialect)} for column in columns
+                ], dialect=self.engine.dialect.name)
             for statement in statements:
                 column = added_column(statement)
                 if column and column[1] in {item["name"] for item in self.sa.inspect(con).get_columns(column[0])}:

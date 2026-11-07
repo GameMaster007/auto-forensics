@@ -26,6 +26,58 @@ FINDING_V5_COLUMNS = {
     "origin", "review_status", "worker",
 }
 
+_FINDING_STRING_LENGTHS = {
+    "finding_id": 128, "case_id": 128, "severity": 32, "tactic": 128,
+    "origin": 32, "review_status": 32, "worker": 64,
+}
+_FINDING_DEFAULTS = {
+    "citations_json": "[]", "origin": "detector", "review_status": "unverified", "worker": "pipeline",
+}
+
+
+def preserve_finding_columns(
+    statements: tuple[str, ...], columns: list[dict[str, Any]], *, dialect: str,
+) -> tuple[str, ...]:
+    """Refuse unknown types/defaults and retain known column behavior on rebuild.
+
+    Copying into a generic REAL/TEXT table can round custom numeric types or
+    remove VARCHAR limits. Only historical native/SQLAlchemy column variants
+    are recognized, and their declarations survive the primary-key change.
+    """
+    if {column["name"] for column in columns} != FINDING_V5_COLUMNS:
+        raise SchemaCompatibilityError("Findings has an unrecognized column layout; refusing to discard data")
+    declarations = []
+    for column in columns:
+        name = column["name"]
+        kind = " ".join(str(column["type"]).upper().split())
+        allowed = {"DOUBLE PRECISION"} if dialect == "postgresql" else {"REAL", "FLOAT", "DOUBLE PRECISION"}
+        if name != "confidence":
+            allowed = {"TEXT"}
+            if name in _FINDING_STRING_LENGTHS:
+                allowed.add(f"VARCHAR({_FINDING_STRING_LENGTHS[name]})")
+        nullable = bool(column.get("nullable"))
+        if (kind not in allowed or column.get("computed") or column.get("identity")
+                or (nullable and not (dialect == "sqlite" and name == "finding_id"))):
+            raise SchemaCompatibilityError("Findings has custom column types or attributes; refusing to convert data")
+        default = column.get("default")
+        if default is not None:
+            expected = _FINDING_DEFAULTS.get(name)
+            # Reflection appends a PostgreSQL text/VARCHAR cast to literals.
+            valid = expected is not None and re.fullmatch(
+                "'" + re.escape(expected) + r"'(?:\s*::\s*(?:text|character varying|varchar))?",
+                str(default), re.IGNORECASE,
+            )
+            if not valid:
+                raise SchemaCompatibilityError("Findings has custom column defaults; refusing to discard schema behavior")
+        declaration = f"{name} {kind} NOT NULL"
+        if default is not None:
+            declaration += f" DEFAULT {default}"
+        declarations.append(declaration)
+    create = "CREATE TABLE findings_case_scoped (" + ", ".join(declarations) + (
+        ", PRIMARY KEY(case_id, finding_id), FOREIGN KEY(case_id) REFERENCES cases(case_id) ON DELETE CASCADE)"
+    )
+    return (create, *statements[1:])
+
 
 def validate_finding_rebuild(
     columns: set[str], *, incoming_references: bool = False,

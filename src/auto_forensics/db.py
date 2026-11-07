@@ -15,6 +15,7 @@ from .migrations import (
     MIGRATION_STEPS,
     SchemaVersionError,
     added_column,
+    preserve_finding_columns,
     validate_finding_rebuild,
 )
 from .models import (
@@ -308,6 +309,11 @@ class Database:
                         {row[1] for row in con.execute("PRAGMA table_info(findings)")}, incoming_references=incoming,
                         indexes=indexes, foreign_keys=foreign_keys, extra_constraints=custom_constraints or bool(triggers),
                     )
+                    statements = preserve_finding_columns(statements, [
+                        {"name": row[1], "type": row[2], "nullable": not row[3], "default": row[4],
+                         "computed": bool(row[6])}
+                        for row in con.execute("PRAGMA table_xinfo(findings)")
+                    ], dialect="sqlite")
                 for statement in statements:
                     column = added_column(statement)
                     if column and column[1] in {row[1] for row in con.execute(f"PRAGMA table_info({column[0]})")}:
