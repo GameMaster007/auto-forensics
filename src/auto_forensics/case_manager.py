@@ -215,7 +215,13 @@ def _publish_staged_evidence(staged: Path, destination: Path, size: int, digest:
     except NotImplementedError:
         pass
     except OSError as exc:
-        if exc.errno not in {errno.EPERM, errno.EOPNOTSUPP, errno.ENOSYS, errno.EXDEV}:
+        # Win32 ERROR_INVALID_FUNCTION / ERROR_NOT_SUPPORTED can map to
+        # EINVAL, rather than the POSIX unsupported-operation error.
+        unsupported = (
+            exc.errno in {errno.EPERM, errno.EOPNOTSUPP, errno.ENOSYS, errno.EXDEV}
+            or getattr(exc, "winerror", None) in {1, 50}
+        )
+        if not unsupported:
             raise
 
     descriptor = os.open(

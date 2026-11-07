@@ -45,6 +45,30 @@ def _unsupported_links(monkeypatch):
     return module
 
 
+@pytest.mark.parametrize("winerror,allowed", [(1, True), (50, True), (5, False), (87, False)])
+def test_windows_unsupported_link_codes_do_not_mask_other_failures(tmp_path, monkeypatch, winerror, allowed):
+    module = _unsupported_links(monkeypatch)
+    manager = CaseManager(tmp_path / "cases", SecurityPolicy())
+    evidence, _ = manager.init_case_dirs("portable-case")
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "artifact.txt").write_text("synthetic portable evidence")
+
+    def failed_link(*args, **kwargs):
+        failure = OSError(errno.EINVAL, "Windows link failure")
+        failure.winerror = winerror
+        raise failure
+
+    monkeypatch.setattr(module.os, "link", failed_link)
+    if allowed:
+        manager.ingest_directory("portable-case", source)
+        assert (evidence / "artifact.txt").read_text() == "synthetic portable evidence"
+    else:
+        with pytest.raises(OSError, match="Windows link failure"):
+            manager.ingest_directory("portable-case", source)
+        assert list(evidence.iterdir()) == []
+
+
 def test_exclusive_copy_never_replaces_a_competing_destination(tmp_path, monkeypatch):
     module = _unsupported_links(monkeypatch)
     manager = CaseManager(tmp_path / "cases", SecurityPolicy())
