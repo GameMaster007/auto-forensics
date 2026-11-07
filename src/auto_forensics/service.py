@@ -1,26 +1,40 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import os
 import shutil
 import tempfile
 import threading
 import uuid
 import zipfile
 from concurrent.futures import Future, ThreadPoolExecutor
+from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
+from .archives import archive_relative_path, extract_verified_archive
 from .case_manager import CaseManager
 from .config import AppConfig
 from .db import Database
 from .db_backend import DatabaseBackend
 from .db_sqlalchemy import SQLAlchemyDatabase
+from .file_ops import directory_lock
 from .ioc_enrichment import EnrichmentConfig, enabled_providers, enrich_ioc
 from .models import IOC, IOCEnrichment
 from .pipeline import PipelineConfig, run_case
 from .plugins import PluginRegistry
-from .security import SecurityError, sha256_file, validate_case_id
+from .security import SecurityError, sha256_file, stays_in_tree, validate_case_id
+
+
+def _case_operation(method: Callable[..., Any]) -> Callable[..., Any]:
+    @wraps(method)
+    def locked(self: AutoForensicsService, case_id: str, *args: Any, **kwargs: Any) -> Any:
+        with directory_lock(self.case_manager.case_root(case_id)):
+            return method(self, case_id, *args, **kwargs)
+
+    return locked
 
 
 class AutoForensicsService:
@@ -112,6 +126,7 @@ class AutoForensicsService:
             raise SecurityError("job_type must be 'analysis', 'enrichment', or omitted.")
         return self.db.list_case_jobs(case_id, job_type=clean_type, limit=max(1, min(500, int(limit))))
 
+    @_case_operation
     def create_case(self, case_id: str) -> dict[str, Any]:
         case_id = validate_case_id(case_id)
         existing = self.db.get_case(case_id)
@@ -135,14 +150,33 @@ class AutoForensicsService:
         value = self.db.get_case(case_id)
         if not value:
             raise SecurityError(f"Case not found: {case_id}")
+        expected = {
+            "evidence_dir": self.case_manager.evidence_dir(case_id),
+            "output_dir": self.case_manager.output_dir(case_id),
+        }
+        for key, path in expected.items():
+            recorded = value.get(key)
+            if not isinstance(recorded, str) or Path(recorded).resolve() != path.resolve():
+                raise SecurityError("Stored case paths do not match the configured case directory")
         return value
 
+    @_case_operation
     def ingest_case(self, case_id: str, source_dir: Path) -> dict[str, Any]:
         case = self.require_case(case_id)
         source_dir = self._validate_ingest_source(source_dir)
+        previous = {row["rel_path"]: row for row in self.db.get_artifacts(case_id)}
+        evidence_root = Path(case["evidence_dir"])
+        for relative, row in previous.items():
+            path = evidence_root / relative
+            if not stays_in_tree(path, evidence_root) or sha256_file(path) != row["sha256"]:
+                raise SecurityError(f"Stored evidence no longer matches its custody hash: {relative}")
         self.db.set_case_status(case_id, "ingesting", None)
         try:
             entries = self.case_manager.ingest_directory(case_id, source_dir)
+            for entry in entries:
+                if entry.rel_path in previous:
+                    entry.metadata = dict(previous[entry.rel_path].get("metadata") or {})
+            added_count = sum(entry.rel_path not in previous for entry in entries)
             self.db.replace_artifacts(
                 case_id,
                 [
@@ -170,7 +204,7 @@ class AutoForensicsService:
             self.db.append_audit_log(
                 action="case_ingested",
                 actor="system",
-                details={"ingested_files": len(entries), "source_dir": str(source_dir)},
+                details={"ingested_files": added_count, "total_evidence_files": len(entries), "source_dir": str(source_dir)},
                 case_id=case_id,
             )
             self.db.set_case_status(case_id, "ready", None)
@@ -180,7 +214,8 @@ class AutoForensicsService:
         return {
             "case": case_id,
             "evidence_dir": case["evidence_dir"],
-            "ingested_files": len(entries),
+            "ingested_files": added_count,
+            "total_evidence_files": len(entries),
         }
 
     def _validate_ingest_source(self, source_dir: Path) -> Path:
@@ -606,6 +641,7 @@ class AutoForensicsService:
             "status": self.get_case_status(case_id),
         }
 
+    @_case_operation
     def analyze_case(
         self,
         case_id: str,
@@ -768,8 +804,30 @@ class AutoForensicsService:
 
     def _archive_signature(self, manifest: dict[str, Any]) -> str:
         payload = json.dumps(manifest, sort_keys=True).encode("utf-8")
+        version = manifest.get("archive_version", 1)
+        if type(version) is not int or version not in {1, 2}:
+            raise SecurityError("Unsupported archive version")
+        if version == 2:
+            algorithm = manifest.get("integrity_algorithm")
+            if algorithm == "sha256":
+                return hashlib.sha256(payload).hexdigest()
+            if algorithm == "hmac-sha256" and self.config.api_key_hash:
+                return hmac.new(self.config.api_key_hash.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+            raise SecurityError("Archive requires an unavailable integrity key or algorithm")
+        # Read legacy archives, whose default public salt was a checksum,
+        # not an authentication key.
         salt = (self.config.api_key_hash or "auto-forensics").encode("utf-8")
         return hashlib.sha256(payload + salt).hexdigest()
+
+    def _verify_archive_signature(self, manifest: dict[str, Any]) -> None:
+        from .manifest import valid_digest
+
+        expected = manifest.get("signature")
+        if not valid_digest(expected):
+            raise SecurityError("Archive has an invalid integrity digest")
+        unsigned = {key: value for key, value in manifest.items() if key != "signature"}
+        if not hmac.compare_digest(expected.lower(), self._archive_signature(unsigned)):
+            raise SecurityError("Archive integrity verification failed")
 
     def export_case_archive(self, case_id: str, destination_zip: Path) -> dict[str, Any]:
         case = self.require_case(case_id)
@@ -777,27 +835,78 @@ class AutoForensicsService:
         if not case_root.exists() or not case_root.is_dir():
             raise SecurityError(f"Case root not found for export: {case_root}")
 
-        files: list[dict[str, Any]] = []
-        for path in sorted(case_root.rglob("*")):
-            if not path.is_file():
-                continue
-            rel = str(path.relative_to(case_root))
-            files.append({"rel_path": rel, "sha256": sha256_file(path), "size_bytes": path.stat().st_size})
-
-        manifest = {
-            "case_id": case_id,
-            "created_at": case.get("created_at"),
-            "exported_at": case.get("updated_at"),
-            "files": files,
-        }
-        manifest["signature"] = self._archive_signature(manifest)
-
-        destination_zip = destination_zip.expanduser().resolve()
+        destination_zip = destination_zip.expanduser()
+        if destination_zip.is_symlink():
+            raise SecurityError("Archive destination must not be a symlink")
+        destination_zip = destination_zip.resolve()
+        if destination_zip.is_relative_to(case_root.resolve()):
+            raise SecurityError("Archive destination must be outside the case directory")
         destination_zip.parent.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(destination_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr("manifest.json", json.dumps(manifest, indent=2))
-            for item in files:
-                archive.write(case_root / item["rel_path"], arcname=item["rel_path"])
+        policy = self.config.security_policy
+
+        def inventory() -> list[dict[str, Any]]:
+            rows: list[dict[str, Any]] = []
+            names: set[str] = set()
+            total_bytes = 0
+            for path in sorted(case_root.rglob("*")):
+                relative = path.relative_to(case_root)
+                if relative.parts[0].startswith(".af-"):
+                    continue
+                if path.is_symlink():
+                    raise SecurityError("Case export refuses symlinks")
+                if not stays_in_tree(path, case_root):
+                    continue
+                name = archive_relative_path(relative.as_posix())
+                if name.casefold() in names:
+                    raise SecurityError("Case has paths that alias on another operating system")
+                names.add(name.casefold())
+                size = path.stat().st_size
+                total_bytes += size
+                if size > policy.max_file_size_bytes or total_bytes > policy.max_archive_size_bytes:
+                    raise SecurityError("Case exceeds the archive size limits")
+                if len(rows) >= min(policy.max_total_files + 16, 10_016):
+                    raise SecurityError("Case exceeds the archive file count limit")
+                rows.append({"rel_path": name, "sha256": sha256_file(path), "size_bytes": size})
+            return rows
+
+        temporary: Path | None = None
+        with directory_lock(case_root), directory_lock(Path(case["output_dir"])):
+            files = inventory()
+            manifest = {
+                "archive_version": 2,
+                "integrity_algorithm": "hmac-sha256" if self.config.api_key_hash else "sha256",
+                "case_id": case_id,
+                "created_at": case.get("created_at"),
+                "exported_at": case.get("updated_at"),
+                "files": files,
+            }
+            manifest["signature"] = self._archive_signature(manifest)
+            try:
+                with tempfile.NamedTemporaryFile(prefix=".af-export-", suffix=".zip", dir=destination_zip.parent, delete=False) as handle:
+                    temporary = Path(handle.name)
+                with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                    archive.writestr("manifest.json", json.dumps(manifest, indent=2))
+                    for item in files:
+                        source_path = case_root / item["rel_path"]
+                        if not stays_in_tree(source_path, case_root):
+                            raise SecurityError("Case files changed during export")
+                        digest = hashlib.sha256()
+                        size = 0
+                        with source_path.open("rb") as source, archive.open(item["rel_path"], "w") as target:
+                            while chunk := source.read(1024 * 1024):
+                                size += len(chunk)
+                                if size > item["size_bytes"]:
+                                    raise SecurityError("Case files changed during export")
+                                digest.update(chunk)
+                                target.write(chunk)
+                        if size != item["size_bytes"] or digest.hexdigest() != item["sha256"]:
+                            raise SecurityError("Case files changed during export")
+                if inventory() != files:
+                    raise SecurityError("Case files changed during export")
+                os.replace(temporary, destination_zip)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
 
         self.db.append_audit_log(
             action="case_exported",
@@ -805,68 +914,47 @@ class AutoForensicsService:
             details={"archive": str(destination_zip), "files": len(files)},
             case_id=case_id,
         )
-        return {"case_id": case_id, "archive": str(destination_zip), "files": len(files)}
+        return {
+            "case_id": case_id, "archive": str(destination_zip), "files": len(files),
+            "integrity_algorithm": manifest["integrity_algorithm"],
+        }
 
     def import_case_archive(self, archive_path: Path, case_id_override: str | None = None) -> dict[str, Any]:
         archive_path = archive_path.expanduser().resolve()
         if not archive_path.exists() or not archive_path.is_file():
             raise SecurityError(f"Archive not found: {archive_path}")
 
-        with tempfile.TemporaryDirectory(prefix="auto_forensics_import_") as tmp:
-            tmp_root = Path(tmp)
-            with zipfile.ZipFile(archive_path, "r") as archive:
-                for member in archive.infolist():
-                    member_name = member.filename
-                    candidate = (tmp_root / member_name).resolve()
-                    try:
-                        candidate.relative_to(tmp_root.resolve())
-                    except ValueError as exc:
-                        raise SecurityError(f"Archive path escapes extraction root: {member_name}") from exc
-                    archive.extract(member, tmp_root)
-
-            manifest_path = tmp_root / "manifest.json"
-            if not manifest_path.exists():
-                raise SecurityError("Archive missing manifest.json")
-            try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as exc:
-                raise SecurityError("Invalid archive manifest JSON") from exc
-
-            if not isinstance(manifest, dict):
-                raise SecurityError("Invalid archive manifest")
-            expected_sig = str(manifest.get("signature") or "")
-            unsigned_manifest = {k: v for k, v in manifest.items() if k != "signature"}
-            actual_sig = self._archive_signature(unsigned_manifest)
-            if expected_sig != actual_sig:
-                raise SecurityError("Archive signature verification failed")
-
+        with tempfile.TemporaryDirectory(prefix=".af-import-", dir=self.config.cases_dir) as tmp:
+            staging = Path(tmp) / "case"
+            staging.mkdir()
+            manifest = extract_verified_archive(archive_path, staging, self.config.security_policy, self._verify_archive_signature)
             archive_case_id = validate_case_id(str(manifest.get("case_id") or ""))
             case_id = validate_case_id(case_id_override) if case_id_override else archive_case_id
-            if self.db.get_case(case_id):
-                raise SecurityError(f"Case already exists: {case_id}")
-
-            evidence_dir, output_dir = self.case_manager.init_case_dirs(case_id)
-            case_root = evidence_dir.parent
-
-            file_items = manifest.get("files", [])
-            if not isinstance(file_items, list):
-                raise SecurityError("Invalid file list in manifest")
-
-            for item in file_items:
-                if not isinstance(item, dict):
-                    continue
-                rel_path = str(item.get("rel_path") or "")
-                expected_hash = str(item.get("sha256") or "")
-                src = tmp_root / rel_path
-                dst = case_root / rel_path
-                if not src.exists() or not src.is_file():
-                    raise SecurityError(f"Missing file from archive: {rel_path}")
-                if expected_hash and sha256_file(src) != expected_hash:
-                    raise SecurityError(f"File hash mismatch for {rel_path}")
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, dst)
-
-            self.db.create_case(case_id, evidence_dir=evidence_dir, output_dir=output_dir)
+            case_root = self.case_manager.case_root(case_id)
+            evidence_dir = case_root / "evidence"
+            output_dir = case_root / "output"
+            for directory in (staging / "evidence", staging / "output"):
+                directory.mkdir(exist_ok=True)
+            with directory_lock(case_root):
+                if self.db.get_case(case_id) or case_root.exists():
+                    raise SecurityError(f"Case already exists: {case_id}")
+                os.rename(staging, case_root)
+                try:
+                    self.db.create_case(case_id, evidence_dir=evidence_dir, output_dir=output_dir)
+                except Exception:
+                    shutil.rmtree(case_root)
+                    raise
+                artifacts = [
+                    {
+                        "rel_path": str(Path(row["rel_path"]).relative_to("evidence")),
+                        "artifact_type": Path(row["rel_path"]).suffix.lower().lstrip("."),
+                        "size_bytes": row["size_bytes"], "sha256": row["sha256"],
+                        "metadata": {"source_archive": str(archive_path)},
+                    }
+                    for row in manifest["files"] if Path(row["rel_path"]).parts[0] == "evidence"
+                ]
+                self.db.replace_artifacts(case_id, artifacts)
+                self.db.append_evidence_hash_log(case_id, artifacts)
             self.db.append_audit_log(
                 action="case_imported",
                 actor="system",
@@ -879,6 +967,8 @@ class AutoForensicsService:
                 "archive": str(archive_path),
                 "evidence_dir": str(evidence_dir),
                 "output_dir": str(output_dir),
+                "archive_version": manifest.get("archive_version", 1),
+                "integrity_algorithm": manifest.get("integrity_algorithm", "legacy-digest"),
             }
 
     def get_report(self, case_id: str, fmt: str = "json") -> str:

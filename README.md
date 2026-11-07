@@ -107,6 +107,21 @@ run is processing evidence prevents publication of that run.
 
 `auto-forensics --version` prints the package version.
 
+Managed ingestion is additive. A second ingest keeps the existing
+custody index and original provenance, stages new files before copying,
+and refuses a different file at an existing evidence path. JSONL exports
+are supported by both managed ingest and `run`.
+
+Case archives are verified and staged before an imported case appears.
+Archive paths, duplicates, symlinks, expanded size, and every listed
+hash are checked. New archives declare whether they contain a plain
+SHA-256 checksum or an HMAC using the configured API-key hash. A plain
+checksum detects accidental changes; it does not authenticate the
+sender. Legacy archives that meet the path and size rules remain readable. API export destinations are
+confined to `$AUTO_FORENSICS_HOME/exports` (relative names are accepted),
+and API imports honor the configured ingest roots. CLI export accepts
+an explicit destination outside the case itself.
+
 An analyst records a decision on that same output directory. The
 default status stays `analyst-unverified` until this command runs:
 

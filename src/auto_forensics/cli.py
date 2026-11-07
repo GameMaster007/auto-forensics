@@ -99,11 +99,11 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("manifest", type=Path, help="Path to run_manifest.json.")
     verify.add_argument("--input-dir", type=Path, default=None, help="Check a relocated copy of the evidence.")
 
-    export_case = sub.add_parser("export", help="Export case as signed zip archive.")
+    export_case = sub.add_parser("export", help="Export case as an integrity-checked zip archive.")
     export_case.add_argument("--case-id", required=True, help="Case identifier.")
     export_case.add_argument("--dest", required=True, type=Path, help="Destination zip file path.")
 
-    import_case = sub.add_parser("import", help="Import case from signed zip archive.")
+    import_case = sub.add_parser("import", help="Import a bounded, integrity-checked zip archive.")
     import_case.add_argument("--archive", required=True, type=Path, help="Archive zip path.")
     import_case.add_argument("--case-id", default=None, help="Optional case ID override.")
 

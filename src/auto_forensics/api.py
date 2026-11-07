@@ -242,7 +242,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     async def import_case(body: CaseImportRequest) -> dict[str, Any]:
         try:
             override = validate_case_id(body.case_id_override) if body.case_id_override else None
-            return service.import_case_archive(Path(body.archive_path), case_id_override=override)
+            archive_path = service._validate_ingest_source(Path(body.archive_path))
+            return service.import_case_archive(archive_path, case_id_override=override)
         except SecurityError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -285,7 +286,12 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     @app.post("/api/cases/{case_id}/export", response_class=JSONResponse, dependencies=[Depends(api_guard)])
     async def export_case(case_id: str, body: CaseExportRequest) -> dict[str, Any]:
         try:
-            return service.export_case_archive(validate_case_id(case_id), Path(body.destination_path))
+            export_root = config.data_dir / "exports"
+            requested = Path(body.destination_path).expanduser()
+            if not requested.is_absolute():
+                requested = export_root / requested
+            destination = confine_path(export_root, requested)
+            return service.export_case_archive(validate_case_id(case_id), destination)
         except SecurityError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

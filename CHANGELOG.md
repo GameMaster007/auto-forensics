@@ -11,6 +11,13 @@
 - Refuse output inside evidence and replay over the original run directory.
   Refuse incomplete file inventories and evidence changes during a run.
 - Print the installed package version with `--version`.
+- Validate archive metadata and contents before publishing an imported
+  case; bound compressed and expanded sizes, reject symlinks/aliases,
+  restore custody indexes, and publish exports atomically.
+- Declare checksum versus keyed HMAC archive integrity. Read legacy
+  archives without treating their public default checksum as a signature.
+- Preserve prior evidence and its provenance on incremental ingestion.
+  Stage new files, reject conflicting overwrites, and support JSONL.
 
 - Keep evidence text inside the HTML report's data string even when it
   contains a closing script tag. Escape quotes in generated table cells.

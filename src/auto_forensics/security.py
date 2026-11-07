@@ -18,6 +18,7 @@ class SecurityPolicy:
     max_total_files: int = 200_000
     max_text_bytes: int = 4 * 1024 * 1024
     follow_symlinks: bool = False
+    max_archive_size_bytes: int = 1024 * 1024 * 1024
 
 
 def validate_case_id(case_id: str) -> str:
@@ -38,6 +39,25 @@ def confine_path(root: Path, candidate: Path) -> Path:
     return candidate_resolved
 
 
+def confine_without_symlinks(root: Path, candidate: Path) -> Path:
+    """Confine a possibly new destination before creating or copying it."""
+    resolved_root = root.resolve()
+    absolute = candidate.absolute()
+    try:
+        relative = absolute.relative_to(resolved_root)
+    except ValueError as exc:
+        raise SecurityError(f"Path escapes allowed root: {candidate}") from exc
+    if ".." in relative.parts:
+        raise SecurityError(f"Path escapes allowed root: {candidate}")
+    component = resolved_root
+    for part in relative.parts:
+        component /= part
+        if component.is_symlink():
+            raise SecurityError(f"Path uses a symlink: {candidate}")
+    confine_path(resolved_root, absolute)
+    return absolute
+
+
 def is_supported_artifact(path: Path) -> bool:
     suffix = path.suffix.lower()
     basename = path.name.upper()
@@ -45,6 +65,7 @@ def is_supported_artifact(path: Path) -> bool:
         return True
     return suffix in {
         ".json",
+        ".jsonl",
         ".csv",
         ".txt",
         ".log",
