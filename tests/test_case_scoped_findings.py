@@ -20,7 +20,7 @@ from auto_forensics.migrations import (
     SchemaCompatibilityError,
     SchemaVersionError,
 )
-from auto_forensics.models import FINDING_DETAIL_FIELDS, Citation, Finding, decode_finding_row
+from auto_forensics.models import FINDING_DETAIL_FIELDS, Citation, Finding, TimelineEvent, decode_finding_row
 from auto_forensics.pipeline import _unique_finding_ids
 
 
@@ -81,6 +81,20 @@ def test_identical_finding_ids_in_different_cases_are_independent(database_backe
     db.replace_findings_and_timeline("case-one", [_finding("Updated first case")], [])
     assert db.get_findings("case-two")[0]["title"] == "Second case"
     assert db.get_findings("case-one")[0]["citations"][0]["sha256"] == "a" * 64
+
+
+def test_database_timeline_is_chronological_across_offsets_with_unknowns_last(database_backend, tmp_path: Path):
+    db = database_backend
+    _cases(db, tmp_path)
+    events = [
+        TimelineEvent(None, "fixture", "unknown", "Unknown first"),
+        TimelineEvent("2026-11-06T23:45:00Z", "fixture", "middle", "Middle"),
+        TimelineEvent("2026-11-07T00:30:00.1000000+01:00", "fixture", "earliest", "Earlier offset clock"),
+        TimelineEvent("2026-11-07T00:00:00.1Z", "fixture", "latest", "Latest"),
+        TimelineEvent("invalid", "fixture", "invalid", "Invalid clock"),
+    ]
+    db.replace_findings_and_timeline("case-one", [], events)
+    assert [event["event_type"] for event in db.get_timeline("case-one")] == ["earliest", "middle", "latest", "unknown", "invalid"]
 
 
 def test_duplicate_ids_within_one_case_roll_back_the_replacement(database_backend, tmp_path: Path):

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import fields
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +29,7 @@ from .models import (
 )
 from .pipeline import rewrite_published_report
 from .security import SecurityError, read_limited_text
+from .timeline import parse_iso
 
 ANALYST_REVIEW_LOG = "analyst_reviews.jsonl"
 _DECISIONS = {"accept", "reject"}
@@ -245,9 +245,8 @@ def _validate_entry(entry: dict[str, Any]) -> None:
     try:
         if not isinstance(timestamp, str) or len(timestamp) > 64:
             raise ValueError("invalid timestamp")
-        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            raise ValueError("missing timezone")
+        if parse_iso(timestamp, require_timezone=True) is None:
+            raise ValueError("invalid timestamp or missing timezone")
     except ValueError as exc:
         raise ReviewError("analyst review log has an invalid timestamp") from exc
 

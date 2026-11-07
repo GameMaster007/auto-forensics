@@ -10,6 +10,20 @@ def test_parse_iso_accepts_z_suffix():
     assert dt.year == 2026
 
 
+@pytest.mark.parametrize("value", ["2026-02-17T13:25:12.1Z", "2026-02-17T13:25:12.1000000Z", "20260217T132512.100Z", "2026-02-17 13:25:12,1+0000"])
+def test_fractional_and_compact_clocks_have_identical_cross_version_values(value):
+    parsed = parse_iso(value)
+    assert parsed is not None
+    assert parsed.isoformat() == "2026-02-17T13:25:12.100000+00:00"
+    assert parse_iso(value, require_timezone=True) == parsed
+
+
+def test_review_clocks_require_explicit_timezone_and_invalid_fractional_minutes_are_refused():
+    assert parse_iso("2026-02-17T13:25:12.1", require_timezone=True) is None
+    assert parse_iso("2026-02-17", require_timezone=True) is None
+    assert parse_iso("2026-02-17T13:25.5Z") is None
+
+
 def test_normalize_timeline_sorts_unknown_timestamp_last():
     artifacts = [
         ArtifactEvent(

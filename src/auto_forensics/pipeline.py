@@ -7,7 +7,6 @@ import logging
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +45,7 @@ from .plugins import PluginRegistry
 from .security import SecurityError, sha256_file, stays_in_tree, validate_case_id
 from .sigma_rules import evaluate_sigma_rules
 from .stix_export import build_stix_bundle
-from .timeline import normalize_timeline
+from .timeline import normalize_timeline, timeline_sort_key
 from .timeline_imports import findings_from_imported_timelines
 from .tools import ToolRegistry
 from .verifier import MockClaimJudge, resolve_verifier_mode, verifier_limit_name, verify_findings
@@ -760,7 +759,7 @@ def rewrite_published_report(
                 raise SecurityError("Review log count differs from the requested publication")
             for entry in entries:
                 previous = review_times.get(entry["finding_id"], entry["at"])
-                review_times[entry["finding_id"]] = max(previous, entry["at"], key=lambda value: datetime.fromisoformat(value.replace("Z", "+00:00")))
+                review_times[entry["finding_id"]] = max(previous, entry["at"], key=timeline_sort_key)
             manifest["analyst_reviews"] = {
                 "log": review_log, "entries": review_count,
                 "sha256": sha256_file(staging / review_log),

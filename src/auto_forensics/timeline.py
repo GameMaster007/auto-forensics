@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from bisect import bisect_right
 from dataclasses import asdict, replace
 from datetime import datetime, timezone
@@ -12,14 +13,38 @@ from .models import ArtifactEvent, BinaryFeature, TimelineEvent
 PROCESS_EVENT_TYPES = {"process_creation", "process_start"}
 NETWORK_EVENT_TYPES = {"dns_query", "http_request", "tls_client_hello", "c2_beacon_suspected"}
 NETWORK_PROCESS_CORRELATION_WINDOW_SECONDS = 120
+_ISO_CLOCK = re.compile(
+    r"(?P<date>\d{4}-\d{2}-\d{2}|\d{8})"
+    r"(?:[Tt ](?P<time>\d{2}:\d{2}(?::\d{2})?|\d{4}(?:\d{2})?)"
+    r"(?P<fraction>[.,]\d+)?(?P<zone>[Zz]|[+-]\d{2}(?::?\d{2})?)?)?"
+)
 
 
-def parse_iso(ts: object) -> datetime | None:
+def parse_iso(ts: object, *, require_timezone: bool = False) -> datetime | None:
+    """Parse a consistent ISO clock subset on every supported Python version.
+
+    Normalize compact forms and fractional seconds before fromisoformat;
+    Python 3.10 only accepts three or six fractional digits. Sub-microsecond
+    precision is truncated for ordering; the source timestamp stays intact.
+    """
     if not isinstance(ts, str) or not ts or len(ts) > 256:
         return None
-    clean = ts.strip()
-    if clean.endswith("Z"):
-        clean = clean[:-1] + "+00:00"
+    match = _ISO_CLOCK.fullmatch(ts.strip())
+    if match is None or (require_timezone and not match["zone"]):
+        return None
+    date = match["date"].replace("-", "")
+    clock = (match["time"] or "000000").replace(":", "")
+    if match["fraction"] and len(clock) != 6:
+        return None
+    clock = clock.ljust(6, "0")
+    fraction = "." + match["fraction"][1:7].ljust(6, "0") if match["fraction"] else ""
+    zone = match["zone"]
+    if not zone or zone.upper() == "Z":
+        zone = "+00:00"
+    else:
+        digits = zone[1:].replace(":", "").ljust(4, "0")
+        zone = f"{zone[0]}{digits[:2]}:{digits[2:4]}"
+    clean = f"{date[:4]}-{date[4:6]}-{date[6:8]}T{clock[:2]}:{clock[2:4]}:{clock[4:6]}{fraction}{zone}"
     try:
         dt = datetime.fromisoformat(clean)
     except ValueError:
@@ -27,6 +52,11 @@ def parse_iso(ts: object) -> datetime | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def timeline_sort_key(timestamp: object) -> tuple[int, datetime]:
+    parsed = parse_iso(timestamp)
+    return (0, parsed) if parsed is not None else (1, datetime.max.replace(tzinfo=timezone.utc))
 
 
 def event_from_artifact(item: ArtifactEvent) -> TimelineEvent:
@@ -126,13 +156,7 @@ def normalize_timeline(
         related={key: value for key, value in hint.related.items() if key not in {"citation", "artifact_id", "logsource"}},
     ) for hint in generated_hints)
 
-    def sort_key(item: TimelineEvent) -> tuple[int, datetime]:
-        dt = parse_iso(item.timestamp)
-        if dt is None:
-            return (1, datetime.max.replace(tzinfo=timezone.utc))
-        return (0, dt)
-
-    ordered = sorted(events, key=sort_key)
+    ordered = sorted(events, key=lambda item: timeline_sort_key(item.timestamp))
     process_events: dict[tuple[str, str, int | None], list[tuple[datetime, str, TimelineEvent]]] = {}
     for item in artifact_events:
         if item.event_type not in PROCESS_EVENT_TYPES:

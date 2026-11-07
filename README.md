@@ -276,6 +276,12 @@ Scores summarize active machine confidence rather than detection
 coverage. Publication rejects nonfinite JSON and reports above the
 64 MiB verification limit, preserving any earlier published run.
 
+Timestamp ordering uses the same ISO clock normalization on Python
+3.10–3.12, including compact forms, comma/dot fractional seconds, and
+Windows seven-digit fractions. Sub-microsecond digits are truncated for
+ordering while original timestamps remain in the report. Database views
+sort by parsed time across UTC offsets and place unknown clocks last.
+
 `--llm off` uses the same citation rule with a score-based heuristic
 and no draft wording from the mock. `--llm ollama` calls a local
 Ollama-compatible endpoint at temperature 0. If that endpoint is down,

@@ -7,12 +7,13 @@ import json
 import math
 import uuid
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import timezone
 from typing import Any
 
 from .ioc_pipeline import normalize_ioc_value
 from .models import IOC, CaseReport, Finding
 from .security import SecurityError
+from .timeline import parse_iso
 
 # Producer namespace, distinct from the STIX shared SCO namespace. Include
 # object type in the name to avoid reusing a UUID across object types.
@@ -26,9 +27,9 @@ def _stix_id(stix_type: str, *parts: Any) -> str:
 
 def _timestamp(value: str) -> str:
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parse_iso(value)
+        if parsed is None:
+            raise ValueError("unsupported timestamp")
         return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
     except (ValueError, TypeError, AttributeError, OverflowError) as exc:
         raise SecurityError("STIX export requires a valid report timestamp") from exc

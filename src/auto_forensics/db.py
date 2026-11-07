@@ -26,6 +26,7 @@ from .models import (
     finding_details_as_json,
     utc_now_iso,
 )
+from .timeline import timeline_sort_key
 
 SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
@@ -479,7 +480,7 @@ class Database:
             rows = con.execute(
                 """
                 SELECT timestamp, source, event_type, description, risk_score, tags_json, related_json, created_at
-                FROM timeline WHERE case_id = ? ORDER BY COALESCE(timestamp, created_at) ASC
+                FROM timeline WHERE case_id = ? ORDER BY timeline_pk ASC
                 """,
                 (case_id,),
             ).fetchall()
@@ -497,7 +498,7 @@ class Database:
             except (json.JSONDecodeError, TypeError):
                 item["related"] = {}
             out.append(item)
-        return out
+        return sorted(out, key=lambda row: timeline_sort_key(row.get("timestamp")))
 
     def replace_case_iocs(self, case_id: str, iocs: list[IOC]) -> None:
         now = utc_now_iso()

@@ -24,6 +24,7 @@ from .models import (
     finding_details_as_json,
     utc_now_iso,
 )
+from .timeline import timeline_sort_key
 
 
 class SQLAlchemyDatabase:
@@ -471,7 +472,7 @@ class SQLAlchemyDatabase:
                 self.timeline.c.created_at,
             )
             .where(self.timeline.c.case_id == case_id)
-            .order_by(self.timeline.c.created_at.asc())
+            .order_by(self.timeline.c.timeline_pk.asc())
         )
         with self.engine.begin() as con:
             rows = self._rows(con.execute(stmt))
@@ -481,7 +482,7 @@ class SQLAlchemyDatabase:
             item["tags"] = json.loads(item.pop("tags_json"))
             item["related"] = json.loads(item.pop("related_json"))
             out.append(item)
-        out.sort(key=lambda x: (x.get("timestamp") or x.get("created_at") or ""))
+        out.sort(key=lambda row: timeline_sort_key(row.get("timestamp")))
         return out
 
     def replace_case_iocs(self, case_id: str, iocs: list[IOC]) -> None:
