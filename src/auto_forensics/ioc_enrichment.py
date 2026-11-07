@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import http.client
 import ipaddress
-import json
 import logging
 import math
 import time
@@ -15,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .enrichment_validation import MAX_ENRICHMENT_BYTES, abuse_score, finite_json_object, virustotal_counts
+from .http_json import private_request, read_json_response
 from .models import IOC, IOCEnrichment
 
 logger = logging.getLogger(__name__)
@@ -51,23 +51,10 @@ def _request_json(
         raw_body = urllib.parse.urlencode(body).encode("utf-8")
         req_headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
     for attempt_idx in range(attempts):
-        request = urllib.request.Request(url=url, method=method, data=raw_body)
-        for name, value in req_headers.items():
-            if name.lower() in {"x-apikey", "auth-key", "key", "authorization"}:
-                request.add_unredirected_header(name, value)
-            else:
-                request.add_header(name, value)
+        request = private_request(url, method=method, data=raw_body, headers=req_headers)
         try:
             with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-                declared = (getattr(response, "headers", None) or {}).get("Content-Length")
-                expected_length = int(declared) if declared is not None else None
-                if expected_length is not None and (expected_length < 0 or expected_length > MAX_ENRICHMENT_BYTES):
-                    return None
-                raw = response.read(MAX_ENRICHMENT_BYTES + 1)
-                if len(raw) > MAX_ENRICHMENT_BYTES:
-                    return None
-                if expected_length is not None and len(raw) != expected_length:
-                    raise http.client.IncompleteRead(raw, max(0, expected_length - len(raw)))
+                payload = read_json_response(response, max_bytes=MAX_ENRICHMENT_BYTES)
         except urllib.error.HTTPError as exc:
             status = int(getattr(exc, "code", 0) or 0)
             retryable = status in {408, 409, 425, 429, 500, 502, 503, 504}
@@ -91,10 +78,6 @@ def _request_json(
                 continue
             return None
 
-        try:
-            payload = json.loads(raw.decode("utf-8"))
-        except (ValueError, RecursionError):
-            return None
         return finite_json_object(payload)
     return None
 

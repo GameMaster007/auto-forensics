@@ -226,6 +226,10 @@ to applicable providers whose cache entry is missing or expired.
 Responses are bounded to 4 MiB and validated before creating a verdict.
 Provider failures remain failed lookups, and invalid legacy cache entries
 are skipped until refreshed. No provider is queried by default.
+Model responses are bounded to 8 MiB and use the same finite JSON and
+depth checks. Invalid responses leave the workflow on its existing
+fallback path. API-key and authorization headers are withheld from
+redirected requests. OpenAI-compatible base URLs may include `/v1`.
 
 The API exposes the same operations through
 `GET /api/cases/{case_id}/integrity`,
