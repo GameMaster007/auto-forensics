@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import ipaddress
+from bisect import bisect_right
 from datetime import datetime, timezone
+from typing import Any
 
 from .models import ArtifactEvent, BinaryFeature, TimelineEvent
 
@@ -9,8 +12,8 @@ NETWORK_EVENT_TYPES = {"dns_query", "http_request", "tls_client_hello", "c2_beac
 NETWORK_PROCESS_CORRELATION_WINDOW_SECONDS = 120
 
 
-def parse_iso(ts: str | None) -> datetime | None:
-    if not ts:
+def parse_iso(ts: object) -> datetime | None:
+    if not isinstance(ts, str) or not ts or len(ts) > 256:
         return None
     clean = ts.strip()
     if clean.endswith("Z"):
@@ -33,14 +36,40 @@ def event_from_artifact(item: ArtifactEvent) -> TimelineEvent:
                 important.append(f"{key}={item.metadata[key]}")
         if important:
             description = f"{description} ({', '.join(important)})"
+    related: dict[str, Any] = {"artifact_id": item.artifact_id}
+    metadata = item.metadata
+    for key in ("source_host", "computer", "hostname", "host"):
+        # The HTTP Host header names a destination, not the source host.
+        if key == "host" and metadata.get("src_ip"):
+            continue
+        if isinstance(metadata.get(key), str) and metadata[key].strip():
+            related["source_host"] = metadata[key].strip()
+            break
+    for key in ("source_ip", "src_ip", "local_ip", "ip_address"):
+        if isinstance(metadata.get(key), str) and metadata[key].strip():
+            related["source_ip"] = metadata[key].strip()
+            break
+    for key in ("NewProcessId", "process_id", "pid", "ProcessId"):
+        raw = metadata.get(key)
+        if isinstance(raw, str) and len(raw) <= 32:
+            try:
+                raw = int(raw, 16 if raw.lower().startswith("0x") else 10)
+            except ValueError:
+                continue
+        if type(raw) is int and raw >= 0:
+            related["process_id"] = raw
+            break
+    timestamp = item.timestamp if isinstance(item.timestamp, str) else None
+    if item.timestamp is not None and timestamp is None:
+        related["unparsed_timestamp"] = item.timestamp
     return TimelineEvent(
-        timestamp=item.timestamp,
+        timestamp=timestamp,
         source=item.source,
         event_type=item.event_type,
         description=description,
         risk_score=0.0,
         tags=["artifact"],
-        related={"artifact_id": item.artifact_id},
+        related=related,
     )
 
 
@@ -62,7 +91,8 @@ def normalize_timeline(
     generated_hints: list[TimelineEvent],
 ) -> list[TimelineEvent]:
     events: list[TimelineEvent] = []
-    events.extend(event_from_artifact(a) for a in artifacts)
+    artifact_events = [event_from_artifact(a) for a in artifacts]
+    events.extend(artifact_events)
     events.extend(event_from_binary(b) for b in binaries)
     events.extend(generated_hints)
 
@@ -73,13 +103,20 @@ def normalize_timeline(
         return (0, dt)
 
     ordered = sorted(events, key=sort_key)
-    process_events: list[tuple[datetime, TimelineEvent]] = []
-    for item in ordered:
+    process_events: dict[tuple[str, str, int | None], list[tuple[datetime, str, TimelineEvent]]] = {}
+    for item in artifact_events:
         if item.event_type not in PROCESS_EVENT_TYPES:
             continue
         dt = parse_iso(item.timestamp)
         if dt is not None:
-            process_events.append((dt, item))
+            for kind, value in sorted(_source_identities(item)):
+                entry = (dt, str(item.related["artifact_id"]), item)
+                process_events.setdefault((kind, value, None), []).append(entry)
+                if "process_id" in item.related:
+                    process_events.setdefault((kind, value, item.related["process_id"]), []).append(entry)
+    for candidates in process_events.values():
+        candidates.sort(key=lambda candidate: candidate[:2])
+    process_times = {key: [candidate[0] for candidate in candidates] for key, candidates in process_events.items()}
 
     for item in ordered:
         if item.event_type not in NETWORK_EVENT_TYPES:
@@ -89,8 +126,14 @@ def normalize_timeline(
             continue
         nearest: TimelineEvent | None = None
         nearest_delta = NETWORK_PROCESS_CORRELATION_WINDOW_SECONDS + 1
-        for process_ts, process_event in process_events:
-            delta = abs((dt - process_ts).total_seconds())
+        for kind, value in sorted(_source_identities(item)):
+            key = (kind, value, item.related.get("process_id"))
+            candidates = process_events.get(key, [])
+            preceding = bisect_right(process_times.get(key, []), dt) - 1
+            if preceding < 0:
+                continue
+            process_ts, _, process_event = candidates[preceding]
+            delta = (dt - process_ts).total_seconds()
             if delta < nearest_delta:
                 nearest = process_event
                 nearest_delta = delta
@@ -102,7 +145,24 @@ def normalize_timeline(
                 "correlated_process_source": nearest.source,
                 "correlated_process_description": nearest.description,
                 "correlation_time_delta_seconds": round(nearest_delta, 2),
+                "correlated_process_artifact_id": nearest.related["artifact_id"],
+                "correlation_basis": "same-source-process-and-time" if "process_id" in item.related else "same-source-time-proximity",
             }
         elif "network" not in item.tags:
             item.tags = sorted(set(item.tags + ["network"]))
     return ordered
+
+
+def _source_identities(event: TimelineEvent) -> set[tuple[str, str]]:
+    identities = set()
+    for key in ("source_host", "source_ip"):
+        raw = event.related.get(key)
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        value = raw.strip().casefold().rstrip(".")
+        try:
+            identities.add(("ip", str(ipaddress.ip_address(value))))
+        except ValueError:
+            if key == "source_host":
+                identities.add(("host", value))
+    return identities

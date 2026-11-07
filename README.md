@@ -201,6 +201,14 @@ verification, and analyst review details are retained. An unrecognized
 legacy finding-table layout or a newer schema is refused rather than
 rebuilt destructively; preserve a database backup before upgrading.
 
+Timeline network/process links require a known matching source host or
+IP and a preceding process within 120 seconds. When a network record
+has a process ID, that ID must also match. Links retain the process
+artifact ID and their temporal basis for analyst inspection. Unknown
+hosts and model-generated process hints do not supply observed process
+candidates. Packet beacon timing is grouped separately for each source
+IP, destination IP, destination port, and protocol.
+
 `--llm off` uses the same citation rule with a score-based heuristic
 and no draft wording from the mock. `--llm ollama` calls a local
 Ollama-compatible endpoint at temperature 0. If that endpoint is down,

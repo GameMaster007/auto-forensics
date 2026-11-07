@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import logging
+import math
 import re
 import shutil
 import socket  # used for inet_ntop in network parsing
@@ -442,10 +443,11 @@ def _extract_tls_sni(data: bytes) -> str | None:
 
 def beaconing_events_from_flows(
     source: str,
-    flow_timestamps: dict[tuple[str, int, str], list[float]],
+    flow_timestamps: dict[tuple[str, str, int, str], list[float]],
 ) -> list[ArtifactEvent]:
     out: list[ArtifactEvent] = []
-    for (dst_ip, dst_port, proto), stamps in flow_timestamps.items():
+    for (src_ip, dst_ip, dst_port, proto), stamps in sorted(flow_timestamps.items()):
+        stamps = [stamp for stamp in stamps if type(stamp) in {float, int} and -62135596800 <= stamp <= 253402300799 and math.isfinite(stamp)]
         if len(stamps) < 5:
             continue
         ordered = sorted(stamps)
@@ -462,7 +464,7 @@ def beaconing_events_from_flows(
         score = round(max(0.0, min(10.0, (1.0 - coeff_var) * 10.0)), 2)
         out.append(
             ArtifactEvent(
-                artifact_id=_gen_artifact_id("pcap", source, dst_ip, dst_port, proto, ordered[0]),
+                artifact_id=_gen_artifact_id("pcap", source, src_ip, dst_ip, dst_port, proto, ordered[0]),
                 timestamp=_to_iso_utc(ordered[0]),
                 event_type="c2_beacon_suspected",
                 description=(
@@ -471,6 +473,7 @@ def beaconing_events_from_flows(
                 ),
                 source=source,
                 metadata={
+                    "src_ip": src_ip,
                     "dst_ip": dst_ip,
                     "dst_port": dst_port,
                     "protocol": proto,
@@ -491,7 +494,7 @@ def load_pcap_artifacts(path: Path) -> list[ArtifactEvent]:
         return []
 
     out: list[ArtifactEvent] = []
-    flow_timestamps: dict[tuple[str, int, str], list[float]] = {}
+    flow_timestamps: dict[tuple[str, str, int, str], list[float]] = {}
 
     def packet_stream() -> Any:
         with path.open("rb") as f:
@@ -511,6 +514,11 @@ def load_pcap_artifacts(path: Path) -> list[ArtifactEvent]:
 
     for ts, buf in packet_stream():
         try:
+            packet_time = float(ts)
+            timestamp = _to_iso_utc(packet_time)
+        except (ValueError, TypeError, OverflowError, OSError):
+            continue
+        try:
             eth = dpkt.ethernet.Ethernet(buf)
         except Exception:
             continue
@@ -525,7 +533,7 @@ def load_pcap_artifacts(path: Path) -> list[ArtifactEvent]:
             continue
 
         l4 = getattr(ip, "data", None)
-        if l4 is None:
+        if not isinstance(l4, (dpkt.udp.UDP, dpkt.tcp.TCP)):
             continue
         sport = int(getattr(l4, "sport", 0) or 0)
         dport = int(getattr(l4, "dport", 0) or 0)
@@ -535,7 +543,7 @@ def load_pcap_artifacts(path: Path) -> list[ArtifactEvent]:
             payload = payload.tobytes()
 
         proto = "udp" if l4.__class__.__name__.lower() == "udp" else "tcp"
-        flow_timestamps.setdefault((dst_ip, dport, proto), []).append(float(ts))
+        flow_timestamps.setdefault((src_ip, dst_ip, dport, proto), []).append(packet_time)
 
         if proto == "udp" and (sport == 53 or dport == 53):
             try:
@@ -550,7 +558,7 @@ def load_pcap_artifacts(path: Path) -> list[ArtifactEvent]:
                     out.append(
                         ArtifactEvent(
                             artifact_id=_gen_artifact_id("pcap", "dns", name, ts),
-                            timestamp=_to_iso_utc(float(ts)),
+                            timestamp=timestamp,
                             event_type="dns_query",
                             description=f"DNS query for {name}",
                             source=path.name,
@@ -576,7 +584,7 @@ def load_pcap_artifacts(path: Path) -> list[ArtifactEvent]:
                 out.append(
                     ArtifactEvent(
                         artifact_id=_gen_artifact_id("pcap", "http", host, path_part, ts),
-                        timestamp=_to_iso_utc(float(ts)),
+                        timestamp=timestamp,
                         event_type="http_request",
                         description=f"HTTP {req.method} {path_part}",
                         source=path.name,
@@ -596,7 +604,7 @@ def load_pcap_artifacts(path: Path) -> list[ArtifactEvent]:
                 out.append(
                     ArtifactEvent(
                         artifact_id=_gen_artifact_id("pcap", "tls", sni, ts),
-                        timestamp=_to_iso_utc(float(ts)),
+                        timestamp=timestamp,
                         event_type="tls_client_hello",
                         description=f"TLS client hello with SNI {sni}",
                         source=path.name,
