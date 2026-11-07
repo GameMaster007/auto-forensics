@@ -71,6 +71,25 @@ def test_verify_detects_report_tampering_and_supports_relocated_evidence(tmp_pat
     assert result["match"] is False
 
 
+def test_verify_hashes_other_formats_and_failed_render_preserves_previous_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    source, manifest = _run(tmp_path)
+    original = {path.name: path.read_bytes() for path in manifest.parent.iterdir()}
+
+    def fail(*args):
+        raise OSError("synthetic failure")
+
+    monkeypatch.setattr("auto_forensics.pipeline._to_html", fail)
+    with pytest.raises(OSError):
+        run_case(PipelineConfig("integrity-demo", source, manifest.parent, llm_provider="mock"))
+    assert {path.name: path.read_bytes() for path in manifest.parent.iterdir()} == original
+    html = manifest.parent / "case_report.html"
+    html.write_bytes(html.read_bytes() + b"modified")
+    result = verify_run(manifest)
+    assert result["report_match"] is True
+    assert result["artifacts_match"] is False
+    assert result["artifact_changes"] == ["case_report.html"]
+
+
 def test_replay_repeats_parser_limits_and_checks_rule_hashes(tmp_path: Path):
     _source, manifest = _run(tmp_path, max_text_bytes=1, rules=True)
     recorded = read_run_manifest(manifest)

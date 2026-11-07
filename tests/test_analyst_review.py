@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
 from auto_forensics.cli import main
+from auto_forensics.integrity import verify_run
 from auto_forensics.pipeline import PipelineConfig, run_case
 from auto_forensics.replay import replay_manifest
 from auto_forensics.reviews import ANALYST_REVIEW_LOG, ReviewError, record_review
@@ -169,3 +171,79 @@ def test_review_command_accepts_a_finding_offline(tmp_path: Path, monkeypatch: p
     assert stored["review_status"] == "accepted"
     assert stored["analyst_verified"] is True
     assert stored["review_note"] == "Confirmed offline."
+
+
+def test_concurrent_reviews_commit_exactly_one_decision(tmp_path: Path):
+    output = _run(tmp_path)
+    finding_id = _report(output)["findings"][0]["finding_id"]
+
+    def decide(actor: str):
+        try:
+            return record_review(output, finding_id=finding_id, decision="accept", actor=actor)
+        except ReviewError as exc:
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(decide, ["Ada Analyst", "Bea Analyst"]))
+    assert sum(isinstance(result, dict) for result in results) == 1
+    assert sum(isinstance(result, ReviewError) for result in results) == 1
+    assert len((output / ANALYST_REVIEW_LOG).read_text().splitlines()) == 1
+    assert verify_run(output / "run_manifest.json")["match"] is True
+
+
+def test_replayed_reviews_are_self_contained_and_repeatable(tmp_path: Path):
+    output = _run(tmp_path)
+    finding_id = _report(output)["findings"][0]["finding_id"]
+    record_review(output, finding_id=finding_id, decision="reject", actor="Ada Analyst")
+    source_log = (output / ANALYST_REVIEW_LOG).read_bytes()
+    manifest = json.loads((output / "run_manifest.json").read_text())
+    assert manifest["analyst_reviews"]["sha256"]
+    first = replay_manifest(output / "run_manifest.json")
+    second = replay_manifest(output / "run_manifest.json")
+    assert first["match"] and second["match"]
+    assert first["replay_output_dir"] != second["replay_output_dir"]
+    replayed = Path(first["replay_output_dir"])
+    assert (replayed / ANALYST_REVIEW_LOG).read_bytes() == source_log
+    assert verify_run(replayed / "run_manifest.json")["match"] is True
+    assert replay_manifest(replayed / "run_manifest.json")["match"] is True
+
+
+def test_review_and_replay_refuse_a_tampered_log(tmp_path: Path):
+    output = _run(tmp_path)
+    finding_id = _report(output)["findings"][0]["finding_id"]
+    record_review(output, finding_id=finding_id, decision="accept", actor="Ada Analyst")
+    log = output / ANALYST_REVIEW_LOG
+    log.write_text(log.read_text().replace("Ada Analyst", "Changed Actor"))
+    result = verify_run(output / "run_manifest.json")
+    assert result["match"] is False
+    assert result["reviews_match"] is False
+    assert replay_manifest(output / "run_manifest.json")["executed"] is False
+    with pytest.raises(ReviewError, match="integrity check failed"):
+        record_review(output, finding_id=finding_id, decision="reject", actor="Bea Analyst", override=True)
+
+
+def test_failed_review_render_does_not_publish_a_partial_log_or_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    output = _run(tmp_path)
+    finding_id = _report(output)["findings"][0]["finding_id"]
+    before = {path.name: path.read_bytes() for path in output.iterdir()}
+
+    def fail(*args):
+        raise OSError("synthetic renderer failure")
+
+    monkeypatch.setattr("auto_forensics.pipeline._to_html", fail)
+    with pytest.raises(OSError, match="renderer failure"):
+        record_review(output, finding_id=finding_id, decision="accept", actor="Ada Analyst")
+    assert {path.name: path.read_bytes() for path in output.iterdir()} == before
+    assert verify_run(output / "run_manifest.json")["match"] is True
+
+
+@pytest.mark.parametrize("field,value", [("action", "ignore"), ("actor", None), ("at", "yesterday"), ("override", "yes")])
+def test_malformed_review_records_are_not_silently_ignored(tmp_path: Path, field: str, value: object):
+    from auto_forensics.reviews import read_review_log
+
+    entry = {"finding_id": "f1", "action": "accept", "actor": "Ada", "at": "2026-01-01T00:00:00Z", "override": False, "note": ""}
+    entry[field] = value
+    path = tmp_path / ANALYST_REVIEW_LOG
+    path.write_text(json.dumps(entry) + "\n")
+    with pytest.raises(ReviewError):
+        read_review_log(path)

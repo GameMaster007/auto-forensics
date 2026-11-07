@@ -3,8 +3,10 @@ from __future__ import annotations
 import html
 import json
 import logging
+import shutil
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -21,20 +23,24 @@ from .citations import (
     file_citation,
 )
 from .event_detectors import findings_from_artifact_events
+from .file_ops import directory_lock, publish_directory_files
 from .ioc_pipeline import extract_iocs
 from .llama_workflow import LlamaWorkflow, MockLlamaWorkflow, heuristic_fallback, prompt_template_text
 from .manifest import (
+    REPORT_ARTIFACT_NAMES,
     build_run_manifest,
     canonical_report_sha256,
     hash_analysis_resources,
     hash_input_tree,
+    hash_output_files,
     prompt_template_sha256,
+    read_run_manifest,
     write_run_manifest,
 )
 from .models import ArtifactEvent, BinaryFeature, CaseReport, Citation, Finding, TimelineEvent, utc_now_iso
 from .pdf_report import write_pdf_report
 from .plugins import PluginRegistry
-from .security import SecurityError, stays_in_tree, validate_case_id
+from .security import SecurityError, sha256_file, stays_in_tree, validate_case_id
 from .sigma_rules import evaluate_sigma_rules
 from .stix_export import build_stix_bundle
 from .timeline import normalize_timeline
@@ -412,6 +418,18 @@ def _claim_judge(mode: str, workflow: LlamaWorkflow | MockLlamaWorkflow | None) 
 
 
 def run_case(config: PipelineConfig) -> CaseReport:
+    """Run one pipeline while excluding other writers to its output directory."""
+    config = replace(config, input_dir=config.input_dir.resolve(), output_dir=config.output_dir.resolve())
+    if config.output_dir.is_relative_to(config.input_dir):
+        raise SecurityError("The output directory must be outside the evidence directory")
+    with directory_lock(config.output_dir):
+        review_path = config.output_dir / "analyst_reviews.jsonl"
+        if review_path.exists() or review_path.is_symlink():
+            raise SecurityError("This output contains analyst reviews; use a new output directory for a new run")
+        return _run_case(config)
+
+
+def _run_case(config: PipelineConfig) -> CaseReport:
     """Parse a directory, draft findings, drop uncited drafts, and write a manifest.
 
     This function is the ``pipeline`` worker. It is the only worker that
@@ -593,55 +611,60 @@ def run_case(config: PipelineConfig) -> CaseReport:
         raise SecurityError("Evidence changed during analysis; the report was not published")
     if hash_analysis_resources(resource_paths) != resources:
         raise SecurityError("Analysis resources changed during analysis; the report was not published")
-    config.output_dir.mkdir(parents=True, exist_ok=True)
-    (config.output_dir / "case_report.json").write_text(
-        json.dumps(report.to_dict(), indent=2), encoding="utf-8"
-    )
-    (config.output_dir / "case_report.md").write_text(_to_markdown(report), encoding="utf-8")
-    (config.output_dir / "case_report.html").write_text(_to_html(report), encoding="utf-8")
-    (config.output_dir / "attack_navigator_layer.json").write_text(
-        json.dumps(navigator_layer, indent=2),
-        encoding="utf-8",
-    )
-    (config.output_dir / "case_stix_bundle.json").write_text(
-        json.dumps(build_stix_bundle(report), indent=2),
-        encoding="utf-8",
-    )
-    write_pdf_report(report, config.output_dir / "case_report.pdf")
-    report_path = config.output_dir / "case_report.json"
-    model_name = "none"
-    if provider == "mock":
-        model_name = MockLlamaWorkflow.model
-    elif provider in {"ollama", "openai_compatible"}:
-        model_name = config.llama_model
-    manifest = build_run_manifest(
-        case_id=config.case_id,
-        started_at=started_at,
-        finished_at=utc_now_iso(),
-        input_dir=str(config.input_dir.resolve()),
-        input_files=input_files,
-        provider=provider,
-        model_name=model_name,
-        endpoint=config.llama_endpoint if provider == "ollama" else config.openai_compatible_endpoint,
-        seed=config.seed,
-        prompt_sent=provider in {"ollama", "openai_compatible"},
-        prompt_template_sha256_value=prompt_template_sha256(prompt_template_text()),
-        finding_count=len(findings),
-        dropped_uncited=dropped_uncited,
-        dropped_unsupported=dropped_unsupported,
-        report_name=report_path.name,
-        report_sha256=canonical_report_sha256(report.to_dict()),
-        workers=store.workers(),
-        tool_calls=[call.to_dict() for call in store.tool_calls()],
-        verifier=verifier_limit_name(judge_mode),
-        verification=[item.to_dict() for item in verdicts],
-        rules_dir=str(config.rules_dir.resolve()) if config.rules_dir else None,
-        sigma_rules_dir=str(config.sigma_rules_dir.resolve()) if config.sigma_rules_dir else None,
-        attack_stix_path=str(config.attack_stix_path.resolve()) if config.attack_stix_path else None,
-        resources=resources,
-        max_text_bytes=config.max_text_bytes,
-    )
-    write_run_manifest(config.output_dir / "run_manifest.json", manifest)
+    with tempfile.TemporaryDirectory(prefix=".af-publish-", dir=config.output_dir.parent) as temporary:
+        render_dir = Path(temporary)
+        render_dir.mkdir(parents=True, exist_ok=True)
+        (render_dir / "case_report.json").write_text(
+            json.dumps(report.to_dict(), indent=2), encoding="utf-8"
+        )
+        (render_dir / "case_report.md").write_text(_to_markdown(report), encoding="utf-8")
+        (render_dir / "case_report.html").write_text(_to_html(report), encoding="utf-8")
+        (render_dir / "attack_navigator_layer.json").write_text(
+            json.dumps(navigator_layer, indent=2),
+            encoding="utf-8",
+        )
+        (render_dir / "case_stix_bundle.json").write_text(
+            json.dumps(build_stix_bundle(report), indent=2),
+            encoding="utf-8",
+        )
+        if not write_pdf_report(report, render_dir / "case_report.pdf"):
+            (render_dir / "case_report.pdf").unlink(missing_ok=True)
+        report_path = render_dir / "case_report.json"
+        model_name = "none"
+        if provider == "mock":
+            model_name = MockLlamaWorkflow.model
+        elif provider in {"ollama", "openai_compatible"}:
+            model_name = config.llama_model
+        manifest = build_run_manifest(
+            case_id=config.case_id,
+            started_at=started_at,
+            finished_at=utc_now_iso(),
+            input_dir=str(config.input_dir.resolve()),
+            input_files=input_files,
+            provider=provider,
+            model_name=model_name,
+            endpoint=config.llama_endpoint if provider == "ollama" else config.openai_compatible_endpoint,
+            seed=config.seed,
+            prompt_sent=provider in {"ollama", "openai_compatible"},
+            prompt_template_sha256_value=prompt_template_sha256(prompt_template_text()),
+            finding_count=len(findings),
+            dropped_uncited=dropped_uncited,
+            dropped_unsupported=dropped_unsupported,
+            report_name=report_path.name,
+            report_sha256=canonical_report_sha256(report.to_dict()),
+            workers=store.workers(),
+            tool_calls=[call.to_dict() for call in store.tool_calls()],
+            verifier=verifier_limit_name(judge_mode),
+            verification=[item.to_dict() for item in verdicts],
+            rules_dir=str(config.rules_dir.resolve()) if config.rules_dir else None,
+            sigma_rules_dir=str(config.sigma_rules_dir.resolve()) if config.sigma_rules_dir else None,
+            attack_stix_path=str(config.attack_stix_path.resolve()) if config.attack_stix_path else None,
+            resources=resources,
+            max_text_bytes=config.max_text_bytes,
+        )
+        manifest["artifacts"] = hash_output_files(render_dir)
+        write_run_manifest(render_dir / "run_manifest.json", manifest)
+        publish_directory_files(render_dir, config.output_dir, obsolete=REPORT_ARTIFACT_NAMES)
     return report
 
 
@@ -651,6 +674,7 @@ def rewrite_published_report(
     *,
     review_log: str | None = None,
     review_count: int = 0,
+    review_log_content: str | None = None,
 ) -> str:
     """Rewrite the report files and the manifest hash after a review.
 
@@ -660,20 +684,32 @@ def rewrite_published_report(
     """
     report.summary.update(_analyst_summary(report.findings))
     payload = report.to_dict()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "case_report.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    (output_dir / "case_report.md").write_text(_to_markdown(report), encoding="utf-8")
-    (output_dir / "case_report.html").write_text(_to_html(report), encoding="utf-8")
-    write_pdf_report(report, output_dir / "case_report.pdf")
     digest = canonical_report_sha256(payload)
     manifest_path = output_dir / "run_manifest.json"
-    if manifest_path.is_file():
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        output = manifest.get("output") if isinstance(manifest.get("output"), dict) else {}
-        output["sha256"] = digest
-        manifest["output"] = output
-        manifest["finding_count"] = len(report.findings)
+    manifest = read_run_manifest(manifest_path)
+    manifest["output"]["sha256"] = digest
+    manifest["finding_count"] = len(report.findings)
+    with tempfile.TemporaryDirectory(prefix=".af-review-", dir=output_dir.parent) as temporary:
+        staging = Path(temporary)
+        (staging / "case_report.json").write_text(json.dumps(payload, indent=2, allow_nan=False), encoding="utf-8")
+        (staging / "case_report.md").write_text(_to_markdown(report), encoding="utf-8")
+        (staging / "case_report.html").write_text(_to_html(report), encoding="utf-8")
+        if not write_pdf_report(report, staging / "case_report.pdf"):
+            (staging / "case_report.pdf").unlink(missing_ok=True)
+        for name in ("attack_navigator_layer.json", "case_stix_bundle.json"):
+            if stays_in_tree(output_dir / name, output_dir):
+                shutil.copyfile(output_dir / name, staging / name)
         if review_log:
-            manifest["analyst_reviews"] = {"log": review_log, "entries": review_count}
-        write_run_manifest(manifest_path, manifest)
+            if review_log_content is None:
+                review_log_content = (output_dir / review_log).read_bytes().decode("utf-8")
+            with (staging / review_log).open("w", encoding="utf-8", newline="\n") as handle:
+                handle.write(review_log_content)
+            manifest["analyst_reviews"] = {
+                "log": review_log, "entries": review_count,
+                "sha256": sha256_file(staging / review_log),
+                "size_bytes": (staging / review_log).stat().st_size,
+            }
+        manifest["artifacts"] = hash_output_files(staging)
+        write_run_manifest(staging / "run_manifest.json", manifest)
+        publish_directory_files(staging, output_dir, obsolete=REPORT_ARTIFACT_NAMES)
     return digest

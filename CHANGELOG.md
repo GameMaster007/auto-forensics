@@ -18,6 +18,9 @@
   archives without treating their public default checksum as a signature.
 - Preserve prior evidence and its provenance on incremental ingestion.
   Stage new files, reject conflicting overwrites, and support JSONL.
+- Lock review publication across processes, stage complete report files,
+  and hash every published format plus the validated review log. Replay
+  copies review logs and repeated default replays use fresh directories.
 
 - Keep evidence text inside the HTML report's data string even when it
   contains a closing script tag. Escape quotes in generated table cells.

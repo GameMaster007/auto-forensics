@@ -83,8 +83,8 @@ def extract_verified_archive(
                 listed.add(name.casefold())
                 if not valid_digest(row.get("sha256")) or type(row.get("size_bytes")) is not int or row["size_bytes"] < 0:
                     raise SecurityError("Archive inventory has an invalid hash or size")
-                info = members.get(name)
-                if info is None or info.file_size != row["size_bytes"]:
+                listed_member = members.get(name)
+                if listed_member is None or listed_member.file_size != row["size_bytes"]:
                     raise SecurityError(f"Archive is missing a listed file or has a size mismatch: {name}")
             if listed != {name.casefold() for name in members if name != "manifest.json"}:
                 raise SecurityError("Archive contains files absent from its manifest")

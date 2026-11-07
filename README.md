@@ -101,11 +101,22 @@ resource hashes. Version 1 manifests remain readable with a warning
 about those missing checks. Replay stops before executing when evidence
 or recorded resources differ. Output must stay outside the evidence
 directory, and replay refuses to overwrite the original run directory.
+Repeated default replays use fresh `replay`, `replay-2`, … directories.
 The evidence inventory fails explicitly above 10,000 files or depth 20;
 it does not silently truncate the manifest. A change detected while a
 run is processing evidence prevents publication of that run.
 
 `auto-forensics --version` prints the package version.
+
+Published manifests also hash the Markdown, HTML, PDF (when available),
+STIX, and Navigator files. Analyst review logs are validated and hashed,
+and replay copies them into its output so the replay can itself be
+checked and replayed. A review checks run integrity first and refuses
+concurrent writers. `review --input-dir` selects relocated evidence.
+Starting a new run over an output directory containing analyst reviews
+is refused; choose a new output directory to preserve those decisions.
+Files are staged and replaced individually, with the manifest last.
+An interruption between replacements is detectable by `verify`.
 
 Managed ingestion is additive. A second ingest keeps the existing
 custody index and original provenance, stages new files before copying,

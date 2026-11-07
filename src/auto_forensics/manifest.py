@@ -20,10 +20,15 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .file_ops import atomic_write_text
 from .security import SecurityError, read_limited_text, sha256_file, stays_in_tree
 from .version import __version__
 
 _DIGEST = re.compile(r"^[0-9a-fA-F]{64}$")
+REPORT_ARTIFACT_NAMES = (
+    "attack_navigator_layer.json", "case_report.html", "case_report.json",
+    "case_report.md", "case_report.pdf", "case_stix_bundle.json",
+)
 
 
 def read_run_manifest(path: Path) -> dict[str, Any]:
@@ -41,6 +46,18 @@ def read_run_manifest(path: Path) -> dict[str, Any]:
     if not isinstance(manifest.get("input_dir"), str) or not manifest["input_dir"] or "\x00" in manifest["input_dir"]:
         raise SecurityError("Run manifest is missing its evidence directory")
     validate_file_inventory(manifest.get("input_files"))
+    if "artifacts" in manifest:
+        validate_file_inventory(manifest["artifacts"])
+    if "analyst_reviews" in manifest:
+        reviews = manifest["analyst_reviews"]
+        if not isinstance(reviews, dict) or reviews.get("log") != "analyst_reviews.jsonl" or (
+            type(reviews.get("entries")) is not int or reviews["entries"] < 0
+        ):
+            raise SecurityError("Run manifest has invalid analyst review metadata")
+        if "sha256" in reviews and (
+            not valid_digest(reviews["sha256"]) or type(reviews.get("size_bytes")) is not int or reviews["size_bytes"] < 0
+        ):
+            raise SecurityError("Run manifest has an invalid analyst review digest")
     output = manifest.get("output")
     if not isinstance(output, dict) or not safe_relative_path(output.get("report")) or not valid_digest(output.get("sha256")):
         raise SecurityError("Run manifest has an invalid report path or hash")
@@ -81,6 +98,13 @@ def read_run_manifest(path: Path) -> dict[str, Any]:
                 raise SecurityError("Run manifest has duplicate resource entries")
             seen.add(identity)
     return manifest
+
+
+def hash_output_files(output_dir: Path) -> list[dict[str, Any]]:
+    return [
+        {"path": name, "sha256": sha256_file(output_dir / name), "size_bytes": (output_dir / name).stat().st_size}
+        for name in REPORT_ARTIFACT_NAMES if stays_in_tree(output_dir / name, output_dir)
+    ]
 
 
 def valid_digest(value: object) -> bool:
@@ -262,4 +286,4 @@ def build_run_manifest(
 
 def write_run_manifest(path: Path, manifest: dict[str, Any]) -> None:
     """Write the manifest as UTF-8 JSON."""
-    path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    atomic_write_text(path, json.dumps(manifest, indent=2, allow_nan=False) + "\n")

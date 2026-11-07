@@ -8,7 +8,7 @@ from typing import Any
 
 from .manifest import canonical_report_sha256, hash_analysis_resources, hash_input_tree, read_run_manifest
 from .models import Citation
-from .security import SecurityError, read_limited_text, stays_in_tree
+from .security import SecurityError, read_limited_text, sha256_file, stays_in_tree
 
 
 def compare_inventory(recorded: list[dict[str, Any]], current: list[dict[str, Any]]) -> dict[str, list[str]]:
@@ -49,11 +49,16 @@ def verify_run(manifest_path: Path, *, input_dir: Path | None = None) -> dict[st
     Hashes detect changes relative to the manifest. This is not a digital
     signature, and it does not decide whether a finding's words are true.
     """
+    manifest_path = manifest_path.resolve()
     manifest = read_run_manifest(manifest_path)
     source = input_dir if input_dir is not None else Path(manifest["input_dir"])
     input_match, changes, input_error = check_inputs(manifest, source)
     resources_match, resource_error = check_resources(manifest)
     errors = [error for error in (input_error, resource_error) if error]
+    artifacts_match, artifact_changes = _check_artifacts(manifest, manifest_path.parent)
+    reviews_match, review_error = check_review_log(manifest, manifest_path.parent)
+    if review_error:
+        errors.append(review_error)
     actual_sha = ""
     report_match = False
     citations_match = False
@@ -72,18 +77,59 @@ def verify_run(manifest_path: Path, *, input_dir: Path | None = None) -> dict[st
     warnings = []
     if manifest["manifest_version"] < 2:
         warnings.append("Legacy manifest does not record resource hashes or the parser text limit")
+    if "artifacts" not in manifest:
+        warnings.append("Legacy manifest does not hash the other report formats")
+    if "analyst_reviews" in manifest and "sha256" not in manifest["analyst_reviews"]:
+        warnings.append("Legacy manifest does not hash the analyst review log")
     return {
-        "match": input_match and resources_match and report_match and citations_match and not errors,
+        "match": input_match and resources_match and report_match and citations_match and artifacts_match and reviews_match and not errors,
         "input_match": input_match,
         "resources_match": resources_match,
         "report_match": report_match,
         "citation_files_match": citations_match,
+        "artifacts_match": artifacts_match,
+        "artifact_changes": artifact_changes,
+        "reviews_match": reviews_match,
         "input_changes": changes,
         "expected_sha256": manifest["output"]["sha256"],
         "actual_sha256": actual_sha,
         "errors": errors,
         "warnings": warnings,
     }
+
+
+def _check_artifacts(manifest: dict[str, Any], output_dir: Path) -> tuple[bool, list[str]]:
+    differences = []
+    for item in manifest.get("artifacts", []):
+        path = output_dir / item["path"]
+        try:
+            if not stays_in_tree(path, output_dir) or path.stat().st_size != item["size_bytes"] or sha256_file(path) != item["sha256"].lower():
+                differences.append(item["path"])
+        except OSError:
+            differences.append(item["path"])
+    return not differences, sorted(differences)
+
+
+def check_review_log(manifest: dict[str, Any], output_dir: Path) -> tuple[bool, str]:
+    from .reviews import ReviewError, read_review_log
+
+    metadata = manifest.get("analyst_reviews")
+    path = output_dir / "analyst_reviews.jsonl"
+    if metadata is None:
+        return (False, "An unrecorded analyst review log exists") if path.exists() or path.is_symlink() else (True, "")
+    try:
+        if not stays_in_tree(path, output_dir):
+            return False, "Analyst review log is missing or reached through a symlink"
+        entries = read_review_log(path)
+        if len(entries) != metadata["entries"]:
+            return False, "Analyst review count does not match the manifest"
+        if "sha256" in metadata and (
+            path.stat().st_size != metadata["size_bytes"] or sha256_file(path) != metadata["sha256"].lower()
+        ):
+            return False, "Analyst review log hash does not match the manifest"
+    except (OSError, ReviewError) as exc:
+        return False, str(exc)
+    return True, ""
 
 
 def _check_citation_files(findings: list[Any], inputs: list[dict[str, Any]]) -> bool:

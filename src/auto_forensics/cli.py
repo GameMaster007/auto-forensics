@@ -75,6 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_llm_argument(run)
 
     review = sub.add_parser("review", help="Accept, reject, or annotate one finding in a run directory.")
+    review.add_argument("--input-dir", type=Path, default=None, help="Evidence directory for an imported or relocated run.")
     review.add_argument("--output-dir", required=True, type=Path, help="Directory that contains case_report.json.")
     review.add_argument("--finding-id", required=True, help="Finding id from the report.")
     review.add_argument("--decision", required=True, choices=["accept", "reject", "annotate"])
@@ -263,6 +264,7 @@ def main() -> None:
                 actor=args.actor,
                 note=args.note,
                 override=args.override,
+                input_dir=args.input_dir,
             )
             print(json.dumps(entry, indent=2))
             return
@@ -284,6 +286,8 @@ def main() -> None:
         raise SystemExit(f"Review refused: {exc}") from exc
     except SecurityError as exc:
         raise SystemExit(f"Security validation failed: {exc}") from exc
+    except OSError as exc:
+        raise SystemExit(f"File operation failed: {exc}") from exc
 
     raise SystemExit(f"Unknown command: {args.command}")
 

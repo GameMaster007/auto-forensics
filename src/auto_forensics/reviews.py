@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import fields
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .file_ops import directory_lock
 from .models import (
     IOC,
     BinaryFeature,
@@ -25,6 +27,7 @@ from .models import (
     utc_now_iso,
 )
 from .pipeline import rewrite_published_report
+from .security import SecurityError
 
 ANALYST_REVIEW_LOG = "analyst_reviews.jsonl"
 _DECISIONS = {"accept", "reject"}
@@ -43,6 +46,34 @@ def record_review(
     note: str = "",
     override: bool = False,
     at: str | None = None,
+    input_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Verify and lock a run before recording an analyst decision."""
+    from .integrity import verify_run
+
+    output_dir = output_dir.resolve()
+    try:
+        with directory_lock(output_dir):
+            result = verify_run(output_dir / "run_manifest.json", input_dir=input_dir)
+            if not result["match"]:
+                raise ReviewError("Run integrity check failed before review; no decision was recorded")
+            return _record_review(
+                output_dir, finding_id=finding_id, decision=decision, actor=actor,
+                note=note, override=override, at=at,
+            )
+    except SecurityError as exc:
+        raise ReviewError(str(exc)) from exc
+
+
+def _record_review(
+    output_dir: Path,
+    *,
+    finding_id: str,
+    decision: str,
+    actor: str,
+    note: str,
+    override: bool,
+    at: str | None,
 ) -> dict[str, Any]:
     """Append one review and publish it on the report.
 
@@ -52,6 +83,8 @@ def record_review(
     report_path = output_dir / "case_report.json"
     if not report_path.is_file():
         raise ReviewError("case report was not found in the output directory")
+    if not isinstance(decision, str) or type(override) is not bool:
+        raise ReviewError("decision must be text and override must be a boolean")
     action = decision.strip().lower()
     if action not in {"accept", "reject", "annotate"}:
         raise ReviewError("decision must be accept, reject, or annotate")
@@ -72,18 +105,23 @@ def record_review(
         "finding_id": clean_id,
         "action": action,
         "actor": clean_actor,
-        "at": at or utc_now_iso(),
+        "at": utc_now_iso() if at is None else at,
         "note": clean_note,
         "override": bool(override),
     }
+    _validate_entry(entry)
     apply_entry(finding, entry)
-    _append_log(log_path, entry)
+    previous = log_path.read_bytes().decode("utf-8") if log_path.exists() else ""
+    if previous and not previous.endswith("\n"):
+        previous += "\n"
+    log_content = previous + json.dumps(entry, ensure_ascii=True, sort_keys=True) + "\n"
     entries.append(entry)
     rewrite_published_report(
         report,
         output_dir,
         review_log=ANALYST_REVIEW_LOG,
         review_count=len(entries),
+        review_log_content=log_content,
     )
     return entry
 
@@ -94,24 +132,25 @@ def apply_review_log(output_dir: Path, log_path: Path) -> bool:
     Returns False when a logged finding is not in the report. The
     report is left unchanged in that case, so a replay hash misses.
     """
-    if not log_path.is_file():
+    if not log_path.exists() and not log_path.is_symlink():
         return True
     entries = read_review_log(log_path)
     if not entries:
         return True
-    report = load_case_report(output_dir / "case_report.json")
-    by_id = {item.finding_id: item for item in report.findings}
-    for entry in entries:
-        finding = by_id.get(str(entry.get("finding_id") or ""))
-        if finding is None:
-            return False
-        apply_entry(finding, entry)
-    rewrite_published_report(
-        report,
-        output_dir,
-        review_log=log_path.name,
-        review_count=len(entries),
-    )
+    content = log_path.read_bytes().decode("utf-8")
+    output_dir = output_dir.resolve()
+    with directory_lock(output_dir):
+        report = load_case_report(output_dir / "case_report.json")
+        by_id = {item.finding_id: item for item in report.findings}
+        for entry in entries:
+            finding = by_id.get(entry["finding_id"])
+            if finding is None:
+                return False
+            apply_entry(finding, entry)
+        rewrite_published_report(
+            report, output_dir, review_log=ANALYST_REVIEW_LOG,
+            review_count=len(entries), review_log_content=content,
+        )
     return True
 
 
@@ -146,10 +185,21 @@ def apply_entry(finding: Finding, entry: dict[str, Any]) -> None:
 
 def read_review_log(path: Path) -> list[dict[str, Any]]:
     """Read the custody log. A broken line is an error, not a skipped review."""
-    if not path.is_file():
-        return []
+    if path.is_symlink() or not path.is_file():
+        if not path.exists() and not path.is_symlink():
+            return []
+        raise ReviewError("analyst review log must be a regular file")
+    with path.open("rb") as handle:
+        raw = handle.read(8 * 1024 * 1024 + 1)
+    if len(raw) > 8 * 1024 * 1024:
+        raise ReviewError("analyst review log exceeds its size limit")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeError as exc:
+        raise ReviewError("analyst review log is not UTF-8") from exc
     entries: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    decided: set[str] = set()
+    for line in text.splitlines():
         if not line.strip():
             continue
         try:
@@ -158,8 +208,37 @@ def read_review_log(path: Path) -> list[dict[str, Any]]:
             raise ReviewError("analyst review log has a line that is not JSON") from exc
         if not isinstance(item, dict):
             raise ReviewError("analyst review log has a line that is not a record")
+        _validate_entry(item)
+        if item["action"] in _DECISIONS:
+            if item["finding_id"] in decided and not item["override"]:
+                raise ReviewError("analyst review log silently overwrites a prior decision")
+            decided.add(item["finding_id"])
         entries.append(item)
     return entries
+
+
+def _validate_entry(entry: dict[str, Any]) -> None:
+    if set(entry) != {"finding_id", "action", "actor", "at", "note", "override"}:
+        raise ReviewError("analyst review log has an invalid record shape")
+    if not isinstance(entry["action"], str) or entry["action"] not in {"accept", "reject", "annotate"}:
+        raise ReviewError("analyst review log has an invalid action")
+    if not isinstance(entry["actor"], str) or _clean_actor(entry["actor"]) != entry["actor"]:
+        raise ReviewError("analyst review log has an invalid actor")
+    if not isinstance(entry["note"], str) or _clean_note(entry["note"], required=entry["action"] == "annotate") != entry["note"]:
+        raise ReviewError("analyst review log has an invalid note")
+    if not isinstance(entry["finding_id"], str) or _clean_id(entry["finding_id"]) != entry["finding_id"]:
+        raise ReviewError("analyst review log has an invalid finding identifier")
+    if type(entry["override"]) is not bool:
+        raise ReviewError("analyst review log has an invalid override flag")
+    timestamp = entry["at"]
+    try:
+        if not isinstance(timestamp, str) or len(timestamp) > 64:
+            raise ValueError("invalid timestamp")
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("missing timezone")
+    except ValueError as exc:
+        raise ReviewError("analyst review log has an invalid timestamp") from exc
 
 
 def load_case_report(path: Path) -> CaseReport:
@@ -211,13 +290,9 @@ def _latest_decision(entries: list[dict[str, Any]], finding_id: str) -> dict[str
     return found
 
 
-def _append_log(path: Path, entry: dict[str, Any]) -> None:
-    line = json.dumps(entry, ensure_ascii=True, sort_keys=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(line + "\n")
-
-
 def _clean_actor(value: str) -> str:
+    if not isinstance(value, str):
+        raise ReviewError("actor is required")
     text = " ".join(value.split())
     if not text or len(text) > 120:
         raise ReviewError("actor is required")
@@ -225,6 +300,8 @@ def _clean_actor(value: str) -> str:
 
 
 def _clean_note(value: str, *, required: bool) -> str:
+    if not isinstance(value, str):
+        raise ReviewError("note must be text")
     text = " ".join(value.split())
     if required and not text:
         raise ReviewError("an annotation needs a note")
@@ -234,6 +311,8 @@ def _clean_note(value: str, *, required: bool) -> str:
 
 
 def _clean_id(value: str) -> str:
+    if not isinstance(value, str):
+        raise ReviewError("finding id is required")
     text = value.strip()
     if not text or any(char.isspace() for char in text) or len(text) > 200:
         raise ReviewError("finding id is required")

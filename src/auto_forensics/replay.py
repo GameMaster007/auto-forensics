@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .integrity import check_inputs, check_resources
+from .integrity import check_inputs, check_resources, check_review_log
 from .manifest import read_run_manifest
 from .pipeline import PipelineConfig, run_case
 from .reviews import ANALYST_REVIEW_LOG, ReviewError, apply_review_log
@@ -28,6 +28,7 @@ def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict
     Analyst decisions in ``analyst_reviews.jsonl`` beside that manifest
     are applied again before the report hash is compared.
     """
+    manifest_path = manifest_path.resolve()
     manifest = read_run_manifest(manifest_path)
     input_dir = Path(manifest["input_dir"])
     input_match, input_changes, input_error = check_inputs(manifest, input_dir)
@@ -35,10 +36,16 @@ def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict
     if input_error:
         input_differences.append(input_error)
     resources_match, resource_error = check_resources(manifest)
+    reviews_match, review_error = check_review_log(manifest, manifest_path.parent)
 
     model = manifest.get("model") if isinstance(manifest.get("model"), dict) else {}
     expected_sha = str(manifest.get("output", {}).get("sha256") or "")
     destination = output_dir or (manifest_path.parent / "replay")
+    if output_dir is None:
+        sequence = 2
+        while destination.exists():
+            destination = manifest_path.parent / f"replay-{sequence}"
+            sequence += 1
     if destination.resolve() == manifest_path.parent.resolve():
         raise SecurityError("Replay output must not overwrite the original run directory")
     if destination.resolve().is_relative_to(input_dir.resolve()):
@@ -47,14 +54,13 @@ def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict
     prompt_match = False
     seed_match = False
     actual_sha = ""
-    review_error = ""
     executed = False
-    if input_match and resources_match:
+    if input_match and resources_match and reviews_match:
         executed = True
         report = run_case(config_from_manifest(manifest, input_dir, destination))
         del report
         try:
-            if not apply_review_log(destination, manifest_path.parent / ANALYST_REVIEW_LOG):
+            if "analyst_reviews" in manifest and not apply_review_log(destination, manifest_path.parent / ANALYST_REVIEW_LOG):
                 review_error = "Review log names a finding missing from the replay"
         except ReviewError as exc:
             review_error = str(exc)
@@ -71,6 +77,7 @@ def replay_manifest(manifest_path: Path, output_dir: Path | None = None) -> dict
         "prompt_match": prompt_match,
         "seed_match": seed_match,
         "resources_match": resources_match,
+        "reviews_match": reviews_match,
         "resource_error": resource_error,
         "executed": executed,
         "expected_sha256": expected_sha,
