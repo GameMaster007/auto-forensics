@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import ipaddress
 from bisect import bisect_right
+from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
+from .citations import citation_from_event
 from .models import ArtifactEvent, BinaryFeature, TimelineEvent
 
 PROCESS_EVENT_TYPES = {"process_creation", "process_start"}
@@ -38,6 +40,29 @@ def event_from_artifact(item: ArtifactEvent) -> TimelineEvent:
             description = f"{description} ({', '.join(important)})"
     related: dict[str, Any] = {"artifact_id": item.artifact_id}
     metadata = item.metadata
+    citation = citation_from_event(item)
+    if citation is not None:
+        related["citation"] = asdict(citation)
+    raw_logsource = metadata.get("logsource")
+    logsource = {
+        key: value.casefold() for key, value in raw_logsource.items()
+        if key in {"category", "product", "service"} and isinstance(value, str)
+    } if isinstance(raw_logsource, dict) else {}
+    for key in ("category", "product", "service"):
+        if isinstance(metadata.get(key), str):
+            logsource.setdefault(key, metadata[key].casefold())
+    if item.event_type in PROCESS_EVENT_TYPES:
+        logsource.setdefault("category", "process_creation")
+    if str(metadata.get("source_file", "")).lower().endswith(".evtx"):
+        logsource.setdefault("product", "windows")
+        channel = metadata.get("channel")
+        if isinstance(channel, str):
+            if channel.lower() == "security":
+                logsource.setdefault("service", "security")
+            elif "sysmon" in channel.lower():
+                logsource.setdefault("service", "sysmon")
+    if logsource:
+        related["logsource"] = logsource
     for key in ("source_host", "computer", "hostname", "host"):
         # The HTTP Host header names a destination, not the source host.
         if key == "host" and metadata.get("src_ip"):
@@ -125,7 +150,7 @@ def normalize_timeline(
         if dt is None:
             continue
         nearest: TimelineEvent | None = None
-        nearest_delta = NETWORK_PROCESS_CORRELATION_WINDOW_SECONDS + 1
+        nearest_delta: float = NETWORK_PROCESS_CORRELATION_WINDOW_SECONDS + 1
         for kind, value in sorted(_source_identities(item)):
             key = (kind, value, item.related.get("process_id"))
             candidates = process_events.get(key, [])

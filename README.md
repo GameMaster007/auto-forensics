@@ -234,6 +234,22 @@ window using the corresponding ASCII/UTF-16LE representation. Nested
 binary paths are relative to the evidence root; separate sources with
 the same filename or hash retain separate citation identities.
 
+The built-in Sigma adapter supports a literal keyword subset of the
+[Sigma specification](https://sigmahq.io/sigma-specification/specification/sigma-rules-specification.html#keywords-search):
+one named string-list selector with `condition` equal to that selector,
+or a selector containing `"|all": [strings]`. A legacy `keywords` list
+may omit `condition`. Matching is case insensitive over normalized
+event description, type, and source. Category/product/service constraints
+must match known event provenance; missing provenance does not match.
+
+Each matching event produces its own cited finding. Only keywords that
+matched that event are included as evidence, so an OR rule does not
+claim every keyword occurred. Field maps, filters, boolean conditions,
+wildcards, and unsupported modifiers are skipped and recorded under
+`summary.sigma_rules`, including bounded skipped-rule details. This is
+not a general Sigma backend. Keyword findings stop explicitly above
+10,000 matches; rules over 4 MiB are skipped with a recorded reason.
+
 `--llm off` uses the same citation rule with a score-based heuristic
 and no draft wording from the mock. `--llm ollama` calls a local
 Ollama-compatible endpoint at temperature 0. If that endpoint is down,

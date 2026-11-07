@@ -84,7 +84,7 @@ class TestSigmaRulesExtractTechnique:
                 description="powershell -encoded ZQBjAGgA",
                 risk_score=5.0,
                 tags=[],
-                related={},
+                related={"citation": {"artifact_id": "evt-1", "source_file": "events.json", "sha256": "a" * 64, "row": 1}},
             )
         ]
         findings = evaluate_sigma_rules(timeline, rules_dir)

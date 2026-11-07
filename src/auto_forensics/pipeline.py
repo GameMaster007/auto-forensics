@@ -575,8 +575,10 @@ def _run_case(config: PipelineConfig) -> CaseReport:
     ) -> list[Finding]:
         return plugin_registry.detectors.detect(parsed, features, timeline)
 
+    sigma_diagnostics: dict[str, Any] = {}
+
     def sigma_findings(timeline: list[TimelineEvent]) -> list[Finding]:
-        return evaluate_sigma_rules(timeline, config.sigma_rules_dir or config.rules_dir)
+        return evaluate_sigma_rules(timeline, config.sigma_rules_dir or config.rules_dir, diagnostics=sigma_diagnostics)
 
     tools.allow("parse_artifacts", parse_artifacts)
     tools.allow("analyze_binaries", analyze_binaries)
@@ -649,6 +651,7 @@ def _run_case(config: PipelineConfig) -> CaseReport:
     summary["dropped_unsupported"] = dropped_unsupported
     summary["verification"] = [item.to_dict() for item in verdicts]
     summary["llm_provider"] = provider
+    summary["sigma_rules"] = sigma_diagnostics
     report = CaseReport(
         case_id=config.case_id,
         generated_at=utc_now_iso(),
