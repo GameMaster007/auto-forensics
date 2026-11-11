@@ -1296,8 +1296,24 @@ def discover_artifacts(
         if suffix in binary_suffixes:
             binaries.append(path)
             continue
-        parsed = parser_registry.parse(path, max_text_bytes=max_text_bytes)
+        try:
+            parsed = parser_registry.parse(path, max_text_bytes=max_text_bytes)
+        except SecurityError:
+            raise
+        except (csv.Error, ValueError, UnicodeError, RecursionError, OverflowError, KeyError, TypeError) as exc:
+            # One malformed file must not end the analysis of every other file.
+            # The failure is kept as an event so the analyst sees the gap.
+            logger.warning("Could not parse %s: %s", path.name, type(exc).__name__)
+            parsed = [ArtifactEvent(
+                artifact_id=_gen_artifact_id("parse-error", path.name, 0, None, type(exc).__name__),
+                timestamp=None,
+                event_type="parse_error",
+                description=f"File could not be parsed ({type(exc).__name__}); review it manually",
+                source=path.name,
+                metadata={"parse_error": type(exc).__name__},
+            )]
         _ensure_provenance(parsed, path, str(path.relative_to(root)))
         events.extend(parsed)
 
     return events, binaries
+

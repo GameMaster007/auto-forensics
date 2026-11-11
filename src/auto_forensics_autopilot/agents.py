@@ -21,6 +21,7 @@ import json
 import re
 import shutil
 import subprocess
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -161,6 +162,25 @@ class LineRule:
         return self.requires is None or bool(self.requires.search(line))
 
 
+# Characters that change how text displays or tokenises without being seen:
+# zero-width spaces and joiners, soft hyphen, word joiner, BOM, and the
+# bidirectional overrides and isolates.
+_INVISIBLE = dict.fromkeys(map(ord, "\u00ad\u200b\u200c\u200d\u2060\ufeff"), None)
+_BIDI = set("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
+
+
+def normalise_for_rules(line: str) -> str:
+    """Fold full-width and compatibility letters and drop invisible characters."""
+    return unicodedata.normalize("NFKC", line).translate(_INVISIBLE)
+
+
+def hidden_text_signal(line: str) -> bool:
+    """True when a line hides text: a bidi override, or an invisible character between letters."""
+    if any(ch in _BIDI for ch in line):
+        return True
+    return bool(re.search(r"\w[\u200b\u200c\u200d\u2060\u00ad]+\w", line))
+
+
 class LineRuleAgent:
     """Scan text-bearing files line by line against fixed rules."""
 
@@ -182,8 +202,14 @@ class LineRuleAgent:
         hits = 0
         seen_rules: set[str] = set()
         for row, line in iter_lines(path):
+            folded = normalise_for_rules(line)
             for rule in self.rules:
-                if rule.rule_id in seen_rules or not rule.matches(line):
+                if rule.rule_id in seen_rules:
+                    continue
+                if rule.rule_id == "hidden-text":
+                    if not hidden_text_signal(line):
+                        continue
+                elif not rule.matches(folded):
                     continue
                 hits += 1
                 seen_rules.add(rule.rule_id)
@@ -256,6 +282,9 @@ class InjectionSentinelAgent(LineRuleAgent):
                  _rx(r"\b(do not|don't|never)\b.{0,30}\b(report|mention|flag|include)\b"),
                  "Evidence contains text asking an analyst tool to hide results", "medium", "defense-evasion",
                  "T1562", _rec, requires=_to_machine),
+        LineRule("hidden-text", re.compile(r"(?!)"),
+                 "Evidence hides text with invisible or right-to-left control characters", "medium",
+                 "defense-evasion", "T1036.002", _rec),
         LineRule("chat-markup",
                  _rx(r"<\|?(im_start|im_end|system|endoftext)\|?>|\[/?INST\]|<<SYS>>"),
                  "Evidence contains model chat-control tokens", "high", "defense-evasion", "T1036", _rec),
