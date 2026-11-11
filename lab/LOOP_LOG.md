@@ -148,3 +148,45 @@ stopped counting routine telemetry as detections; the correct-tactic rate
 more than doubled. Raising it further needs rules for the Security-log
 techniques that set covers, written from ATT&CK knowledge rather than from
 its files, and real benign logs to check them against.
+
+## Loop 58: defense evasion and lateral movement
+
+The hold-out showed two weak tactics: defense evasion (10 of 55 files caught)
+and lateral movement (5 of 18). 34 rules were added and 4 widened, written from
+ATT&CK knowledge and checked only against the development sets, dev2 and the
+benign generator. The hold-out was measured once, after the rules were frozen.
+
+Defense evasion: Defender tampering (5001/5010/5012/5013, 5007 exclusions,
+`-RemoveDefinitions`), security settings weakened in the registry through
+Sysmon or Security 4657 (Defender, UAC, script logging, event channels, firewall,
+ETW, NLA, security services set to disabled), auditpol/wevtutil/Sysmon unload,
+AMSI and ETW bypass strings, event log files deleted, timestomping (Sysmon 2),
+clock changed by a shell (4616), injection into long-running processes (Sysmon
+10), process tampering (Sysmon 25), Windows process names outside the Windows
+folder, LOLBins loading from user folders, alternate data streams, firewall
+opened for remote-access ports or user-folder programs, drivers from user
+folders, bcdedit test signing. Lateral movement: NTLM network logon with no
+session key, inbound RDP (4624 type 10, 4778, 1149, 21/25, 131), admin share
+opened (5140) or mounted, PsExec-style service processes, files written by the
+SMB server, wmiexec/smbexec output on `\\127.0.0.1\ADMIN$`, DCOM MMC, remote
+PowerShell host sessions, tscon hijack, Restricted Admin/RDP enabled in the
+registry, remote `schtasks /s`, `sc \\host`, remote DCOM ProgIDs.
+
+| Measure | Before (loop 57) | After (loop 58) |
+| --- | --- | --- |
+| Dev detected / tactic (278 files, cached) | 86.7% / 49.4% | 88.5% / 52.5% |
+| Dev defense evasion / lateral movement (detected, tactic) | 31/36, 19 · 40/47, 14 | 31/36, 20 · 43/47, 21 |
+| Dev2 detected (37 files) | 86.5% | 91.9% |
+| Hold-out detected / tactic (293 files) | 45.1% / 25.7% | 50.2% / 29.3% |
+| Hold-out defense evasion (detected, tactic) | 10/55, 9 | 15/55, 14 |
+| Hold-out lateral movement (detected, tactic) | 5/18, 4 | 10/18, 9 |
+| False alarms in 20,000 benign events | 0 | 0 |
+| End-to-end dev run (278 files) | 33.2 s, median 1 serious finding | 34.6 s, median 2 |
+| Slowest hostile event, all rules | 0.27 s | 0.28 s |
+
+Defense evasion on the hold-out is still the weakest tactic: 40 of 55 files
+raise nothing. Two of the new lateral-movement rules are broad: "NTLM logon with
+no session key" fired in 12 hold-out files and "admin share opened" in 10, most
+of them outside the lateral-movement folder. Lab domains have little ordinary
+NTLM and share traffic, and the benign generator models neither, so their real
+false-alarm rate is unknown; both are medium severity.

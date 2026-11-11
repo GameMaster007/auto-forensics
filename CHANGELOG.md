@@ -19,6 +19,12 @@
   See `docs/AUTOPILOT.md`.
 - Windows behaviour rules (`windows_rules.py`) for Sysmon, Security,
   System, PowerShell, WinRM, DCOM and SQL Server events.
+- 34 more Windows rules for defense evasion (Defender, AMSI/ETW, audit and
+  log tampering, Security 4657 registry changes, timestomping, injection,
+  masquerading, alternate data streams, firewall) and lateral movement
+  (pass-the-hash logons, inbound RDP, admin shares, PsExec/wmiexec traces,
+  DCOM, remote PowerShell, RDP hijack). Hold-out defense evasion 10 to 15
+  of 55 files, lateral movement 5 to 10 of 18; 0 benign false alarms.
 - Persistence detector; Sysmon process and network findings graded by
   behaviour instead of all-medium; Sysmon recognised from the EVTX
   provider; small binary size is no longer a signal on its own.

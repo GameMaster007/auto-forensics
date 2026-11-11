@@ -83,6 +83,7 @@ CMD = "CommandLine|ProcessCommandLine"
 PARENT = "ParentImage|ParentProcessName"
 
 VM_READ = 0x10
+INJECT_RIGHTS = 0x2 | 0x8 | 0x20  # create thread, VM operation, VM write
 FIELD_LIMIT = 8 * 1024
 LONG_FIELDS = {"ScriptBlockText", "Payload", "Data"}
 COMMAND_FIELDS = {"CommandLine", "ProcessCommandLine", "ParentCommandLine", "ImagePath", "ServiceFileName"}
@@ -105,6 +106,27 @@ USER_DIR = r"\\(temp|tmp|downloads|users\\public|perflogs|desktop|appdata\\(loca
 AUTO_ELEVATE = (r"\\(eventvwr|fodhelper|computerdefaults|sdclt|slui|wsreset|cmstp|changepk|sysprep|wusa|"
                 r"pkgmgr|dism|mmc|taskmgr|osk|perfmon|cliconfg|winsat|bthudtask|dccw|iscsicpl|"
                 r"systemsettingsadminflows|tpmvscmgr|recdisc)\.exe$")
+# Windows processes that only ever run from the Windows folder; the same name elsewhere is a disguise.
+SYSTEM_NAMES = (r"\\(svchost|lsass|csrss|smss|services|winlogon|wininit|lsm|lsaiso|spoolsv|taskhost|taskhostw|"
+                r"dllhost|conhost|rundll32|regsvr32|searchindexer|searchprotocolhost|wmiprvse|wuauclt|"
+                r"ctfmon|dwm|sihost|fontdrvhost|runtimebroker|explorer)\.exe$")
+WINDOWS_HOME = (r"^(\\\\\?\\|\\\?\?\\)?([a-z]:|\\device\\harddiskvolume\d+)\\windows\\"
+                r"((system32|syswow64|sysnative|winsxs|servicing|microsoft\.net|systemapps|immersivecontrolpanel)\\|"
+                r"explorer\.exe$)|^(%systemroot%|%windir%|\\systemroot)\\(system32|syswow64)\\")
+SCRIPT_HOSTS = r"\\(powershell|pwsh|cmd|rundll32|regsvr32|mshta|wscript|cscript|msbuild|installutil|regasm|regsvcs)\.exe$"
+# AMSI and ETW are the two places a script's content is inspected or recorded; these strings switch them off.
+AMSI_ETW = (r"amsiinitfailed|amsiutils|amsiscanbuffer|amsiopensession|amsicontext|amsi\.dll|etweventwrite|"
+            r"psetwlogprovider|complus_etwenabled|eventprovider['\"\]][^\n]{0,200}m_enabled|"
+            r"remove-etwtraceprovider|set-etwtraceprovider")
+LOG_TAMPER = (r"wevtutil(\.exe)?\s+(sl|set-log)\s.*/e(nabled)?:\s*false|auditpol(\.exe)?\s+/(clear|remove)\b|"
+              r"auditpol(\.exe)?\s+/set\s.*/(success|failure):\s*disable|"
+              r"\b(sc|net1?)(\.exe)?\s+stop\s+\"?(eventlog|sysmon\d*|sysmondrv)\b|"
+              r"\bsc(\.exe)?\s+config\s+\"?(eventlog|sysmon\d*|sysmondrv)\b.*start=\s*disabled|"
+              r"stop-service.*\b(eventlog|sysmon\d*)\b|set-service.*\b(eventlog|sysmon\d*)\b.*disabled|limit-eventlog|"
+              r"logman(\.exe)?\s+(stop|delete|update(\s+trace)?)\s+\"?(eventlog-|sysmon|defender|autologger-|diagtrack)|"
+              r"fltmc(\.exe)?\s+unload|sysmon\d*(\.exe)?\s+-u\b")
+EXEC_EXT = r"\.(exe|dll|sys|scr|com|cpl|ps1|bat|cmd|vbs|vbe|js|jse|hta|wsf|lnk)$"
+LOCAL_ADDRESS = r"^(-|127\.0\.0\.1|::1|local|localhost|)(:\d+)?$"
 
 
 def _mask(value: object) -> int:
@@ -202,9 +224,10 @@ RULES: tuple[Rule, ...] = (
          {}, provider=SYSMON),
     Rule("service-install-suspicious", "Service installed that runs a shell or a file from a share/temp folder",
          "high", "lateral-movement", "T1569.002", _ids(7045, 4697),
-         {"ImagePath|ServiceFileName": rx(r"(cmd(\.exe)?\s*/c|%comspec%|powershell|\\\\127\.0\.0\.1\\|admin\$|"
-                                          r"\\temp\\|\\windows\\[a-z0-9]{8}\.exe|psexesvc|remcom|paexec|"
-                                          r"\.bat\b|echo\s)")}),
+         {"ImagePath|ServiceFileName": rx(r"(cmd(\.exe)?\s*/[ck]|%comspec%|powershell|\\\\127\.0\.0\.1\\|admin\$|"
+                                          r"\\temp\\|\\windows\\[a-z0-9]{8}\.exe|psexesvc|remcom|paexec|csexec|"
+                                          r"^\"?%(systemroot|windir)%\\[a-z0-9]{4,8}\.exe\"?$|"
+                                          r"\\\\[^\\\s]+\\[c-z]\$\\|\.bat\b|echo\s)")}),
     # Windows, Office and browsers use BITS for their own updates; those hosts are not reported.
     Rule("bits-job", "BITS job fetched a file from a non-vendor host or ran a local program", "medium",
          "persistence", "T1197", _ids(59, 60),
@@ -266,7 +289,8 @@ RULES: tuple[Rule, ...] = (
                   r"bcdedit.*(recoveryenabled\s+no|bootstatuspolicy\s+ignoreallfailures)|"
                   r"fsutil.*usn\s+deletejournal")}),
     Rule("av-tamper", "Security tooling disabled or excluded", "high", "defense-evasion", "T1562.001", PROC,
-         {CMD: rx(r"set-mppreference.*-(disable\w+|exclusion\w+)|add-mppreference.*-exclusion|"
+         {CMD: rx(r"set-mppreference.*-(disable\w+|exclusion\w+|submitsamplesconsent\s+[23]|mapsreporting\s+0)|"
+                  r"add-mppreference.*-exclusion|mpcmdrun(\.exe)?\"?\s.*-removedefinitions|"
                   r"sc(\.exe)?\s+(stop|delete|config)\s+(windefend|sense|wdboot|wdfilter)|"
                   r"netsh.*(advfirewall\s+set\s+\w+\s+state\s+off|firewall\s+set\s+opmode\s+disable)|"
                   r"taskkill.*(msmpeng|mssense|cylance|carbonblack|csfalcon)")}),
@@ -349,6 +373,95 @@ RULES: tuple[Rule, ...] = (
          {CMD: rx(r"attrib(\.exe)?\s+.*\+(h|s)\b")}),
     Rule("unsigned-driver", "Driver loaded that is not validly signed", "high", "defense-evasion", "T1014", _ids(6),
          {"Signed|SignatureStatus": rx(r"^(false|unavailable|expired|revoked)")}, provider=SYSMON),
+    Rule("driver-from-user-folder", "Driver loaded from a user-writable folder", "high", "defense-evasion", "T1014",
+         _ids(6), {"ImageLoaded": rx(USER_DIR + r"|\\windows\\temp\\")}, provider=SYSMON),
+    Rule("driver-service-user-folder", "Kernel driver service installed from a user-writable folder", "high",
+         "defense-evasion", "T1014", _ids(7045, 4697),
+         {"ImagePath|ServiceFileName": rx(USER_DIR + r"|\\windows\\temp\\"),
+          "ServiceType": rx(r"^(kernel mode driver|file system driver|0x0*[12])$")}),
+    Rule("masquerade-system-path", "Windows process name running from outside the Windows folder", "high",
+         "defense-evasion", "T1036.005", PROC, {IMAGE: rx(SYSTEM_NAMES)}, {IMAGE: rx(WINDOWS_HOME)}),
+    Rule("timestomp", "File creation time rewound by a script host or a program in a user folder", "medium",
+         "defense-evasion", "T1070.006", _ids(2), {"TargetFilename": rx(r".")},
+         {"Image": rx(r"^[a-z]:\\program files( \(x86\))?\\|\\(msiexec|trustedinstaller|tiworker|svchost|explorer|"
+                      r"onedrive|backgroundtaskhost|searchprotocolhost|mousocoreworker)\.exe$|" + KNOWN_USER_APPS)},
+         provider=SYSMON, check=lambda m: _timestomp(m)),
+    # A parent opens every child it creates with full access, so the target must be a long-running process that
+    # a script or a dropped program would not normally start itself.
+    Rule("process-inject-access", "Script host or user-folder program opened a long-running process with write "
+         "and thread rights (injection)", "medium", "defense-evasion", "T1055", _ids(10),
+         {"SourceImage": rx(USER_DIR + "|" + SCRIPT_HOSTS),
+          "TargetImage": rx(r"\\(explorer|svchost|winlogon|spoolsv|services|dllhost|sihost|taskhostw|runtimebroker|"
+                            r"searchindexer|iexplore|chrome|firefox|msedge|outlook|winword|excel)\.exe$")},
+         {"SourceImage": rx(KNOWN_USER_APPS + "|" + INSTALLED_SECURITY_TOOL)}, provider=SYSMON,
+         check=lambda m: (_mask(m.get("GrantedAccess")) & INJECT_RIGHTS) == INJECT_RIGHTS
+         and str(m.get("SourceImage", "")).lower() != str(m.get("TargetImage", "")).lower()),
+    Rule("process-tampering", "Process image replaced or tampered in memory (hollowing / herpaderping)", "high",
+         "defense-evasion", "T1055.012", _ids(25), {"Type": rx(r"image is (replaced|locked for access)")},
+         {"Image": rx(r"^[a-z]:\\program files( \(x86\))?\\")}, provider=SYSMON),
+    Rule("lolbin-user-folder", "System binary loads or runs code from a user-writable folder", "medium",
+         "defense-evasion", "T1218", PROC,
+         {CMD: rx(r"\b(rundll32|regsvr32|regasm|regsvcs|installutil|msxsl|mshta|cmstp|odbcconf)(\.exe)?\"?\s.*"
+                  r"\\(temp|tmp|users\\public|downloads|perflogs|desktop|appdata\\(local|roaming)|programdata)\\|"
+                  r"\brundll32(\.exe)?\"?\s+\"?[^\s,\"]{1,260}\.(?!dll\b|cpl\b|ocx\b|drv\b)[a-z0-9]{1,5}\"?\s*,")},
+         {CMD: rx(KNOWN_USER_APPS)}),
+    Rule("amsi-etw-tamper-cmd", "AMSI or ETW tampering on the command line", "high", "defense-evasion", "T1562.001",
+         PROC, {CMD: rx(AMSI_ETW)}),
+    Rule("logging-tamper-cmd", "Event logging, auditing or Sysmon switched off from the command line", "high",
+         "defense-evasion", "T1562.002", PROC, {CMD: rx(LOG_TAMPER)}),
+    Rule("defense-evasion-script", "Script block disables AMSI, ETW, Defender or event logging", "high",
+         "defense-evasion", "T1562.001", _ids(4104, 4103, 800),
+         {"ScriptBlockText|Payload|Data": rx(AMSI_ETW + "|" + LOG_TAMPER + r"|clear-eventlog|remove-eventlog|"
+                                             r"wevtutil(\.exe)?\s+(cl|clear-log)\b|globalsession\.clearlog|"
+                                             r"set-mppreference.*-(disable\w+|exclusion\w+)\s|"
+                                             r"add-mppreference.*-exclusion")}),
+    Rule("indicator-removal-cmd", "Event log files, shell history or free space wiped", "medium", "defense-evasion",
+         "T1070", PROC,
+         {CMD: rx(r"\b(del|erase|remove-item|ri|rm)\b.*(\\winevt\\logs\\|\.evtx\b)|consolehost_history\.txt|"
+                  r"\bclear-history\b|historysavestyle\s+savenothing|\bsdelete(64)?(\.exe)?\s|cipher(\.exe)?\s+/w:|"
+                  r"fsutil(\.exe)?\s+file\s+setzerodata")}),
+    Rule("evtx-deleted", "Event log file deleted", "high", "defense-evasion", "T1070.001", _ids(23, 26),
+         {"TargetFilename": rx(r"\\winevt\\logs\\[^\\]+\.evtx$")}, provider=SYSMON),
+    Rule("boot-config-cmd", "Boot configuration weakened (test signing, integrity checks, safe mode)", "high",
+         "defense-evasion", "T1553.006", PROC,
+         {CMD: rx(r"bcdedit(\.exe)?\s.*(testsigning|nointegritychecks|loadoptions\s+ddisable_integrity_checks)"
+                  r"\s+(on|yes)|bcdedit(\.exe)?\s.*/set\s.*safeboot\s+(minimal|network)")}),
+    Rule("ads-cmd", "Data written to or run from an alternate data stream", "medium", "defense-evasion", "T1564.004",
+         PROC, {CMD: rx(r"\.\w{1,6}:[a-z_][\w-]{0,60}\.(exe|dll|ps1|vbs|vbe|js|jse|bat|cmd|hta|scr)\b|"
+                        r"(set-content|add-content|get-content)\s.*-stream\s")}),
+    Rule("ads-executable", "Executable or script stored in an alternate data stream", "medium", "defense-evasion",
+         "T1564.004", _ids(15), {"TargetFilename": rx(r":[^\\:]+\.(exe|dll|ps1|vbs|vbe|js|jse|bat|cmd|hta|scr|jar)$")},
+         provider=SYSMON),
+    Rule("firewall-open-cmd", "Firewall opened for a remote-access port or a program in a user folder", "medium",
+         "defense-evasion", "T1562.004", PROC,
+         {CMD: rx(r"netsh(\.exe)?\s+(advfirewall\s+)?firewall\s+(add|set)\s+(rule|allowedprogram|portopening)\b.*"
+                  r"(program=\"?[a-z]:[^\"\n]{0,260}" + USER_DIR + r"|localport=\"?(3389|5985|5986|445|4444|5900)\b)|"
+                  r"new-netfirewallrule.*-(program\s+\"?[a-z]:[^\"\n]{0,260}" + USER_DIR +
+                  r"|localport\s+\"?(3389|5985|5986|445|4444|5900)\b)|set-netfirewallprofile.*-enabled\s+\$?(false|0)\b")}),
+    Rule("firewall-rule-user-folder", "Firewall rule added for a program in a user-writable folder", "medium",
+         "defense-evasion", "T1562.004", _ids(2004, 2005, 2071, 2097, 2099),
+         {"ApplicationPath": rx(USER_DIR)}, {"ApplicationPath": rx(KNOWN_USER_APPS)}, provider="firewall"),
+    Rule("defender-off-event", "Defender reported its protection switched off or a tamper attempt", "high",
+         "defense-evasion", "T1562.001", _ids(5001, 5010, 5012, 5013), {}, provider="defender"),
+    Rule("defender-config-weakened", "Defender configuration changed to add an exclusion or disable a protection",
+         "high", "defense-evasion", "T1562.001", _ids(5007),
+         {"New Value|NewValue|Data": rx(r"\\exclusions\\(paths|extensions|processes|ipaddresses)\\|"
+                                        r"\\disable\w+\s*=\s*0x0*1\b")}, provider="defender"),
+    Rule("security-registry-weakened", "Security control weakened in the registry (Defender, UAC, logging, "
+         "firewall, RDP)", "high", "defense-evasion", "T1112", _ids(12, 13, 14, 4657), {},
+         check=lambda m: _registry_weakened(m)),
+    # Time services, hypervisor tools and the Settings app change the clock routinely; a shell or dropped program
+    # changing it is how files and logs are given false times.
+    Rule("system-time-changed", "System time changed by a shell, script host or user-folder program", "medium",
+         "defense-evasion", "T1070.006", _ids(4616),
+         {"ProcessName": rx(USER_DIR + r"|\\(powershell|pwsh|cmd|mshta|wscript|cscript)\.exe$")},
+         provider="security-auditing"),
+    Rule("security-service-stopped", "Defender, firewall, Sysmon or Event Log service stopped or disabled", "high",
+         "defense-evasion", "T1562.001", _ids(7036, 7040),
+         {"param1": rx(r"^((microsoft |windows )?defender|windows firewall|windows defender firewall|sysmon\d*$|"
+                       r"windows event log$)")},
+         provider="service control manager",
+         check=lambda m: _security_service_down(m)),
     # ---------------- credential access ----------------
     # Any mask with VM_READ (0x10) or DUP_HANDLE (0x40) can expose LSASS memory.
     Rule("lsass-access", "LSASS memory opened by another process", "critical", "credential-access", "T1003.001",
@@ -497,12 +610,57 @@ RULES: tuple[Rule, ...] = (
          {"SubjectUserName": rx(r"\$$")}),
     Rule("remote-exec-tools", "Remote execution tool on the command line", "high", "lateral-movement", "T1021",
          PROC, {CMD: rx(r"(psexec|paexec|winrs(\.exe)?\s+-r|invoke-command\s+-computername|enter-pssession|"
-                        r"wmic\s+/node:|mstsc.*/restrictedadmin|sharprdp|invoke-wmimethod.*-computer)")}),
+                        r"wmic\s+/node:|mstsc.*/restrictedadmin|sharprdp|invoke-(wmimethod|cimmethod).*-computer|"
+                        r"new-(pssession|cimsession)\s.*-computername|schtasks(\.exe)?\s.*/create\s.*/s\s+\S|"
+                        r"\bsc(\.exe)?\s+\\\\\S+\s+(create|config|start)\b|\breg(\.exe)?\s+(add|delete)\s+\\\\\S|"
+                        r"\b(wmiexec|smbexec|atexec|dcomexec|crackmapexec|netexec)(\.py)?\b|"
+                        r"gettypefrom(progid|clsid)\(\s*['\"][^'\"]{1,80}['\"]\s*,\s*['\"$])")}),
     Rule("rdp-tunnel", "RDP tunnelled through a local port forward", "high", "command-and-control", "T1572",
          _ids(4624, 1149), {"IpAddress|Param3": rx(r"^(127\.0\.0\.1|::1)$")},
          check=lambda m: str(m.get("event_id")) == "1149" or str(m.get("LogonType")) == "10"),
     Rule("winrm-shell", "Remote WinRM shell opened on this host", "medium", "lateral-movement", "T1021.006",
-         _ids(91), {}, provider="winrm"),
+         _ids(91, 169), {}, provider="winrm"),
+    Rule("ps-remote-session", "Remote PowerShell session hosted on this machine", "medium", "lateral-movement",
+         "T1021.006", _ids(400, 403, 600), {"Data|HostApplication": rx(r"hostname=serverremotehost|wsmprovhost")},
+         provider="powershell"),
+    Rule("pth-ntlm-logon", "Network logon with NTLM and no session key (pass-the-hash pattern)", "medium",
+         "lateral-movement", "T1550.002", _ids(4624),
+         {"LogonType": rx(r"^3$"), "AuthenticationPackageName": rx(r"^ntlm$"), "LogonProcessName": rx(r"^ntlmssp"),
+          "KeyLength": rx(r"^0$")},
+         {"TargetUserName": rx(r"^anonymous logon$|\$$"), "IpAddress": rx(LOCAL_ADDRESS)},
+         provider="security-auditing"),
+    Rule("rdp-inbound", "Remote Desktop session from another host", "medium", "lateral-movement", "T1021.001",
+         _ids(4624, 4778, 1149, 21, 25, 131),
+         {"IpAddress|ClientAddress|Param3|Address|ClientIP": rx(r"^[0-9a-f.:\[\]]+$")},
+         {"IpAddress|ClientAddress|Param3|Address|ClientIP": rx(LOCAL_ADDRESS + r"|^(127\.0\.0\.1|::1|\[::1\]):\d+$")},
+         check=lambda m: _rdp_event(m)),
+    Rule("psexec-service-process", "PsExec-style remote service ran or started a process", "high",
+         "lateral-movement", "T1569.002", PROC, {},
+         check=lambda m: any(_REMOTE_SERVICE_EXE.search(str(_field(m, names) or "")) for names in (PARENT, IMAGE))),
+    Rule("smb-file-drop", "Program or script written to disk by the SMB server (remote file copy)", "high",
+         "lateral-movement", "T1570", _ids(11), {"Image": rx(r"^system$"), "TargetFilename": rx(EXEC_EXT)},
+         provider=SYSMON),
+    Rule("admin-share-access", "Administrative share opened from another host", "medium", "lateral-movement",
+         "T1021.002", _ids(5140), {"ShareName": rx(r"\\(admin|[c-z])\$$")},
+         {"SubjectUserName": rx(r"\$$"), "IpAddress": rx(LOCAL_ADDRESS)}, provider="security-auditing"),
+    Rule("admin-share-cmd", "Administrative share of another host mounted or used from the command line", "medium",
+         "lateral-movement", "T1021.002", PROC,
+         {CMD: rx(r"\b(net1?(\.exe)?\s+use|new-psdrive|new-smbmapping)\s.*\\\\[^\\\s]+\\(admin|[c-z])\$")}),
+    # wmiexec/smbexec-style tools run "cmd /Q /c <command> 1> \\127.0.0.1\ADMIN$\__<n>" and read the output back.
+    Rule("remote-exec-output-share", "Command output written to an admin share for a remote caller (wmiexec/smbexec)",
+         "high", "lateral-movement", "T1021.002", PROC | _ids(7045, 4697),
+         {CMD + "|ImagePath|ServiceFileName": rx(r">\s*\\\\(127\.0\.0\.1|localhost)\\(admin|[c-z])\$\\__?[\w.]{1,40}")}),
+    Rule("dcom-mmc","MMC started as a DCOM server (MMC20.Application lateral movement)", "medium",
+         "lateral-movement", "T1021.003", PROC, {IMAGE: rx(r"\\mmc\.exe$"), CMD: rx(r"\s-embedding\b")}),
+    Rule("remote-exec-script", "Script block uses a remote execution tool or remote DCOM object", "high",
+         "lateral-movement", "T1021", _ids(4104, 4103, 800),
+         {"ScriptBlockText|Payload|Data": rx(r"invoke-(smbexec|wmiexec|psexec|dcom|thehash|sharprdp|wmicommand)\b|"
+                                             r"gettypefrom(progid|clsid)\(\s*['\"][^'\"]{1,80}['\"]\s*,\s*['\"$]")}),
+    Rule("remote-access-registry", "Remote Desktop or Restricted Admin (pass-the-hash over RDP) enabled in the "
+         "registry", "medium", "lateral-movement", "T1021.001", _ids(12, 13, 14, 4657), {},
+         check=lambda m: _remote_access_enabled(m)),
+    Rule("rdp-hijack", "Remote Desktop session taken over with tscon", "high", "lateral-movement", "T1563.002",
+         PROC | _ids(7045, 4697), {CMD + "|ImagePath|ServiceFileName": rx(r"\btscon(\.exe)?\s+\d+\s+/dest")}),
     Rule("dcom-remote-launch", "Remote DCOM activation attempted", "medium", "lateral-movement", "T1021.003",
          _ids(10016), {"param2": rx(r"^remote$"), "param3": rx(r"launch|activation")}, provider="distributedcom"),
     Rule("winrm-spawn", "WinRM host started a shell (remote PowerShell)", "high", "lateral-movement", "T1021.006",
@@ -573,6 +731,110 @@ def _renamed(metadata: dict[str, Any]) -> bool:
     image = str(metadata.get("Image") or "").replace("/", "\\").rsplit("\\", 1)[-1].lower()
     original = str(metadata.get("OriginalFileName") or "").lower().removesuffix(".mui")
     return bool(image and original) and image != original
+
+
+_TIMESTOMP_ACTOR = re.compile(USER_DIR + "|" + SCRIPT_HOSTS, re.IGNORECASE)
+_EXEC_EXT = re.compile(EXEC_EXT, re.IGNORECASE)
+
+
+def _timestomp(metadata: dict[str, Any]) -> bool:
+    """A script host or user-folder program rewrote a file time, or any process did so on a program or script."""
+    image = str(_field(metadata, "Image") or "")
+    target = str(_field(metadata, "TargetFilename") or "")
+    return bool(_TIMESTOMP_ACTOR.search(image) or _EXEC_EXT.search(target))
+
+
+# Registry values that switch a security control off, by the data that does it.
+_REG_WEAK_ONE = re.compile(r"\\windows defender\\(policy manager\\|real-time protection\\|spynet\\|features\\)?"
+                           r"disable(antispyware|antivirus|realtimemonitoring|behaviormonitoring|ioavprotection|"
+                           r"onaccessprotection|scriptscanning|scanonrealtimeenable|blockatfirstseen)$", re.IGNORECASE)
+_REG_WEAK_ZERO = re.compile(r"\\policies\\system\\(enablelua|consentpromptbehavioradmin)$|"
+                            r"\\scriptblocklogging\\enablescriptblocklogging$|\\modulelogging\\enablemodulelogging$|"
+                            r"\\winevt\\channels\\[^\\]+\\enabled$|\\\.netframework\\etwenabled$|"
+                            r"\\firewallpolicy\\(standard|domain|public)profile\\enablefirewall$|"
+                            r"\\windowsfirewall\\(standard|domain|public)profile\\enablefirewall$|"
+                            r"\\terminal server\\winstations\\rdp-tcp\\userauthentication$", re.IGNORECASE)
+_REG_WEAK_FOUR = re.compile(r"\\services\\(windefend|sense|wdboot|wdfilter|wdnisdrv|wdnissvc|securityhealthservice|"
+                            r"wscsvc|mpssvc|eventlog|sysmon\d*|sysmondrv)\\start$", re.IGNORECASE)
+_REG_WEAK_ANY = re.compile(r"\\windows defender\\exclusions\\(paths|extensions|processes|ipaddresses)\\[^\\]+",
+                           re.IGNORECASE)
+
+
+_REG_NUMBER = re.compile(r"(0x[0-9a-f]+|\b\d+)\)?$", re.IGNORECASE)
+
+
+def _registry_value(metadata: dict[str, Any]) -> tuple[str, str] | None:
+    """(key\\value path, data) from a Sysmon registry event or a Security 4657 event."""
+    provider = str(metadata.get("provider") or "").lower() + " " + str(metadata.get("channel") or "").lower()
+    if str(metadata.get("event_id")) == "4657":
+        if "security-auditing" not in provider:
+            return None
+        key = str(_field(metadata, "ObjectName") or "")
+        path = key + "\\" + str(_field(metadata, "ObjectValueName") or "")
+        return path, str(_field(metadata, "NewValue") or "")
+    if SYSMON not in provider:
+        return None
+    return str(_field(metadata, "TargetObject") or ""), str(_field(metadata, "Details") or "")
+
+
+def _registry_data_is(data: str, number: int) -> bool:
+    """Registry data equal to ``number`` as Sysmon (``DWORD (0x00000004)``) or 4657 (``4``) writes it."""
+    match = _REG_NUMBER.search(data.strip()[-32:])
+    if match is None:
+        return False
+    text = match.group(1).lower()
+    return int(text, 16 if text.startswith("0x") else 10) == number
+
+
+def _registry_weakened(metadata: dict[str, Any]) -> bool:
+    found = _registry_value(metadata)
+    if found is None:
+        return False
+    path, data = found
+    if _REG_WEAK_ANY.search(path):
+        return True
+    if _REG_WEAK_ONE.search(path):
+        return _registry_data_is(data, 1)
+    if _REG_WEAK_ZERO.search(path):
+        return _registry_data_is(data, 0)
+    if _REG_WEAK_FOUR.search(path):
+        return _registry_data_is(data, 4)
+    return False
+
+
+_REG_REMOTE_ACCESS = re.compile(r"\\control\\lsa\\disablerestrictedadmin$|\\terminal server\\fdenytsconnections$",
+                                re.IGNORECASE)
+
+
+def _remote_access_enabled(metadata: dict[str, Any]) -> bool:
+    found = _registry_value(metadata)
+    return found is not None and bool(_REG_REMOTE_ACCESS.search(found[0])) and _registry_data_is(found[1], 0)
+
+
+def _security_service_down(metadata: dict[str, Any]) -> bool:
+    """Start type set to disabled, or a firewall/Sysmon stop. Defender restarts itself on every platform update,
+    so a Defender stop alone is not reported."""
+    event_id = str(metadata.get("event_id"))
+    if event_id == "7040":
+        return str(metadata.get("param3", "")).strip().lower() == "disabled"
+    name = str(metadata.get("param1", "")).lower()
+    return (event_id == "7036" and str(metadata.get("param2", "")).strip().lower() == "stopped"
+            and ("firewall" in name or name.startswith("sysmon")))
+
+
+_REMOTE_SERVICE_EXE = re.compile(r"\\(psexesvc|paexec[\w-]{0,40}|remcomsvc|csexecsvc|xcmdsvc)\.exe$", re.IGNORECASE)
+# Which log reports an RDP session, and how.
+_RDP_SOURCES = {"4624": "security-auditing", "4778": "security-auditing", "1149": "remoteconnectionmanager",
+                "21": "localsessionmanager", "25": "localsessionmanager", "131": "rdpcorets"}
+
+
+def _rdp_event(metadata: dict[str, Any]) -> bool:
+    event_id = str(metadata.get("event_id"))
+    provider = (str(metadata.get("provider") or "") + " " + str(metadata.get("channel") or "")).lower()
+    source = _RDP_SOURCES.get(event_id)
+    if source is None or source not in provider:
+        return False
+    return event_id != "4624" or str(metadata.get("LogonType")) == "10"
 
 
 def _field(metadata: dict[str, Any], names: str) -> str | None:

@@ -197,11 +197,13 @@ def test_windows_rules_stay_fast_on_hostile_fields() -> None:
         fields = {name: text for name in (
             "CommandLine", "Image", "ParentImage", "TargetObject", "Details", "ScriptBlockText", "Data", "PipeName",
             "TargetFilename", "ImageLoaded", "SourceImage", "TargetImage", "RelativeTargetName", "ObjectName",
-            "url", "ServicePrincipalNames", "AllowedToDelegateTo", "AttributeLDAPDisplayName", "ImagePath")}
-        for event_id in (1, 3, 7, 10, 11, 13, 17, 59, 400, 800, 4104, 4663, 4688, 4738, 5136, 5145, 7045):
+            "url", "ServicePrincipalNames", "AllowedToDelegateTo", "AttributeLDAPDisplayName", "ImagePath",
+            "ObjectValueName", "NewValue", "New Value", "ApplicationPath", "ClientIP", "Address", "ShareName")}
+        for event_id in (1, 2, 3, 6, 7, 10, 11, 13, 15, 17, 25, 59, 131, 400, 800, 2004, 4104, 4616, 4624, 4657,
+                         4663, 4688, 4738, 5007, 5136, 5140, 5145, 7036, 7045):
             event = ArtifactEvent("e", "2026-01-01T00:00:00Z", "t", "", "x", {
                 "event_id": event_id, "provider": "Microsoft-Windows-Sysmon Microsoft-Windows-Security-Auditing "
-                "PowerShell Service Control Manager Bits-Client", **fields})
+                "PowerShell Service Control Manager Bits-Client Windows Defender Firewall RdpCoreTS WinRM", **fields})
             started = time.perf_counter()
             for rule in RULES:
                 rule_matches(rule, event)
