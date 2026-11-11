@@ -63,3 +63,19 @@ rule was written for it.
 | 25 | Analyst workflow: `status` lists pending findings with severity, title and citation; `decide` takes several ids at once (each still logged separately; no "accept all") | - | - | - |
 | 26 | Draft gains an attack chain: medium-or-higher findings grouped by ATT&CK tactic in kill-chain order | - | - | - |
 | 27 | Secrets sweep: chat webhooks, Google API keys, cloud storage keys, payment secret keys, JWTs, `user:rid:lm:nt` hash dumps, credential-dumping tool names (medium: backup logs mention ntds.dit). End-to-end benchmark re-run through the full autopilot with the verifier | 87.8% | 49.4% | 278 files in 36.6 s (was 958 s at loop 8, 41.0% / 9.2%) |
+
+## False alarms
+
+All three real-log sets are attacks, so they cannot show false alarms.
+`lab/benign.py` generates ordinary Windows activity with real field names
+(Office, browsers, updaters, Teams/OneDrive in AppData, EDR agents reading
+LSASS, vendor service installs, admin scripts, logons and typos) and counts
+medium-or-higher findings. I wrote this generator, so "0" means the rules do
+not fire on the ordinary activity I modelled, not that a real network will
+produce no false alarms.
+
+| Loop | Change | False alarms in 20,000 benign events | Dev / Dev2 / Hold-out detected |
+| --- | --- | --- | --- |
+| 28 | Benign benchmark built | 70 (35 per 10k) | 87.8% / 89.2% / 60.1% |
+| 29 | Volume rules use sliding time windows per source (guessing 10 in 10 min, spraying 5 accounts in 15 min from one IP); recon needs 3 different commands in 5 min; service-host shell only when it has no arguments | 30 | 87.8% / 89.2% / 60.1% |
+| 30 | LSASS reads by installed security products excluded (by install folder, so a renamed tool elsewhere still fires); autoruns that start an installed or well-known app with no script, LOLBin or temp path are not reported; well-known per-user apps (OneDrive, Teams, Zoom...) connecting out are not reported | 0 | 87.8% / 89.2% / 60.1% |

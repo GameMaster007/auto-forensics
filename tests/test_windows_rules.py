@@ -97,6 +97,13 @@ HITS = [
     ("gpp-password-read", ev(5145, "Microsoft-Windows-Security-Auditing", ShareName=r"\\*\SYSVOL",
                              RelativeTargetName=r"corp.local\Policies\{X}\Machine\Preferences\Groups\Groups.xml")),
     ("ntds-sam-file-access", ev(4663, "Microsoft-Windows-Security-Auditing", ObjectName=r"C:\Windows\NTDS\ntds.dit", ProcessName=r"C:\Temp\x.exe")),
+    ("lsass-access", ev(10, SourceImage=r"C:\Users\a\Downloads\CSFalconService.exe",
+                        TargetImage=r"C:\Windows\system32\lsass.exe", GrantedAccess="0x1010")),
+    ("registry-autorun", ev(13, TargetObject=r"HKU\S-1\Software\Microsoft\Windows\CurrentVersion\Run\Updater",
+                            Details=r"C:\Program Files\Updater\up.exe -c powershell -enc AAAA")),
+    ("registry-autorun", ev(13, TargetObject=r"HKU\S-1\Software\Microsoft\Windows\CurrentVersion\Run\x",
+                            Details=r"C:\Users\a\AppData\Roaming\svc\svchost.exe")),
+    ("user-writable-network", ev(3, Image=r"C:\Users\a\AppData\Roaming\svc\svchost.exe", DestinationPort="443")),
     ("lsass-dump-cmd", ev(1, CommandLine=r"rundll32.exe C:\windows\System32\comsvcs.dll, MiniDump 624 C:\t\l.dmp full")),
     ("hive-dump", ev(1, CommandLine=r"reg save HKLM\SAM C:\temp\sam.save")),
     ("ntds-dump", ev(1, CommandLine='ntdsutil "ac i ntds" "ifm" "create full c:\\temp" q q')),
@@ -146,6 +153,14 @@ MISSES = [
     ("lolbin-proxy", ev(1, CommandLine=r"rundll32.exe shell32.dll,Control_RunDLL desk.cpl")),
     ("odd-parent-shell", ev(1, ParentImage=r"C:\Windows\explorer.exe", Image=r"C:\Windows\System32\cmd.exe")),
     ("pipe-impersonation", ev(17, PipeName=r"\spoolss")),
+    ("lsass-access", ev(10, SourceImage=r"C:\Program Files\CrowdStrike\CSFalconService.exe",
+                        TargetImage=r"C:\Windows\system32\lsass.exe", GrantedAccess="0x1010")),
+    ("registry-autorun", ev(13, TargetObject=r"HKU\S-1\Software\Microsoft\Windows\CurrentVersion\Run\OneDrive",
+                            Details=r'"C:\Users\a\AppData\Local\Microsoft\OneDrive\OneDrive.exe" /background')),
+    ("registry-autorun", ev(13, TargetObject=r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\SecurityHealth",
+                            Details=r"%windir%\system32\SecurityHealthSystray.exe")),
+    ("user-writable-network", ev(3, Image=r"C:\Users\a\AppData\Local\Microsoft\OneDrive\OneDrive.exe",
+                                 DestinationPort="443")),
     ("ad-delegation-set", ev(4742, "Microsoft-Windows-Security-Auditing", AllowedToDelegateTo="-")),
     ("ad-sensitive-attribute", ev(5136, "Microsoft-Windows-Security-Auditing", AttributeLDAPDisplayName="description")),
     ("ntds-sam-file-access", ev(4663, "Microsoft-Windows-Security-Auditing", ObjectName=r"C:\Windows\NTDS\ntds.dit",
@@ -232,10 +247,42 @@ def test_volume_rules_need_enough_events_and_accounts() -> None:
     sec = "Microsoft-Windows-Security-Auditing"
     few = [ev(4625, sec, row=i, TargetUserName="bob") for i in range(1, 5)]
     assert not [f for f in detector.detect(few, [], []) if f.title.startswith("Repeated failed")]
-    many = [ev(4625, sec, row=i, TargetUserName="bob") for i in range(1, 13)]
+    def at(event: ArtifactEvent, second: int) -> ArtifactEvent:
+        event.timestamp = f"2026-03-01T10:{second // 60:02d}:{second % 60:02d}.000Z"
+        return event
+
+    many = [at(ev(4625, sec, row=i, TargetUserName="bob"), i * 5) for i in range(1, 13)]
     found = [f for f in detector.detect(many, [], []) if f.title.startswith("Repeated failed")]
     assert len(found) == 1 and found[0].citations[0].row == 10
     assert not [f for f in detector.detect(many, [], []) if "spraying" in f.title]
-    spray = [ev(4625, sec, row=i, TargetUserName=f"user{i}") for i in range(1, 7)]
+    # The same twelve failures spread over a day are ordinary typos.
+    spread = []
+    for i in range(1, 13):
+        event = ev(4625, sec, row=i, TargetUserName="bob")
+        event.timestamp = f"2026-03-01T{8 + i % 10:02d}:{i:02d}:00.000Z"
+        spread.append(event)
+    assert not [f for f in detector.detect(spread, [], []) if f.title.startswith("Repeated failed")]
+    spray = [at(ev(4625, sec, row=i, TargetUserName=f"user{i}", IpAddress="10.9.9.9"), i) for i in range(1, 7)]
     sprayed = [f for f in detector.detect(spray, [], []) if "spraying" in f.title]
     assert len(sprayed) == 1 and "6 accounts" in sprayed[0].recommendation
+    no_time = [ev(4625, sec, row=i, TargetUserName=f"user{i}") for i in range(1, 7)]
+    assert not [f for f in detector.detect(no_time, [], []) if "spraying" in f.title]
+
+
+def test_recon_needs_a_burst_and_service_shell_needs_no_arguments() -> None:
+    def at(event: ArtifactEvent, second: int) -> ArtifactEvent:
+        event.timestamp = f"2026-03-01T10:00:{second:02d}.000Z"
+        return event
+
+    detector = WindowsRuleDetector()
+    one = [at(ev(1, row=1, CommandLine="ipconfig /all", ParentImage=r"C:\Windows\System32\cmd.exe"), 1)]
+    assert not [f for f in detector.detect(one, [], []) if "reconnaissance" in f.title]
+    burst = [at(ev(1, row=i, CommandLine=cmd, ParentImage=r"C:\Windows\System32\cmd.exe"), i)
+             for i, cmd in enumerate(["ipconfig /all", "systeminfo", "net share", "arp -a"], start=1)]
+    assert [f for f in detector.detect(burst, [], []) if "reconnaissance" in f.title]
+    rule = RULE["svchost-shell"]
+    task = ev(1, ParentImage=r"C:\Windows\System32\svchost.exe", Image=r"C:\Windows\System32\cmd.exe",
+              CommandLine=r"C:\Windows\system32\cmd.exe /c C:\scripts\nightly.bat")
+    bare = ev(1, ParentImage=r"C:\Windows\System32\svchost.exe", Image=r"C:\Windows\System32\cmd.exe",
+              CommandLine=r"C:\Windows\system32\cmd.exe")
+    assert not rule_matches(rule, task) and rule_matches(rule, bare)

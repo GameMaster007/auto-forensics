@@ -18,7 +18,9 @@ re-reads the cited record; no evidence text becomes a claim.
 from __future__ import annotations
 
 import re
+from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Callable
 
 from .citations import citation_from_event
@@ -55,6 +57,10 @@ class Rule:
     min_count: int = 1
     distinct: str = ""
     min_distinct: int = 1
+    # With ``window_seconds`` the counts above must fall inside one sliding
+    # time window, per value of ``group_by`` (for example per source IP).
+    window_seconds: int = 0
+    group_by: str = ""
 
     def applies(self, event_id: int, provider: str) -> bool:
         return event_id in self.event_ids and (not self.provider or self.provider in provider)
@@ -72,6 +78,16 @@ PARENT = "ParentImage|ParentProcessName"
 # Access masks are written with or without leading zeros (0x1fffff, 0x001fffff).
 LSASS_ACCESS = r"^0x0*(1010|1410|1438|143a|147a|1fffff|1f0fff|1f1fff|1f2fff|1f3fff|40|1400|410|10)$"
 VM_READ = 0x10
+# Endpoint security products read LSASS as part of normal work. Matched by their
+# install folder, not by name alone, so a renamed tool elsewhere still fires.
+INSTALLED_SECURITY_TOOL = (r"^c:\\program files( \(x86\))?\\(crowdstrike|windows defender|"
+                           r"windows defender advanced threat protection|sentinelone|cylance|carbon black|"
+                           r"confer|sophos|eset|kaspersky lab|mcafee|symantec|trend micro|bitdefender|"
+                           r"palo alto networks|vmware\\vmware tools|microsoft monitoring agent)\\")
+# Per-user apps that install into AppData by design.
+KNOWN_USER_APPS = (r"\\appdata\\local\\(microsoft\\(onedrive|teams|edge|windowsapps)|slack|discord|"
+                   r"zoom|webex|grammarly|programs\\(microsoft vs code|python|opera))\\|"
+                   r"\\appdata\\roaming\\(zoom|spotify|dropbox)\\")
 USER_DIR = r"\\(temp|tmp|downloads|users\\public|perflogs|desktop|appdata\\(local|roaming)|programdata)\\"
 AUTO_ELEVATE = (r"\\(eventvwr|fodhelper|computerdefaults|sdclt|slui|wsreset|cmstp|changepk|sysprep|wusa|"
                 r"pkgmgr|dism|mmc|taskmgr|osk|perfmon|cliconfg|winsat|bthudtask|dccw|iscsicpl|"
@@ -115,8 +131,10 @@ RULES: tuple[Rule, ...] = (
                            r"umworkerprocess|winlogon)\.exe$"),
                 IMAGE: rx(r"\\(cmd|powershell|pwsh|wscript|cscript|mshta|rundll32|regsvr32|certutil|bitsadmin|"
                           r"whoami|net1?)\.exe$")}),
-    Rule("svchost-shell", "Shell started directly by a service host", "medium", "execution", "T1059", PROC,
-         {PARENT: rx(r"\\svchost\.exe$"), IMAGE: rx(r"\\(cmd|powershell|pwsh)\.exe$")}),
+    # Scheduled tasks start shells with arguments; a bare interactive shell under svchost is a reverse-shell pattern.
+    Rule("svchost-shell", "Interactive shell started directly by a service host", "medium", "execution", "T1059", PROC,
+         {PARENT: rx(r"\\svchost\.exe$"), IMAGE: rx(r"\\(cmd|powershell|pwsh)\.exe$"),
+          CMD: rx(r"^\"?([a-z]:\\[^\"]*\\)?(cmd|powershell|pwsh)(\.exe)?\"?\s*$")}),
     Rule("wmi-spawn", "WMI provider host started a shell (remote WMI execution)", "high", "execution", "T1047", PROC,
          {PARENT: rx(r"\\wmiprvse\.exe$"), IMAGE: rx(r"\\(cmd|powershell|pwsh|rundll32|mshta|regsvr32)\.exe$")}),
     Rule("user-writable-exec", "Program ran from a user-writable folder", "medium", "execution", "T1204", PROC,
@@ -154,7 +172,8 @@ RULES: tuple[Rule, ...] = (
                              r"\\explorer\\(user )?shell folders\\(common )?startup|"
                              r"\\control\\session manager\\bootexecute|"
                              r"\\currentcontrolset\\control\\lsa\\(security packages|notification packages|"
-                             r"authentication packages)|\\netsh\\")}, provider=SYSMON),
+                             r"authentication packages)|\\netsh\\")}, provider=SYSMON,
+         check=lambda m: not _benign_autorun(m)),
     Rule("registry-ifeo", "Debugger or exit monitor set for a program (IFEO hijack)", "high", "persistence",
          "T1546.012", _ids(12, 13, 14),
          {"TargetObject": rx(r"\\image file execution options\\[^\\]+\\(debugger|globalflag)|"
@@ -314,7 +333,7 @@ RULES: tuple[Rule, ...] = (
     Rule("lsass-access", "LSASS memory opened by another process", "critical", "credential-access", "T1003.001",
          _ids(10), {"TargetImage": rx(r"\\lsass\.exe$")},
          {"SourceImage": rx(r"\\(wmiprvse|svchost|msmpeng|mssense|csrss|wininit|lsm|taskmgr|vmtoolsd|"
-                            r"mrt|searchindexer|wmiadap)\.exe$")}, provider=SYSMON,
+                            r"mrt|searchindexer|wmiadap)\.exe$|" + INSTALLED_SECURITY_TOOL)}, provider=SYSMON,
          check=lambda m: bool(_mask(m.get("GrantedAccess")) & (VM_READ | 0x40))),
     Rule("lsass-handle", "LSASS opened with read access (Security audit)", "critical", "credential-access",
          "T1003.001", _ids(4656, 4663), {"ObjectName": rx(r"\\lsass\.exe$")},
@@ -409,27 +428,30 @@ RULES: tuple[Rule, ...] = (
          provider="security-auditing"),
     # ---------------- volume rules ----------------
     Rule("password-guessing", "Repeated failed logons (password guessing)", "medium", "credential-access", "T1110.001",
-         _ids(4625, 4771, 4776), {}, provider="security-auditing", min_count=10,
+         _ids(4625, 4771, 4776), {}, provider="security-auditing", min_count=10, window_seconds=600,
+         group_by="TargetUserName",
          check=lambda m: str(m.get("event_id")) == "4625" or str(m.get("Status", "")).lower() not in {"0x0", ""}),
     Rule("password-spray", "Failed logons across many accounts (password spraying)", "high", "credential-access",
          "T1110.003", _ids(4625, 4771, 4776), {}, provider="security-auditing", min_count=5,
-         distinct="TargetUserName", min_distinct=5,
+         distinct="TargetUserName", min_distinct=5, window_seconds=900, group_by="IpAddress",
          check=lambda m: str(m.get("event_id")) == "4625" or str(m.get("Status", "")).lower() not in {"0x0", ""}),
     Rule("account-lockouts", "Several accounts locked out", "medium", "credential-access", "T1110", _ids(4740), {},
-         provider="security-auditing", min_count=3, distinct="TargetUserName", min_distinct=2),
+         provider="security-auditing", min_count=3, distinct="TargetUserName", min_distinct=2, window_seconds=3600),
     Rule("mssql-brute-force", "Repeated failed SQL Server logins", "medium", "credential-access", "T1110",
-         _ids(18456), {}, provider="mssql", min_count=5),
+         _ids(18456), {}, provider="mssql", min_count=5, window_seconds=600),
     # ---------------- discovery ----------------
     Rule("domain-discovery", "Domain, account or trust discovery command", "medium", "discovery", "T1087.002", PROC,
          {CMD: rx(r"\bnet1?(\.exe)?\s+(user|group|localgroup|accounts)\b.*(/domain|admins)|nltest.*/(dclist|"
                   r"domain_trusts|dsgetdc)|dsquery|adfind|get-addomain|get-aduser|get-netuser|"
                   r"get-domain(user|group|computer|controller)|sharphound|bloodhound|"
                   r"\bsetspn(\.exe)?\s+-[ql]|klist\s+tgt|whoami\s+/(all|groups|priv)")}),
-    Rule("recon-burst", "Host reconnaissance command", "medium", "discovery", "T1082", PROC,
+    # One recon command is everyday admin work; several different ones in a few minutes is a pattern.
+    Rule("recon-burst", "Burst of host reconnaissance commands", "medium", "discovery", "T1082", PROC,
          {CMD: rx(r"\b(systeminfo|quser|qwinsta|tasklist\s+/(v|svc)|ipconfig\s+/all|arp\s+-a|route\s+print|"
                   r"netstat\s+-(an|ano)|net\s+(share|session|view|use)|wmic\s+.*(qfe|product|service|"
                   r"useraccount|group)\s|get-wmiobject|reg\s+query\s+hk)")},
-         {PARENT: rx(r"\\(explorer)\.exe$")}),
+         {PARENT: rx(r"\\(explorer)\.exe$")}, min_count=3, distinct="CommandLine|ProcessCommandLine",
+         min_distinct=3, window_seconds=300),
     Rule("local-group-enum", "Local users or privileged groups enumerated by a command-line tool", "medium",
          "discovery", "T1069.001", _ids(4798, 4799),
          {"CallerProcessName": rx(r"\\(net1?|powershell|pwsh|wmic|cmd|rundll32|dsquery|whoami)\.exe$|^-$")},
@@ -475,7 +497,7 @@ RULES: tuple[Rule, ...] = (
           "DestinationPort": rx(r"^(53|137|138|445|135|389|88)$")}, provider=SYSMON),
     Rule("user-writable-network", "Program in a user-writable folder connected out", "high", "command-and-control",
          "T1071", _ids(3), {"Image": rx(r"\\(temp|tmp|downloads|users\\public|perflogs|appdata)\\")},
-         {"DestinationPort": rx(r"^(53|137|138)$")}, provider=SYSMON),
+         {"DestinationPort": rx(r"^(53|137|138)$"), "Image": rx(KNOWN_USER_APPS)}, provider=SYSMON),
     Rule("tool-transfer-cmd", "Tool transfer with a system utility", "medium", "command-and-control", "T1105", PROC,
          {CMD: rx(r"(curl|wget)(\.exe)?\s+.*https?://|copy\s+\\\\[^\\]+\\[a-z]\$|"
                   r"expand\s+\\\\|esentutl.*/y\s+\\\\")}),
@@ -488,6 +510,26 @@ RULES: tuple[Rule, ...] = (
          {CMD: rx(r"(rclone(\.exe)?\s+(copy|sync)|megacmd|mega-put|dropbox_uploader|"
                   r"ftp(\.exe)?\s+-s:|pscp|scp\s+.*@)")}),
 )
+
+
+_AUTORUN_RISKY = re.compile(
+    r"(powershell|pwsh|cmd(\.exe)?\s*/c|wscript|cscript|mshta|rundll32|regsvr32|certutil|bitsadmin|"
+    r"\\(temp|tmp|users\\public|perflogs|programdata|downloads)\\|\.(vbs|js|jse|hta|bat|ps1|scr)\b|https?://)",
+    re.IGNORECASE)
+_AUTORUN_INSTALLED = re.compile(
+    r"^\s*\"?(c:\\program files( \(x86\))?\\|c:\\windows\\system32\\|%windir%\\system32\\|"
+    r"%programfiles(\(x86\))?%\\)|" + KNOWN_USER_APPS, re.IGNORECASE)
+
+
+def _benign_autorun(metadata: dict[str, Any]) -> bool:
+    """An autorun value that starts an installed or well-known app, with no script or LOLBin in it."""
+    target = str(metadata.get("TargetObject") or "").lower()
+    if "\\run" not in target:
+        return False  # Winlogon, LSA, BootExecute and similar are always worth a look.
+    details = str(metadata.get("Details") or "")
+    if not details or details.lower() in {"binary data", "(empty)"} or _AUTORUN_RISKY.search(details):
+        return False
+    return bool(_AUTORUN_INSTALLED.search(details))
 
 
 def _renamed(metadata: dict[str, Any]) -> bool:
@@ -532,6 +574,43 @@ def rule_matches(rule: Rule, event: ArtifactEvent) -> bool:
     return rule.check is None or rule.check(event.metadata)
 
 
+def _seconds(timestamp: str | None) -> float | None:
+    if not timestamp:
+        return None
+    try:
+        return datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+class _Windows:
+    """Sliding time windows for volume rules, per rule, file, and group."""
+
+    def __init__(self) -> None:
+        self._events: dict[tuple[str, str, str], deque[tuple[float, str]]] = {}
+
+    def add(self, rule: Rule, source: str, event: ArtifactEvent) -> bool:
+        """Record one match; return True once the window holds enough events."""
+        moment = _seconds(event.timestamp)
+        if moment is None:
+            return False
+        group = str(_field(event.metadata, rule.group_by) or "") if rule.group_by else ""
+        value = str(_field(event.metadata, rule.distinct) or "").lower() if rule.distinct else ""
+        queue = self._events.setdefault((rule.rule_id, source, group.lower()), deque())
+        queue.append((moment, value))
+        # Events are not always in time order; keep the window sorted and trim it.
+        if len(queue) > 1 and queue[-2][0] > moment:
+            ordered = sorted(queue)
+            queue.clear()
+            queue.extend(ordered)
+        latest = queue[-1][0]
+        while queue and latest - queue[0][0] > rule.window_seconds:
+            queue.popleft()
+        if len(queue) < rule.min_count:
+            return False
+        return not rule.distinct or len({item[1] for item in queue}) >= rule.min_distinct
+
+
 class WindowsRuleDetector:
     """Apply ``RULES`` to parsed Windows events. One finding per rule per file."""
 
@@ -549,6 +628,7 @@ class WindowsRuleDetector:
         counts: dict[tuple[str, str], int] = {}
         values: dict[tuple[str, str], set[str]] = {}
         firsts: dict[tuple[str, str], Finding] = {}
+        windows = _Windows()
         for event in artifacts:
             if _event_id(event) is None:
                 continue
@@ -561,13 +641,17 @@ class WindowsRuleDetector:
                 key = (rule.rule_id, citation.source_file)
                 counts[key] = counts.get(key, 0) + 1
                 if rule.distinct:
-                    values.setdefault(key, set()).add(str(event.metadata.get(rule.distinct) or "").lower())
+                    values.setdefault(key, set()).add(str(_field(event.metadata, rule.distinct) or "").lower())
                 if key in firsts:
                     continue
-                if counts[key] < rule.min_count:
-                    continue
-                if rule.distinct and len(values.get(key, ())) < rule.min_distinct:
-                    continue
+                if rule.window_seconds:
+                    if not windows.add(rule, citation.source_file, event):
+                        continue
+                else:
+                    if counts[key] < rule.min_count:
+                        continue
+                    if rule.distinct and len(values.get(key, ())) < rule.min_distinct:
+                        continue
                 finding = Finding(
                     finding_id=stable_id("win", rule.rule_id, citation.sha256, citation.row),
                     title=rule.title,
