@@ -64,13 +64,32 @@ and a coordinator that writes a cited draft without quoting evidence
 text. Nothing can be exported until an analyst has accepted or rejected
 every finding and signed.
 
+### The easy way: double-click
+
+1. Install Python 3.10 or newer (on Windows, tick "Add python.exe to PATH").
+2. Double-click **Start Auto Forensics.bat** (Windows), **Start Auto Forensics.command**
+   (macOS) or run `./start-auto-forensics.sh` (Linux). The first run sets everything
+   up, which takes a few minutes; later runs start straight away.
+3. Your browser opens the review page. Type your name, point it at an evidence
+   folder and press **Start the run**.
+4. Copy the run fingerprint it shows once, tick findings and accept or reject them
+   (a reason is required to reject), paste the fingerprint to sign, then paste the
+   signature fingerprint to export the final report.
+
+The page only listens on `127.0.0.1`, needs the private link printed in the
+launcher window, and never shows evidence text as HTML. Runs and reports are kept
+in `AutoForensicsRuns` in your home folder (`--workspace` to change it).
+
+### From the command line
+
 ```bash
 python -m pip install -e ".[evtx,yara]"
 auto-forensics-autopilot start  --input-dir EVIDENCE --output-dir RUN --case-id case-01 --actor "Your Name"
 auto-forensics-autopilot status --run-dir RUN
 auto-forensics-autopilot decide --run-dir RUN --finding-id ID [ID ...] --decision accept --actor "Your Name"
-auto-forensics-autopilot sign   --run-dir RUN --actor "Your Name"
-auto-forensics-autopilot export --run-dir RUN --dest FINAL
+auto-forensics-autopilot sign   --run-dir RUN --actor "Your Name" --fingerprint RUN_FINGERPRINT
+auto-forensics-autopilot export --run-dir RUN --dest FINAL --signature SIGNATURE_FINGERPRINT
+auto-forensics-autopilot serve  # the same review page, without the launcher
 ```
 
 Guide: [docs/AUTOPILOT.md](docs/AUTOPILOT.md). Test lab and measured
