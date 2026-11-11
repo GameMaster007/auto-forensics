@@ -2,6 +2,27 @@
 
 ## [Unreleased] — 0.1.0
 
+### Autopilot plugin and detection
+
+- New `auto_forensics_autopilot` package and `auto-forensics-autopilot`
+  command: custody record, triage, parallel agents (core pipeline,
+  injection sentinel, secrets sweep, memory), coordinator, and a sign-off
+  gate that blocks export until every finding is decided and signed.
+  See `docs/AUTOPILOT.md`.
+- Windows behaviour rules (`windows_rules.py`) for Sysmon, Security,
+  System, PowerShell, WinRM, DCOM and SQL Server events.
+- Persistence detector; Sysmon process and network findings graded by
+  behaviour instead of all-medium; Sysmon recognised from the EVTX
+  provider; small binary size is no longer a signal on its own.
+- EVTX: the Rust `evtx` reader is preferred (about 30x faster end to end,
+  up to ~1800x on large logs) with `python-evtx` as the fallback. Unnamed
+  `<Data>` values and `<UserData>` fields are now kept. Timestamps are
+  normalised to milliseconds (`2026-02-17T13:25:12.000Z`) and hex,
+  boolean and wrapped string values to one form, so both readers produce
+  the same events. Reports from earlier builds will not replay byte-for-byte.
+- Test lab (`lab/`): synthetic cases with an answer key, a hold-out set,
+  and benchmarks on public EVTX attack samples. Loop results: `lab/LOOP_LOG.md`.
+
 ### Integrity fixes
 
 - Require HMAC on keyed version-2 archive imports, refusing an

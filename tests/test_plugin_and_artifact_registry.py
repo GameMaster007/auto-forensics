@@ -104,7 +104,8 @@ def test_parse_evtx_xml_record_maps_event_id_to_attack_metadata():
 
     assert event is not None
     assert event.event_type == "process_creation"
-    assert event.timestamp == "2026-02-17T13:25:12.0000000Z"
+    # EVTX times are normalised to milliseconds so both EVTX readers agree.
+    assert event.timestamp == "2026-02-17T13:25:12.000Z"
     assert event.metadata["event_id"] == 4688
     assert event.metadata["attack_tactic"] == "execution"
     assert event.metadata["attack_technique_id"] == "T1059"

@@ -216,6 +216,9 @@ class PluginRegistry:
             self.detectors.register(ZeekDetector())
             self.detectors.register(SuricataDetector())
             self.detectors.register(PersistenceDetector())
+            from .windows_rules import WindowsRuleDetector
+
+            self.detectors.register(WindowsRuleDetector())
 
     def analyze_binary(self, path: Path) -> BinaryFeature:
         if not self.binary_analyzers:

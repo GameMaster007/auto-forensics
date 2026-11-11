@@ -22,3 +22,25 @@ Score = 100 × (0.35 recall + 0.25 precision + 0.15 injection recall +
 After loop 7 the synthetic lab and its hold-out both score 100, so the lab
 no longer separates good changes from bad ones. Later loops use real public
 attack data (see below) instead of adding more synthetic cases.
+
+## Real attack logs
+
+Development set: EVTX-ATTACK-SAMPLES (278 files, 9 tactic folders).
+Hold-out: EVTX-to-MITRE-Attack (293 files), never used to write rules.
+"Detected" = at least one medium-or-higher cited finding for the file;
+"tactic" = such a finding has the folder's ATT&CK tactic. Every file is
+an attack, so these numbers do not measure false alarms; rule precision
+is covered by look-alike unit tests in `tests/test_windows_rules.py`.
+
+| Loop | Change | Detected | Tactic | Hold-out detected / tactic |
+| --- | --- | --- | --- | --- |
+| 8 | Benchmarks built: end-to-end run (`real_evtx.py`, 16 min) and cached detector loop (`evtx_dev.py`, seconds). End-to-end baseline at loop 7 code | 41.0% | 9.2% | |
+| 9 | Core: Sysmon recognised by EVTX provider/channel (measured together with the loop 8 dev baseline) | 45.0% | 10.0% | 44.4% / 11.8% |
+| 10 | Core: Windows behaviour rule library (`windows_rules.py`, ~60 rules) switched on | 67.6% | 28.0% | |
+| 11 | Fix two of my rules: "renamed tool" now checks the name actually differs; "RDP tunnel" needs an RDP logon type. Score drops because those hits were false | 61.9% | 26.4% | |
+| 12 | Fix access masks written with leading zeros (0x001fffff); LSASS handle audit (4656/4663), LSASS writing files, memory reads from user folders | 68.4% | 31.8% | |
+| 13 | UAC bypass: COM surrogate/MMC shells, auto-elevating binaries started from user folders or loading user-folder DLLs; DLL side-loading; LSASS access by permission bit | 70.9% | 37.6% | 51.2% / 22.1% |
+| 14 | Registry tampering: UAC off, PowerShell logging/CLM off, execution policy, Office macro guard, event channels disabled, history wiped, port proxy, new shares, null-session pipes, RID hijack, hidden/new local accounts | 75.5% | 41.8% | |
+| 15 | Shells started by browsers, servers, update or print processes; more rundll32/LOLBAS tricks (zipfldr, advpack, pcwutl, desktopimgdownldr, explorer /root, wscript /E:) | 78.8% | 43.3% | |
+| 16 | Core parser keeps unnamed `<Data>` and `<UserData>` fields (SQL Server, RDP, WinRM were blank); pipe impersonation (potato attacks), getsystem, WinRM shells, remote DCOM, SQL xp_cmdshell | 82.4% | 46.0% | 55.3% / 23.9% |
+| 17 | Rust EVTX reader (10 MB log: 93 s to 0.05 s; cache rebuild 2 min 52 s to 6 s); values normalised so both readers produce identical events (264 of 277 files byte-identical; the rest differ only in BITS file times and binary privilege lists); EVTX reader recorded in the manifest | 82.4% | 46.0% | 55.3% / 23.9% |

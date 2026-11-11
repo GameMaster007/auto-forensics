@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from auto_forensics.artifacts import evtx_reader_name
 from auto_forensics.case_store import MemoryCaseStore
 from auto_forensics.file_ops import atomic_write_text, directory_lock
 from auto_forensics.manifest import hash_input_tree
@@ -174,6 +175,7 @@ def _start_locked(
         "finished_at": utc_now_iso(),
         "core_version": CORE_VERSION,
         "autopilot_version": AUTOPILOT_VERSION,
+        "evtx_reader": evtx_reader_name(),
         "llm": llm,
         "llama_model": llama_model if llm == "ollama" else None,
         "custody_sha256": custody_sha256,

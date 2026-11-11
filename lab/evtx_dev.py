@@ -55,11 +55,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--json", type=Path, default=None)
     parser.add_argument("--show-missed", action="store_true")
+    parser.add_argument("--without", nargs="*", default=[], help="Detector names to leave out, for comparison.")
     args = parser.parse_args(argv)
     root = args.root.resolve()
     cache = load_cache(root, args.cache, args.workers)
     registry = PluginRegistry()
     registry.register_defaults()
+    registry.detectors.detectors = [d for d in registry.detectors.detectors if d.name not in args.without]
     by: dict[str, Counter] = defaultdict(Counter)
     rows = []
     rule_hits: Counter = Counter()

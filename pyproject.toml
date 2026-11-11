@@ -15,7 +15,7 @@ dependencies = []
 
 [project.optional-dependencies]
 pe = ["pefile>=2023.2.7"]
-evtx = ["python-evtx>=0.8.1"]
+evtx = ["evtx>=0.8.0", "python-evtx>=0.8.1"]
 pcap = ["dpkt>=1.9.8"]
 registry = ["python-registry>=1.3.1"]
 yara = ["yara-python>=4.5.1"]

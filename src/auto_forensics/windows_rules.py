@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from .citations import citation_from_event
 from .ids import stable_id
@@ -47,6 +47,8 @@ class Rule:
     # field name -> pattern; none may match.
     exclude: dict[str, re.Pattern[str]] = field(default_factory=dict)
     provider: str = ""  # substring of provider or channel, lowercase
+    # Extra test across fields that a regex on one field cannot express.
+    check: Callable[[dict[str, Any]], bool] | None = None
 
     def applies(self, event_id: int, provider: str) -> bool:
         return event_id in self.event_ids and (not self.provider or self.provider in provider)
@@ -61,7 +63,20 @@ IMAGE = "Image|NewProcessName"
 CMD = "CommandLine|ProcessCommandLine"
 PARENT = "ParentImage|ParentProcessName"
 
-LSASS_ACCESS = r"0x(1010|1410|1438|143a|1fffff|1f0fff|1f1fff|1f2fff|1f3fff|40|1400|0410)\b"
+# Access masks are written with or without leading zeros (0x1fffff, 0x001fffff).
+LSASS_ACCESS = r"^0x0*(1010|1410|1438|143a|147a|1fffff|1f0fff|1f1fff|1f2fff|1f3fff|40|1400|410|10)$"
+VM_READ = 0x10
+USER_DIR = r"\\(temp|tmp|downloads|users\\public|perflogs|desktop|appdata\\(local|roaming)|programdata)\\"
+AUTO_ELEVATE = (r"\\(eventvwr|fodhelper|computerdefaults|sdclt|slui|wsreset|cmstp|changepk|sysprep|wusa|"
+                r"pkgmgr|dism|mmc|taskmgr|osk|perfmon|cliconfg|winsat|bthudtask|dccw|iscsicpl|"
+                r"systemsettingsadminflows|tpmvscmgr|recdisc)\.exe$")
+
+
+def _mask(value: object) -> int:
+    try:
+        return int(str(value).strip(), 16)
+    except ValueError:
+        return 0
 
 RULES: tuple[Rule, ...] = (
     # ---------------- execution ----------------
@@ -82,7 +97,20 @@ RULES: tuple[Rule, ...] = (
                   r"msiexec.*(/q|/i)\s*https?:|installutil.*(/u|/logfile=)|odbcconf.*/a|cmstp.*/s|"
                   r"pcalua.*-a|forfiles.*/c|msbuild(\.exe)?\s+\S+\.(xml|csproj|proj)|"
                   r"control(\.exe)?\s+\S+\.cpl|mavinject|syncappvpublishingserver|"
-                  r"wmic.*(process\s+call\s+create|/format:))")}),
+                  r"wmic.*(process\s+call\s+create|/format:)|"
+                  r"(zipfldr|advpack|pcwutl|url|ieframe|shdocvw|shell32|setupapi|syssetup|ieadvpack)(\.dll)?\s*,\s*"
+                  r"(routethecall|registerocx|launchapplication|fileprotocolhandler|openurl|shellexec_rundll|"
+                  r"launchinfsection|installhinfsection|setupinfobjectinstallaction)|"
+                  r"desktopimgdownldr.*/lockscreenurl:|ftp(\.exe)?\s+.*-s:|explorer(\.exe)?\s+/root,|"
+                  r"(wscript|cscript)(\.exe)?\S*\s+/e:(vbs|jscript|vbscript)\s+\S+\.(?!vbs|js)\w+)")}),
+    Rule("odd-parent-shell", "Shell started by a browser, server or update process", "high", "execution", "T1059",
+         PROC, {PARENT: rx(r"\\(iexplore|chrome|firefox|msedge|opera|acrord32|acrobat|ftp|wuauclt|spoolsv|lsass|"
+                           r"searchindexer|w3wp|sqlservr|httpd|nginx|tomcat\d*|java|javaw|php-cgi|"
+                           r"umworkerprocess|winlogon)\.exe$"),
+                IMAGE: rx(r"\\(cmd|powershell|pwsh|wscript|cscript|mshta|rundll32|regsvr32|certutil|bitsadmin|"
+                          r"whoami|net1?)\.exe$")}),
+    Rule("svchost-shell", "Shell started directly by a service host", "medium", "execution", "T1059", PROC,
+         {PARENT: rx(r"\\svchost\.exe$"), IMAGE: rx(r"\\(cmd|powershell|pwsh)\.exe$")}),
     Rule("wmi-spawn", "WMI provider host started a shell (remote WMI execution)", "high", "execution", "T1047", PROC,
          {PARENT: rx(r"\\wmiprvse\.exe$"), IMAGE: rx(r"\\(cmd|powershell|pwsh|rundll32|mshta|regsvr32)\.exe$")}),
     Rule("user-writable-exec", "Program ran from a user-writable folder", "medium", "execution", "T1204", PROC,
@@ -99,7 +127,7 @@ RULES: tuple[Rule, ...] = (
                                 r"get-gpppassword|powerview|sharphound|invoke-bloodhound|virtualalloc|"
                                 r"-bxor\s|system\.reflection\.emit)")}),
     Rule("mssql-xp-cmdshell", "SQL Server xp_cmdshell enabled or used", "high", "execution", "T1505.001",
-         _ids(15457, 15281, 33205), {"Data|param1|EventData": rx(r"xp_cmdshell")}),
+         _ids(15457, 15281, 33205), {"Data|param1|EventData": rx(r"xp_cmdshell")}, provider="mssql"),
     # ---------------- persistence ----------------
     Rule("schtasks-create", "Scheduled task created from the command line", "high", "persistence", "T1053.005", PROC,
          {CMD: rx(r"schtasks(\.exe)?.*\s/create\b|\bat(\.exe)?\s+\\\\|\bat(\.exe)?\s+\d{1,2}:\d{2}")}),
@@ -146,13 +174,31 @@ RULES: tuple[Rule, ...] = (
          "privilege-escalation", "T1548.002", PROC,
          {PARENT: rx(r"\\(fodhelper|computerdefaults|eventvwr|sdclt|slui|wsreset|cmstp|changepk)\.exe$"),
           IMAGE: rx(r"\\(cmd|powershell|pwsh|mshta|rundll32|regsvr32|wscript|cscript)\.exe$|\\temp\\")}),
+    Rule("uac-com-shell", "COM surrogate or MMC started a shell (elevation abuse)", "high", "privilege-escalation",
+         "T1548.002", PROC, {PARENT: rx(r"\\(dllhost|mmc)\.exe$"),
+                             IMAGE: rx(r"\\(cmd|powershell|pwsh|rundll32|regsvr32|mshta|wscript|cscript)\.exe$")}),
+    Rule("autoelevate-from-user-folder", "Auto-elevating Windows binary launched by a program in a user folder",
+         "medium", "privilege-escalation", "T1548.002", PROC,
+         {IMAGE: rx(AUTO_ELEVATE), PARENT: rx(USER_DIR)}),
+    Rule("autoelevate-dll-hijack", "Auto-elevating Windows binary loaded a DLL from a user-writable folder", "high",
+         "privilege-escalation", "T1548.002", _ids(7),
+         {"Image": rx(AUTO_ELEVATE), "ImageLoaded": rx(USER_DIR)}, provider=SYSMON),
+    Rule("dll-sideload", "Windows binary loaded a DLL from a user-writable folder (side-loading)", "high",
+         "defense-evasion", "T1574.002", _ids(7),
+         {"Image": rx(r"\\windows\\(system32|syswow64)\\"), "ImageLoaded": rx(USER_DIR)},
+         {"Image": rx(AUTO_ELEVATE + r"|\\(msiexec|dllhost|rundll32|regsvr32|consent)\.exe$")}, provider=SYSMON),
+    Rule("pipe-impersonation", "Named pipe disguised inside another path (potato-style privilege escalation)",
+         "high", "privilege-escalation", "T1134.001", _ids(17, 18),
+         {"PipeName": rx(r"^\\[^\\]+\\pipe\\")}, provider=SYSMON),
+    Rule("getsystem-pipe", "Service command writes to a named pipe (getsystem)", "high", "privilege-escalation",
+         "T1134.001", PROC, {CMD: rx(r"echo\s+\S+\s*>\s*\\\\\.\\pipe\\")}),
     Rule("token-manipulation", "Process created with alternate credentials or a stolen token", "medium",
          "privilege-escalation", "T1134", PROC, {CMD: rx(r"\brunas(\.exe)?\s+/(user|netonly)|psexec.*\s-s\s")}),
     Rule("remote-thread", "Thread injected into another process", "high", "defense-evasion", "T1055", _ids(8),
          {}, {"SourceImage": rx(r"\\(csrss|wininit|services|svchost|msmpeng|vmtoolsd)\.exe$")}, provider=SYSMON),
     Rule("process-access-inject", "Process opened another with injection rights", "medium", "defense-evasion",
          "T1055", _ids(10),
-         {"GrantedAccess": rx(r"0x(1f0fff|1fffff|1f3fff|143a|1438)\b"),
+         {"GrantedAccess": rx(r"^0x0*(1f0fff|1fffff|1f3fff|143a|1438)$"),
           "CallTrace": rx(r"unknown")}, {"TargetImage": rx(r"\\lsass\.exe$")}, provider=SYSMON),
     # ---------------- defense evasion ----------------
     Rule("log-cleared-cmd", "Event logs cleared from the command line", "high", "defense-evasion", "T1070.001", PROC,
@@ -172,20 +218,80 @@ RULES: tuple[Rule, ...] = (
          _ids(12, 13, 14), {"TargetObject": rx(r"\\windows defender\\.*(disableantispyware|disablerealtimemonitoring|"
                                                r"\\exclusions\\)|\\amsi\\providers|wdigest\\uselogoncredential")},
          provider=SYSMON),
+    Rule("uac-disabled", "User Account Control switched off", "high", "defense-evasion", "T1548.002", _ids(12, 13, 14),
+         {"TargetObject": rx(r"\\policies\\system\\(enablelua|consentpromptbehavioradmin|promptonsecuredesktop)$"),
+          "Details": rx(r"0x0+\)?$")}, provider=SYSMON),
+    Rule("ps-logging-disabled", "PowerShell logging or language mode weakened", "high", "defense-evasion",
+         "T1562.002", _ids(12, 13, 14),
+         {"TargetObject": rx(r"\\powershell\\(scriptblocklogging\\enablescriptblocklogging|"
+                              r"modulelogging\\enablemodulelogging|transcription\\enabletranscripting)$|"
+                              r"__pslockdownpolicy$")},
+         provider=SYSMON, check=lambda m: "pslockdownpolicy" in str(m.get("TargetObject", "")).lower()
+         or str(m.get("Details", "")).lower().rstrip(")").endswith("0x00000000")),
+    Rule("ps-execution-policy", "PowerShell execution policy set to allow any script", "medium", "defense-evasion",
+         "T1059.001", _ids(12, 13, 14), {"TargetObject": rx(r"\\shellids\\microsoft\.powershell\\executionpolicy$"),
+                                "Details": rx(r"^(unrestricted|bypass)$")}, provider=SYSMON),
+    Rule("office-macro-guard-off", "Office macro or VBA project protection switched off", "medium", "defense-evasion",
+         "T1562.001", _ids(12, 13, 14),
+         {"TargetObject": rx(r"\\office\\[\d.]+\\\w+\\security\\(accessvbom|vbawarnings)$"),
+          "Details": rx(r"0x0+1\)?$")}, provider=SYSMON),
+    Rule("event-channel-disabled", "Event log channel disabled", "medium", "defense-evasion", "T1562.002", _ids(12, 13, 14),
+         {"TargetObject": rx(r"\\winevt\\channels\\[^\\]+\\enabled$"), "Details": rx(r"0x0+\)?$")},
+         provider=SYSMON),
+    Rule("mru-cleared", "Recent-activity history deleted from the registry", "medium", "defense-evasion",
+         "T1070", _ids(12, 13, 14), {"TargetObject": rx(r"\\explorer\\(runmru|typedpaths|recentdocs|comdlg32)"),
+                           "EventType": rx(r"^delete")}, provider=SYSMON),
+    Rule("port-proxy", "Port forwarding rule added (netsh portproxy)", "high", "command-and-control", "T1090",
+         _ids(12, 13, 14), {"TargetObject": rx(r"\\services\\portproxy\\v[46]tov[46]\\")}, provider=SYSMON),
+    Rule("port-proxy-cmd", "Port forwarding rule added from the command line", "high", "command-and-control", "T1090",
+         PROC, {CMD: rx(r"netsh(\.exe)?\s+(interface\s+portproxy|i\s+p)\s+(add|a)\b")}),
+    Rule("new-share", "Network share created", "medium", "lateral-movement", "T1135", _ids(12, 13, 14),
+         {"TargetObject": rx(r"\\lanmanserver\\shares\\[^\\]+$")},
+         {"TargetObject": rx(r"\\shares\\security$")}, provider=SYSMON),
+    Rule("null-session-pipe", "Anonymous access opened to a named pipe or share", "high", "lateral-movement",
+         "T1021.002", _ids(12, 13, 14),
+         {"TargetObject": rx(r"\\lanmanserver\\parameters\\(nullsessionpipes|nullsessionshares|"
+                              r"restrictnullsessaccess)$")}, provider=SYSMON),
+    Rule("rid-hijack", "Local account record changed by a process other than LSASS (RID hijack)", "high",
+         "persistence", "T1098", _ids(12, 13, 14), {"TargetObject": rx(r"\\sam\\sam\\domains\\account\\users\\")},
+         {"Image": rx(r"\\lsass\.exe$")}, provider=SYSMON),
+    Rule("hidden-account", "Hidden local account created (name ends with $)", "high", "persistence", "T1564.002",
+         _ids(12, 13, 14), {"TargetObject": rx(r"\\sam\\domains\\account\\users\\names\\[^\\]+\$(\\|$)|"
+                                      r"\\winlogon\\specialaccounts\\userlist\\")}, provider=SYSMON),
+    Rule("local-account-created", "Local account created", "medium", "persistence", "T1136.001", _ids(12, 13, 14),
+         {"TargetObject": rx(r"\\sam\\domains\\account\\users\\names\\[^\\$]+(\\\(default\))?$"),
+          "EventType": rx(r"^createkey$")}, provider=SYSMON),
+    Rule("builtin-admin-changed", "Built-in Administrator account changed", "medium", "persistence", "T1098", _ids(12, 13, 14),
+         {"TargetObject": rx(r"\\sam\\domains\\account\\users\\000001f4\\(f|v|forcepasswordreset)$")},
+         provider=SYSMON),
     Rule("masquerade-renamed", "Renamed system tool (file name does not match the original name)", "high",
          "defense-evasion", "T1036.003", _ids(1),
          {"OriginalFileName": rx(r"^(cmd|powershell|psexec|psexesvc|procdump|rundll32|regsvr32|mshta|"
                                  r"certutil|wmic|net1?|whoami|nltest)\.exe(\.mui)?$")},
-         provider=SYSMON),
+         provider=SYSMON, check=lambda m: _renamed(m)),
     Rule("hidden-file", "File hidden or protected with attrib", "medium", "defense-evasion", "T1564.001", PROC,
          {CMD: rx(r"attrib(\.exe)?\s+.*\+(h|s)\b")}),
     Rule("unsigned-driver", "Driver loaded that is not validly signed", "high", "defense-evasion", "T1014", _ids(6),
          {"Signed|SignatureStatus": rx(r"^(false|unavailable|expired|revoked)")}, provider=SYSMON),
     # ---------------- credential access ----------------
+    # Any mask with VM_READ (0x10) or DUP_HANDLE (0x40) can expose LSASS memory.
     Rule("lsass-access", "LSASS memory opened by another process", "critical", "credential-access", "T1003.001",
-         _ids(10), {"TargetImage": rx(r"\\lsass\.exe$"), "GrantedAccess": rx(LSASS_ACCESS)},
+         _ids(10), {"TargetImage": rx(r"\\lsass\.exe$")},
          {"SourceImage": rx(r"\\(wmiprvse|svchost|msmpeng|mssense|csrss|wininit|lsm|taskmgr|vmtoolsd|"
-                            r"mrt|searchindexer|wmiadap)\.exe$")}, provider=SYSMON),
+                            r"mrt|searchindexer|wmiadap)\.exe$")}, provider=SYSMON,
+         check=lambda m: bool(_mask(m.get("GrantedAccess")) & (VM_READ | 0x40))),
+    Rule("lsass-handle", "LSASS opened with read access (Security audit)", "critical", "credential-access",
+         "T1003.001", _ids(4656, 4663), {"ObjectName": rx(r"\\lsass\.exe$")},
+         {"ProcessName": rx(r"\\(wininit|csrss|svchost|lsm|msmpeng|mssense|services|wmiprvse|taskmgr)\.exe$")},
+         check=lambda m: bool(_mask(m.get("AccessMask")) & VM_READ)),
+    Rule("lsass-writes-file", "LSASS wrote a log or dump file (malicious security package)", "critical",
+         "credential-access", "T1547.005", _ids(11),
+         {"Image": rx(r"\\lsass\.exe$"), "TargetFilename": rx(r"\.(log|txt|dmp|tmp)$")}, provider=SYSMON),
+    Rule("process-memory-read", "Program in a user-writable folder read another process's memory", "medium",
+         "credential-access", "T1003", _ids(10),
+         {"SourceImage": rx(r"\\(temp|tmp|downloads|users\\public|desktop|appdata)\\")},
+         {"TargetImage": rx(r"\\(conhost|werfault)\.exe$")}, provider=SYSMON,
+         check=lambda m: bool(_mask(m.get("GrantedAccess")) & VM_READ)),
     Rule("lsass-dump-cmd", "LSASS dump or credential theft tool on the command line", "critical",
          "credential-access", "T1003.001", PROC,
          {CMD: rx(r"(procdump.*(lsass|-ma\s+\d+)|comsvcs(\.dll)?.*minidump|sekurlsa::|lsadump::|"
@@ -219,7 +325,7 @@ RULES: tuple[Rule, ...] = (
          {CMD: rx(r"(vaultcmd|cmdkey\s+/list|get-vaultcredential|\\login data|\\cookies\b|lazagne|"
                   r"credentialfileview|webbrowserpassview)")}),
     Rule("efs-coerce", "Remote authentication coercion over RPC (PetitPotam-style)", "high", "credential-access",
-         "T1187", _ids(5145), {"RelativeTargetName": rx(r"^(lsarpc|efsrpc|lsass|netlogon|samr)$"),
+         "T1187", _ids(5145), {"RelativeTargetName": rx(r"^(efsrpc|lsass|spoolss)$"),
                                "IpAddress|SourceAddress": rx(r"\d")}),
     Rule("ntlm-auth-anon-coerce", "Machine account authenticated from an unexpected host (relay/coercion)", "medium",
          "credential-access", "T1557.001", _ids(4624),
@@ -259,7 +365,12 @@ RULES: tuple[Rule, ...] = (
          PROC, {CMD: rx(r"(psexec|paexec|winrs(\.exe)?\s+-r|invoke-command\s+-computername|enter-pssession|"
                         r"wmic\s+/node:|mstsc.*/restrictedadmin|sharprdp|invoke-wmimethod.*-computer)")}),
     Rule("rdp-tunnel", "RDP tunnelled through a local port forward", "high", "command-and-control", "T1572",
-         _ids(4624, 1149, 261), {"IpAddress|Param3": rx(r"^(127\.0\.0\.1|::1)$"), "LogonType|Param1": rx(r".")}),
+         _ids(4624, 1149), {"IpAddress|Param3": rx(r"^(127\.0\.0\.1|::1)$")},
+         check=lambda m: str(m.get("event_id")) == "1149" or str(m.get("LogonType")) == "10"),
+    Rule("winrm-shell", "Remote WinRM shell opened on this host", "medium", "lateral-movement", "T1021.006",
+         _ids(91), {}, provider="winrm"),
+    Rule("dcom-remote-launch", "Remote DCOM activation attempted", "medium", "lateral-movement", "T1021.003",
+         _ids(10016), {"param2": rx(r"^remote$"), "param3": rx(r"launch|activation")}, provider="distributedcom"),
     Rule("winrm-spawn", "WinRM host started a shell (remote PowerShell)", "high", "lateral-movement", "T1021.006",
          PROC, {PARENT: rx(r"\\(wsmprovhost|winrshost)\.exe$")}),
     # ---------------- command and control ----------------
@@ -283,6 +394,12 @@ RULES: tuple[Rule, ...] = (
          {CMD: rx(r"(rclone(\.exe)?\s+(copy|sync)|megacmd|mega-put|dropbox_uploader|"
                   r"ftp(\.exe)?\s+-s:|pscp|scp\s+.*@)")}),
 )
+
+
+def _renamed(metadata: dict[str, Any]) -> bool:
+    image = str(metadata.get("Image") or "").replace("/", "\\").rsplit("\\", 1)[-1].lower()
+    original = str(metadata.get("OriginalFileName") or "").lower().removesuffix(".mui")
+    return bool(image and original) and image != original
 
 
 def _field(metadata: dict[str, Any], names: str) -> str | None:
@@ -318,7 +435,7 @@ def rule_matches(rule: Rule, event: ArtifactEvent) -> bool:
         value = _field(event.metadata, names)
         if value is not None and pattern.search(value):
             return False
-    return True
+    return rule.check is None or rule.check(event.metadata)
 
 
 class WindowsRuleDetector:
