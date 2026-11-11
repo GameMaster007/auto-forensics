@@ -165,11 +165,8 @@ RULES: tuple[Rule, ...] = (
                                              r"\.replace\(\s*'[^']{1,4}'\s*,\s*''\s*\).*iex")}),
     Rule("psh-scriptblock", "Suspicious PowerShell script block", "high", "execution", "T1059.001",
          _ids(4104, 4103, 800),
-         {"ScriptBlockText|Payload|Data": rx(r"(invoke-mimikatz|invoke-shellcode|invoke-reflectivepeinjection|amsiutils|"
-                                r"amsiinitfailed|\[reflection\.assembly\]::load|frombase64string.*(iex|invoke-expression)|"
-                                r"(iex|invoke-expression).*(downloadstring|webclient)|invoke-kerberoast|"
-                                r"get-gpppassword|powerview|sharphound|invoke-bloodhound|virtualalloc|"
-                                r"-bxor\s|system\.reflection\.emit)")}),
+         {"ScriptBlockText|Payload|Data": rx(r".")}, check=lambda m: _suspicious_script(
+             str(_field(m, "ScriptBlockText|Payload|Data") or ""))),
     Rule("mssql-xp-cmdshell", "SQL Server xp_cmdshell enabled or used", "high", "execution", "T1505.001",
          _ids(15457, 15281, 33205), {"Data|param1|EventData": rx(r"xp_cmdshell")}, provider="mssql"),
     # ---------------- persistence ----------------
@@ -551,6 +548,25 @@ def _benign_autorun(metadata: dict[str, Any]) -> bool:
     if not details or details.lower() in {"binary data", "(empty)"} or _AUTORUN_RISKY.search(details):
         return False
     return bool(_AUTORUN_INSTALLED.search(details))
+
+
+_SCRIPT_TOKENS = re.compile(
+    r"invoke-mimikatz|invoke-shellcode|invoke-reflectivepeinjection|amsiutils|amsiinitfailed|"
+    r"\[reflection\.assembly\]::load|invoke-kerberoast|get-gpppassword|powerview|sharphound|invoke-bloodhound|"
+    r"virtualalloc|-bxor\s|system\.reflection\.emit", re.IGNORECASE)
+_SCRIPT_EXEC = re.compile(r"\b(iex|invoke-expression)\b", re.IGNORECASE)
+_SCRIPT_DECODE = re.compile(r"frombase64string", re.IGNORECASE)
+_SCRIPT_FETCH = re.compile(r"downloadstring|webclient", re.IGNORECASE)
+
+
+def _suspicious_script(text: str) -> bool:
+    """Single-token hits, or execution combined with decoding or download anywhere in the block.
+
+    Each test is one linear search, so a long hostile script block stays fast.
+    """
+    if _SCRIPT_TOKENS.search(text):
+        return True
+    return bool(_SCRIPT_EXEC.search(text)) and bool(_SCRIPT_DECODE.search(text) or _SCRIPT_FETCH.search(text))
 
 
 def _renamed(metadata: dict[str, Any]) -> bool:
