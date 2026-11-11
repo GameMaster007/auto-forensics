@@ -30,10 +30,10 @@ set "VPY=.venv\Scripts\python.exe"
 fc /b pyproject.toml .venv\installed-pyproject.toml >nul 2>nul
 if errorlevel 1 (
   "%VPY%" -m pip install --upgrade pip >nul
-  "%VPY%" -m pip install -e ".[evtx,server,yara]"
+  "%VPY%" -m pip install -e ".[evtx,server,disk,yara]"
   if errorlevel 1 (
     echo YARA support could not be installed; continuing without it.
-    "%VPY%" -m pip install -e ".[evtx,server]" || (echo Setup failed. Read the messages above. & pause & exit /b 1)
+    "%VPY%" -m pip install -e ".[evtx,server,disk]" || (echo Setup failed. Read the messages above. & pause & exit /b 1)
   )
   copy /y pyproject.toml .venv\installed-pyproject.toml >nul
 )

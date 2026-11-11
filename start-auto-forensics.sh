@@ -22,9 +22,9 @@ fi
 
 if ! cmp -s pyproject.toml .venv/installed-pyproject.toml; then
   .venv/bin/python -m pip install --upgrade pip >/dev/null
-  if ! .venv/bin/python -m pip install -e ".[evtx,server,yara]"; then
+  if ! .venv/bin/python -m pip install -e ".[evtx,server,disk,yara]"; then
     echo "YARA support could not be installed; continuing without it."
-    .venv/bin/python -m pip install -e ".[evtx,server]"
+    .venv/bin/python -m pip install -e ".[evtx,server,disk]"
   fi
   cp pyproject.toml .venv/installed-pyproject.toml
 fi
