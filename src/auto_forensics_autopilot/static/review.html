@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Auto Forensics review</title>
+<link rel="stylesheet" href="/static/review.css">
+<script src="/static/review.js" defer></script>
+</head>
+<body>
+<header class="masthead">
+  <a class="brand" href="#" id="home-link">Auto Forensics</a>
+  <span class="workspace" id="workspace"></span>
+  <label class="who" for="who">Reviewing as <input id="who" maxlength="120" placeholder="Your name" autocomplete="name"></label>
+</header>
+
+<div class="tape" id="tape" hidden>
+  <div class="tape-track" id="tape-track" aria-hidden="true"></div>
+  <div class="tape-label">
+    <span class="tape-case" id="tape-case"></span>
+    <span class="tape-state" id="tape-state"></span>
+  </div>
+</div>
+
+<main id="main">
+  <p class="notice" id="no-token" hidden>
+    This page needs the link printed in the window where the review server started.
+    Close this tab and open that link instead.
+  </p>
+
+  <section id="view-home" hidden>
+    <div class="home-grid">
+      <div>
+        <h1>Cases</h1>
+        <p class="lede">Each run is a draft until you check every finding and sign it.</p>
+        <table class="runs" id="runs">
+          <thead><tr><th scope="col">Case</th><th scope="col">Started</th><th scope="col">Findings</th><th scope="col">State</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p class="empty" id="runs-empty" hidden>No cases yet. Start one with the form.</p>
+      </div>
+      <form class="panel" id="start-form" autocomplete="off">
+        <h2>Start a case</h2>
+        <label for="f-input">Evidence folder</label>
+        <input id="f-input" name="input_dir" required placeholder="C:\Cases\laptop-01 or /home/me/cases/laptop-01" spellcheck="false">
+        <p class="hint">The folder is read, never changed. It must not be inside the workspace.</p>
+        <label for="f-case">Case ID</label>
+        <input id="f-case" name="case_id" required pattern="[A-Za-z0-9._\-]{2,64}" placeholder="laptop-01" spellcheck="false">
+        <fieldset>
+          <legend>Summary model</legend>
+          <label class="choice"><input type="radio" name="llm" value="mock" checked> Built-in (no network)</label>
+          <label class="choice"><input type="radio" name="llm" value="off"> None</label>
+          <label class="choice"><input type="radio" name="llm" value="ollama"> Local Ollama</label>
+        </fieldset>
+        <button type="submit" class="primary">Start the run</button>
+        <p class="form-error" id="start-error" role="alert"></p>
+      </form>
+    </div>
+  </section>
+
+  <section id="view-running" hidden>
+    <h1>Working on <span id="running-case"></span></h1>
+    <p class="lede">Checking every file, running the detectors and re-reading each cited line. Large folders take a few minutes.</p>
+    <div class="progress" aria-hidden="true"><span></span></div>
+  </section>
+
+  <section id="view-case" hidden>
+    <div class="once" id="once" hidden>
+      <div>
+        <h2 id="once-title">Copy the run fingerprint now</h2>
+        <p id="once-text">You will type it back to sign. It is shown once and is not saved anywhere you can read it from later, so a replaced draft cannot vouch for itself.</p>
+      </div>
+      <div class="once-value">
+        <code id="once-value"></code>
+        <button type="button" id="once-copy">Copy</button>
+      </div>
+    </div>
+
+    <div class="summary">
+      <p class="headline" id="headline"></p>
+      <dl class="counts" id="counts"></dl>
+    </div>
+
+    <div class="alert" id="hostile" hidden>
+      <h2>Some files tried to give instructions to the tools</h2>
+      <p>Treat their contents as hostile. Findings that rely only on a model reading them are marked.</p>
+      <ul id="hostile-list"></ul>
+    </div>
+
+    <div class="alert quiet" id="gaps" hidden>
+      <h2>Not fully analysed</h2>
+      <ul id="gaps-list"></ul>
+    </div>
+
+    <h2 class="section">Attack path</h2>
+    <ol class="chain" id="chain"></ol>
+
+    <h2 class="section">Findings</h2>
+    <div class="filters" role="group" aria-label="Show findings">
+      <button type="button" class="filter" data-filter="pending" aria-pressed="true">Needs a decision</button>
+      <button type="button" class="filter" data-filter="all" aria-pressed="false">All</button>
+      <button type="button" class="filter" data-filter="accept" aria-pressed="false">Accepted</button>
+      <button type="button" class="filter" data-filter="reject" aria-pressed="false">Rejected</button>
+    </div>
+    <table class="findings" id="findings">
+      <thead>
+        <tr>
+          <th scope="col" class="pick"><input type="checkbox" id="pick-all" aria-label="Select all shown"></th>
+          <th scope="col">Severity</th>
+          <th scope="col">Finding</th>
+          <th scope="col">Where</th>
+          <th scope="col">Checked</th>
+          <th scope="col">Decision</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <p class="empty" id="findings-empty" hidden></p>
+
+    <form class="decide-bar" id="decide-bar" hidden>
+      <span id="picked"></span>
+      <input id="d-note" maxlength="2000" placeholder="Reason (needed to reject)" aria-label="Reason">
+      <label class="choice"><input type="checkbox" id="d-override"> Change an earlier decision</label>
+      <button type="button" class="accept" id="d-accept">Accept</button>
+      <button type="button" class="reject" id="d-reject">Reject</button>
+      <p class="form-error" id="decide-error" role="alert"></p>
+    </form>
+
+    <h2 class="section">Sign and export</h2>
+    <ol class="steps">
+      <li id="step-decide">
+        <h3>Decide every finding</h3>
+        <p id="step-decide-text"></p>
+      </li>
+      <li id="step-sign">
+        <h3>Sign the draft</h3>
+        <form id="sign-form" autocomplete="off">
+          <label for="s-fp">Run fingerprint</label>
+          <input id="s-fp" required minlength="32" maxlength="128" spellcheck="false" class="mono" placeholder="Paste the fingerprint you copied when the run finished">
+          <label for="s-statement">Statement (optional)</label>
+          <input id="s-statement" maxlength="2000" placeholder="Reviewed all findings against the cited rows.">
+          <label class="choice" id="s-gaps-row" hidden><input type="checkbox" id="s-gaps"> I accept that part of the evidence was not analysed</label>
+          <button type="submit" class="primary">Sign</button>
+          <p class="form-error" id="sign-error" role="alert"></p>
+        </form>
+        <p class="done-text" id="signed-text" hidden></p>
+      </li>
+      <li id="step-export">
+        <h3>Export the final report</h3>
+        <form id="export-form" autocomplete="off">
+          <label for="e-sig">Signature fingerprint</label>
+          <input id="e-sig" required minlength="32" maxlength="128" spellcheck="false" class="mono" placeholder="Paste the fingerprint shown when you signed">
+          <button type="submit" class="primary">Export</button>
+          <p class="form-error" id="export-error" role="alert"></p>
+        </form>
+        <p class="done-text" id="exported-text" hidden></p>
+      </li>
+    </ol>
+  </section>
+</main>
+</body>
+</html>

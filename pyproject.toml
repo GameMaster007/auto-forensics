@@ -51,3 +51,4 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 auto_forensics = ["web/*.html", "web/*.css", "web/*.js"]
+auto_forensics_autopilot = ["static/*.html", "static/*.css", "static/*.js"]

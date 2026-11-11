@@ -5,6 +5,7 @@
     auto-forensics-autopilot decide --run-dir RUN --finding-id ID --decision accept|reject --actor NAME [--note TEXT]
     auto-forensics-autopilot sign   --run-dir RUN --actor NAME
     auto-forensics-autopilot export --run-dir RUN --dest FOLDER
+    auto-forensics-autopilot serve  [--workspace FOLDER] [--port 8765]   (point-and-click review page)
 """
 
 from __future__ import annotations
@@ -64,11 +65,28 @@ def build_parser() -> argparse.ArgumentParser:
     exp.add_argument("--dest", required=True, type=Path)
     exp.add_argument("--signature", required=True,
                      help="The signature fingerprint printed by 'sign' (at least the first 32 characters).")
+
+    srv = sub.add_parser("serve", help="Open the point-and-click review page in your browser.")
+    srv.add_argument("--workspace", type=Path, default=Path.home() / "AutoForensicsRuns",
+                     help="Where runs and exported reports are kept (default: AutoForensicsRuns in your home folder).")
+    srv.add_argument("--port", type=int, default=8765)
+    srv.add_argument("--no-browser", action="store_true", help="Print the link instead of opening the browser.")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "serve":
+        try:
+            import fastapi  # noqa: F401
+            import uvicorn  # noqa: F401
+
+            from .web import serve
+        except ImportError:
+            print("The review page needs the server extra: pip install -e \".[server]\"", file=sys.stderr)
+            return 2
+        serve(args.workspace, port=args.port, open_browser=not args.no_browser)
+        return 0
     try:
         if args.command == "start":
             draft = start(input_dir=args.input_dir, output_dir=args.output_dir, case_id=args.case_id,
