@@ -1,0 +1,208 @@
+"""Merge agent findings into one cited draft.
+
+The coordinator never reads evidence text. It works from structured
+findings, the evidence inventory, and the core report. Before a finding
+from a non-core agent is kept, its citation is checked against the
+inventory and its cited row is re-read and compared by SHA-256 with the
+digest the agent recorded. The row's words are not copied into the draft.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any
+
+from auto_forensics.models import Finding
+
+from .agents import iter_lines, line_digest
+
+SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+DRAFT_STATUS = "DRAFT - not signed. Do not rely on this until an analyst signs it."
+
+
+def canonical_sha256(data: Any) -> str:
+    raw = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _evidence_value(finding: Finding, key: str) -> str | None:
+    prefix = f"{key}="
+    for item in finding.evidence:
+        if isinstance(item, str) and item.startswith(prefix):
+            return item[len(prefix):]
+    return None
+
+
+def verify_agent_finding(finding: Finding, input_dir: Path, inventory: dict[str, str]) -> str | None:
+    """Return None when the finding's citations hold, else the reason it is dropped."""
+    if not finding.citations:
+        return "no citation"
+    expected_line = _evidence_value(finding, "line_sha256")
+    for citation in finding.citations:
+        if not citation.is_complete():
+            return "incomplete citation"
+        recorded = inventory.get(citation.source_file)
+        if recorded is None:
+            return "cited file is not in the evidence inventory"
+        if recorded != citation.sha256.lower():
+            return "cited file hash does not match the inventory"
+        if expected_line is not None and citation.row is not None:
+            path = input_dir / citation.source_file
+            line = next((text for number, text in iter_lines(path) if number == citation.row), None)
+            if line is None:
+                return "cited row does not exist"
+            if line_digest(line) != expected_line:
+                return "cited row does not match the agent's record"
+    return None
+
+
+def _citation_identity(finding: Finding) -> tuple[Any, ...]:
+    return tuple(sorted((c.source_file, c.sha256, c.row, c.offset) for c in finding.citations))
+
+
+def merge_findings(
+    findings: list[Finding],
+    input_dir: Path,
+    inventory: dict[str, str],
+) -> tuple[list[Finding], list[dict[str, str]]]:
+    """Verify non-core findings, drop duplicates, and sort by severity."""
+    kept: list[Finding] = []
+    dropped: list[dict[str, str]] = []
+    seen: set[tuple[Any, ...]] = set()
+    ids: set[str] = set()
+    for finding in findings:
+        if finding.worker != "core_pipeline":
+            reason = verify_agent_finding(finding, input_dir, inventory)
+            if reason:
+                dropped.append({"finding_id": finding.finding_id, "worker": finding.worker, "reason": reason})
+                continue
+        key = (finding.title, _citation_identity(finding))
+        if key in seen or finding.finding_id in ids:
+            dropped.append({"finding_id": finding.finding_id, "worker": finding.worker, "reason": "duplicate"})
+            continue
+        seen.add(key)
+        ids.add(finding.finding_id)
+        kept.append(finding)
+    kept.sort(key=lambda f: (SEVERITY_ORDER.get(f.severity, 9), -float(f.confidence or 0), f.finding_id))
+    return kept, dropped
+
+
+def _finding_entry(finding: Finding) -> dict[str, Any]:
+    return {
+        "finding_id": finding.finding_id,
+        "title": finding.title,
+        "severity": finding.severity,
+        "confidence": round(float(finding.confidence or 0), 3),
+        "tactic": finding.tactic,
+        "technique_id": finding.technique_id,
+        "worker": finding.worker,
+        "origin": finding.origin,
+        "verification": finding.verification or ("row-hash" if finding.worker != "core_pipeline" else ""),
+        "recommendation": finding.recommendation,
+        "citations": [asdict(c) for c in finding.citations],
+    }
+
+
+def _timeline_highlights(core_report: dict[str, Any] | None, limit: int = 15) -> list[dict[str, Any]]:
+    """Return the riskiest timeline events without their evidence text."""
+    if not core_report:
+        return []
+    events = [e for e in core_report.get("timeline", []) if isinstance(e, dict)]
+    events.sort(key=lambda e: (-float(e.get("risk_score") or 0), str(e.get("timestamp") or "")))
+    picked = events[:limit]
+    picked.sort(key=lambda e: str(e.get("timestamp") or ""))
+    return [
+        {
+            "timestamp": e.get("timestamp"),
+            "event_type": e.get("event_type"),
+            "source": e.get("source"),
+            "risk_score": e.get("risk_score"),
+        }
+        for e in picked
+    ]
+
+
+def build_draft(
+    *,
+    case_id: str,
+    findings: list[Finding],
+    dropped: list[dict[str, str]],
+    plan: list[dict[str, Any]],
+    agent_results: list[dict[str, Any]],
+    hostile_files: list[str],
+    core_report: dict[str, Any] | None,
+    custody_sha256: str,
+) -> dict[str, Any]:
+    severity_counts: dict[str, int] = {}
+    for finding in findings:
+        severity_counts[finding.severity] = severity_counts.get(finding.severity, 0) + 1
+    tactics = sorted({f.tactic for f in findings if f.tactic})
+    headline = (
+        f"{len(findings)} cited finding(s) need review"
+        + (f", {severity_counts.get('critical', 0)} critical" if severity_counts.get("critical") else "")
+        + (f", {severity_counts.get('high', 0)} high" if severity_counts.get("high") else "")
+        + "."
+    )
+    return {
+        "status": DRAFT_STATUS,
+        "case_id": case_id,
+        "headline": headline,
+        "severity_counts": severity_counts,
+        "tactics": tactics,
+        "findings": [_finding_entry(f) for f in findings],
+        "dropped": dropped,
+        "hostile_files": sorted(set(hostile_files)),
+        "agents": agent_results,
+        "plan": plan,
+        "timeline_highlights": _timeline_highlights(core_report),
+        "custody_sha256": custody_sha256,
+    }
+
+
+def _cell(value: Any) -> str:
+    text = "" if value is None else str(value)
+    return text.replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+
+
+def render_markdown(draft: dict[str, Any], *, title: str = "Autopilot draft") -> str:
+    lines = [f"# {title}: {_cell(draft['case_id'])}", "", f"**{draft['status']}**", "", draft["headline"], ""]
+    if draft.get("hostile_files"):
+        lines += [
+            "## Warning: hostile evidence",
+            "",
+            "These files contain text aimed at an AI analyst. Read them only in a plain viewer.",
+            "",
+        ]
+        lines += [f"- `{_cell(path)}`" for path in draft["hostile_files"]] + [""]
+    lines += ["## Findings", "", "| ID | Severity | Title | Tactic | Agent | Cited at | Decision |",
+              "| --- | --- | --- | --- | --- | --- | --- |"]
+    for finding in draft["findings"]:
+        cites = "; ".join(
+            f"{c['source_file']}" + (f" row {c['row']}" if c.get("row") else f" @{c.get('offset')}")
+            for c in finding["citations"]
+        )
+        lines.append(
+            f"| `{_cell(finding['finding_id'])}` | {_cell(finding['severity'])} | {_cell(finding['title'])} | "
+            f"{_cell(finding['tactic'])} | {_cell(finding['worker'])} | {_cell(cites)} | "
+            f"{_cell(finding.get('decision', 'pending'))} |"
+        )
+    if draft.get("timeline_highlights"):
+        lines += ["", "## Timeline highlights", "", "| Time | Event | Source | Risk |", "| --- | --- | --- | --- |"]
+        for event in draft["timeline_highlights"]:
+            lines.append(f"| {_cell(event['timestamp'])} | {_cell(event['event_type'])} | "
+                         f"{_cell(event['source'])} | {_cell(event['risk_score'])} |")
+    lines += ["", "## Agents", "", "| Agent | Ran | Status | Findings | Why |", "| --- | --- | --- | --- | --- |"]
+    results = {item["name"]: item for item in draft.get("agents", [])}
+    for plan in draft.get("plan", []):
+        result = results.get(plan["name"], {})
+        lines.append(f"| {_cell(plan['name'])} | {'yes' if plan['run'] else 'no'} | "
+                     f"{_cell(result.get('status', '-'))} | {_cell(result.get('finding_count', '-'))} | "
+                     f"{_cell(result.get('detail') or plan['reason'])} |")
+    if draft.get("dropped"):
+        lines += ["", f"{len(draft['dropped'])} draft finding(s) were dropped by the coordinator "
+                      "(failed citation check or duplicate). See `autopilot_draft.json`."]
+    lines += ["", f"Custody record SHA-256: `{draft['custody_sha256']}`", ""]
+    return "\n".join(lines)

@@ -15,3 +15,7 @@ output/
 *.egg-info/
 dist/
 build/
+
+# lab: generated cases (rebuild with lab/generate.py)
+lab/cases/
+lab/holdout/

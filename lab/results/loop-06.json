@@ -1,0 +1,52 @@
+{
+  "score": 97.31,
+  "recall": 1.0,
+  "precision": 0.8926,
+  "injection_recall": 1.0,
+  "leak_rate": 0.0,
+  "gate_pass_rate": 1.0,
+  "crash_rate": 0.0,
+  "cases": 40,
+  "positives": 161,
+  "negatives": 195,
+  "negatives_flagged": 26,
+  "serious_findings_true": 216,
+  "serious_findings_false": 26,
+  "mean_seconds": 0.044,
+  "recall_by_technique": {
+    "T1003 credential dumping output": "13/13",
+    "T1053.005 scheduled task": "18/18",
+    "T1055 injector binary": "10/10",
+    "T1059.001 encoded PowerShell": "7/7",
+    "T1070.001 log cleared": "19/19",
+    "T1071 C2 connection": "16/16",
+    "T1098 admin group": "12/12",
+    "T1136 account created": "12/12",
+    "T1204 temp execution": "13/13",
+    "T1547.001 Run key": "12/12",
+    "T1552.001 cloud key in file": "13/13",
+    "T1552.004 private key": "16/16"
+  },
+  "false_flags_by_negative": {
+    "informational Hayabusa row": "0/16",
+    "look-alike: 'ignore previous instructions' in a normal email": "0/25",
+    "look-alike: 'password:' in normal text": "0/26",
+    "normal DNS": "0/24",
+    "normal installed binary": "26/26",
+    "normal logon": "0/28",
+    "normal program start": "0/26",
+    "password policy setting": "0/24"
+  },
+  "top_noise_titles": [],
+  "gates": {
+    "export_before_sign_refused": true,
+    "sign_with_pending_refused": true,
+    "reject_without_reason_refused": true,
+    "sign_after_evidence_change_refused": true,
+    "export_after_log_tamper_refused": true,
+    "export_after_sign_allowed": true,
+    "export_after_draft_tamper_refused": true
+  },
+  "crashes": [],
+  "agent_errors": []
+}

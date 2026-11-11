@@ -172,7 +172,9 @@ def analyze_binary(path: Path) -> BinaryFeature:
         score += min(3.0, 0.6 * len(import_hints))
         rationale.append(f"Risky PE imports found: {', '.join(import_hints[:8])}.")
 
-    if size_bytes < 20_000:
+    # Size is a modifier, not a signal: a small file with no other
+    # indicator is usually a utility or a stub, not a dropper.
+    if size_bytes < 20_000 and score > 0:
         score += 0.5
         rationale.append("Small executable size can indicate loader/dropper behavior.")
 

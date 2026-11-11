@@ -33,6 +33,7 @@ Issues = "https://github.com/GameMaster007/auto-forensics/issues"
 [project.scripts]
 auto-forensics = "auto_forensics.cli:main"
 auto-forensics-api = "auto_forensics.api:main"
+auto-forensics-autopilot = "auto_forensics_autopilot.cli:main"
 
 [tool.ruff]
 target-version = "py310"
