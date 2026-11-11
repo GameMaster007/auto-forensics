@@ -73,6 +73,30 @@ HITS = [
     ("getsystem-pipe", ev(1, CommandLine=r"cmd.exe /c echo msdhch > \\.\pipe\msdhch")),
     ("mssql-xp-cmdshell", ev(15457, "MSSQLSERVER", Data="xp_cmdshell | 0 | 1")),
     ("winrm-shell", ev(91, "Microsoft-Windows-WinRM")),
+    ("bits-job", ev(59, "Microsoft-Windows-Bits-Client", url="https://a.uguu.se/Hv0bgvgHGNeH_Bin.7z")),
+    ("bits-job", ev(59, "Microsoft-Windows-Bits-Client", url=r"C:\Windows\system32\cmd.exe")),
+    ("silent-exit-lsass", ev(3001, "Microsoft-Windows-ProcessExitMonitor", param1=r"C:\Windows\System32\lsass.exe")),
+    ("boot-debug-signing", ev(4826, "Microsoft-Windows-Security-Auditing", KernelDebug="%%1842", TestSigning="%%1843")),
+    ("eventlog-service-down", ev(7036, "Service Control Manager", param1="Windows Event Log", param2="stopped")),
+    ("sedebug-enabled", ev(4703, "Microsoft-Windows-Security-Auditing", EnabledPrivilegeList="SeDebugPrivilege",
+                           ProcessName=r"C:\Users\IEUser\Desktop\x64\mimikatz.exe")),
+    ("local-group-enum", ev(4799, "Microsoft-Windows-Security-Auditing", SubjectUserName="jbrown",
+                            CallerProcessName=r"C:\Windows\System32\net1.exe")),
+    ("psh-obfuscation", ev(800, "PowerShell", Data="&('ne'+'w-'+'item') $eNV:teMP -itemtype DIrectOry;[x]::\"SecURi`T`ypRO`T`oCOL\"")),
+    ("mssql-sa-failure", ev(18456, "MSSQLSERVER", Data="sa | Reason: Password did not match")),
+    ("compile-after-delivery", ev(1, Image=r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe",
+                                  ParentImage=r"C:\Windows\System32\cmd.exe",
+                                  CommandLine=r"csc.exe /unsafe /nologo /target:exe /out:zoom-update.exe C:\Users\a\x.cs")),
+    ("ps-downgrade", ev(400, "PowerShell", Data="Available | None | HostVersion=2.0\n\tEngineVersion=2.0")),
+    ("cve-exploit-audit", ev(1, "Microsoft-Windows-Audit-CVE", CVEID="[CVE-2020-0601] cert validation")),
+    ("ad-delegation-set", ev(4742, "Microsoft-Windows-Security-Auditing", AllowedToDelegateTo="cifs/dc01.corp.local")),
+    ("ad-spn-on-user", ev(4738, "Microsoft-Windows-Security-Auditing", ServicePrincipalNames="http/fake.corp.local")),
+    ("ad-dcshadow-spn", ev(4742, "Microsoft-Windows-Security-Auditing", ServicePrincipalNames="GC/ws01.corp.local/corp.local")),
+    ("ad-sensitive-attribute", ev(5136, "Microsoft-Windows-Security-Auditing", AttributeLDAPDisplayName="msDS-KeyCredentialLink")),
+    ("ad-adminsdholder", ev(5136, "Microsoft-Windows-Security-Auditing", ObjectDN="CN=AdminSDHolder,CN=System,DC=corp,DC=local")),
+    ("gpp-password-read", ev(5145, "Microsoft-Windows-Security-Auditing", ShareName=r"\\*\SYSVOL",
+                             RelativeTargetName=r"corp.local\Policies\{X}\Machine\Preferences\Groups\Groups.xml")),
+    ("ntds-sam-file-access", ev(4663, "Microsoft-Windows-Security-Auditing", ObjectName=r"C:\Windows\NTDS\ntds.dit", ProcessName=r"C:\Temp\x.exe")),
     ("lsass-dump-cmd", ev(1, CommandLine=r"rundll32.exe C:\windows\System32\comsvcs.dll, MiniDump 624 C:\t\l.dmp full")),
     ("hive-dump", ev(1, CommandLine=r"reg save HKLM\SAM C:\temp\sam.save")),
     ("ntds-dump", ev(1, CommandLine='ntdsutil "ac i ntds" "ifm" "create full c:\\temp" q q')),
@@ -122,6 +146,20 @@ MISSES = [
     ("lolbin-proxy", ev(1, CommandLine=r"rundll32.exe shell32.dll,Control_RunDLL desk.cpl")),
     ("odd-parent-shell", ev(1, ParentImage=r"C:\Windows\explorer.exe", Image=r"C:\Windows\System32\cmd.exe")),
     ("pipe-impersonation", ev(17, PipeName=r"\spoolss")),
+    ("ad-delegation-set", ev(4742, "Microsoft-Windows-Security-Auditing", AllowedToDelegateTo="-")),
+    ("ad-sensitive-attribute", ev(5136, "Microsoft-Windows-Security-Auditing", AttributeLDAPDisplayName="description")),
+    ("ntds-sam-file-access", ev(4663, "Microsoft-Windows-Security-Auditing", ObjectName=r"C:\Windows\NTDS\ntds.dit",
+                                ProcessName=r"C:\Windows\System32\lsass.exe")),
+    ("ps-downgrade", ev(400, "PowerShell", Data="Available | None | EngineVersion=5.1.18362.145")),
+    ("cve-exploit-audit", ev(1, SYSMON, CVEID="")),
+    ("boot-debug-signing", ev(4826, "Microsoft-Windows-Security-Auditing", KernelDebug="%%1843", TestSigning="%%1843")),
+    ("eventlog-service-down", ev(7036, "Service Control Manager", param1="Windows Event Log", param2="running")),
+    ("sedebug-enabled", ev(4703, "Microsoft-Windows-Security-Auditing", EnabledPrivilegeList="SeDebugPrivilege",
+                           ProcessName=r"C:\Windows\System32\svchost.exe")),
+    ("psh-obfuscation", ev(4104, "Microsoft-Windows-PowerShell", ScriptBlockText="Get-ChildItem -Path C:\\logs | Sort-Object Length")),
+    ("bits-job", ev(60, "Microsoft-Windows-Bits-Client", url="http://g.live.com/odclientsettings/ProdV2")),
+    ("bits-job", ev(60, "Microsoft-Windows-Bits-Client",
+                    url="http://r2---sn-5hne6nsr.gvt1.com/edgedl/release2/chrome/x_chrome_updater.exe")),
     ("mssql-xp-cmdshell", ev(15457, "MSSQLSERVER", Data="max server memory | 2048 | 4096")),
     ("uac-disabled", ev(13, TargetObject=r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\policies\system\EnableLUA",
                         Details="DWORD (0x00000001)")),
@@ -187,3 +225,17 @@ def test_parser_keeps_unnamed_data_and_userdata() -> None:
     second = parse_evtx_xml_record(rdp, "b.evtx")
     assert first is not None and first.metadata["Data"] == "xp_cmdshell | 0 | 1"
     assert second is not None and second.metadata["Param1"] == "bob" and second.metadata["Param3"] == "127.0.0.1"
+
+
+def test_volume_rules_need_enough_events_and_accounts() -> None:
+    detector = WindowsRuleDetector()
+    sec = "Microsoft-Windows-Security-Auditing"
+    few = [ev(4625, sec, row=i, TargetUserName="bob") for i in range(1, 5)]
+    assert not [f for f in detector.detect(few, [], []) if f.title.startswith("Repeated failed")]
+    many = [ev(4625, sec, row=i, TargetUserName="bob") for i in range(1, 13)]
+    found = [f for f in detector.detect(many, [], []) if f.title.startswith("Repeated failed")]
+    assert len(found) == 1 and found[0].citations[0].row == 10
+    assert not [f for f in detector.detect(many, [], []) if "spraying" in f.title]
+    spray = [ev(4625, sec, row=i, TargetUserName=f"user{i}") for i in range(1, 7)]
+    sprayed = [f for f in detector.detect(spray, [], []) if "spraying" in f.title]
+    assert len(sprayed) == 1 and "6 accounts" in sprayed[0].recommendation

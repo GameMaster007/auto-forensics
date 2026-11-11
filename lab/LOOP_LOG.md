@@ -44,3 +44,17 @@ is covered by look-alike unit tests in `tests/test_windows_rules.py`.
 | 15 | Shells started by browsers, servers, update or print processes; more rundll32/LOLBAS tricks (zipfldr, advpack, pcwutl, desktopimgdownldr, explorer /root, wscript /E:) | 78.8% | 43.3% | |
 | 16 | Core parser keeps unnamed `<Data>` and `<UserData>` fields (SQL Server, RDP, WinRM were blank); pipe impersonation (potato attacks), getsystem, WinRM shells, remote DCOM, SQL xp_cmdshell | 82.4% | 46.0% | 55.3% / 23.9% |
 | 17 | Rust EVTX reader (10 MB log: 93 s to 0.05 s; cache rebuild 2 min 52 s to 6 s); values normalised so both readers produce identical events (264 of 277 files byte-identical; the rest differ only in BITS file times and binary privilege lists); EVTX reader recorded in the manifest | 82.4% | 46.0% | 55.3% / 23.9% |
+| 18 | Precision pass: BITS rule matched 293 events of Microsoft/Google update traffic; vendor update hosts now skipped, local-program BITS jobs (persistence) now caught | 82.7% | 46.4% | |
+| 19 | Single-event signals: LSASS silent-exit dump, DSRM password, SID history, SeDebugPrivilege, boot debug/test-signing, Event Log service stopped, local group enumeration, MSI from URL, SQL `sa` failures, PowerShell 800/4103 and obfuscation; Defender detector recognises the EVTX provider | 87.8% | 49.4% | 56.3% / 24.6% |
+
+A third set (Yamato Security and DeepBlueCLI samples from
+hayabusa-sample-evtx, 37 files, "dev2") was added at loop 19 because the
+gap between the development set and the hold-out showed the rules were
+partly fitted to the development samples. It scored 81.1% before any
+rule was written for it.
+
+| Loop | Change | Dev | Dev2 | Hold-out (detected / tactic) |
+| --- | --- | --- | --- | --- |
+| 20 | Compile-after-delivery (csc/vbc), PowerShell v2 downgrade, Windows Audit-CVE exploit events | 87.8% | 89.2% | 56.3% / 24.6% |
+| 21 | Active Directory changes from general AD knowledge (not from hold-out misses): delegation, SPN on users, DCShadow SPN, shadow credentials/RBCD and other sensitive attributes, AdminSDHolder, GPO edits, GPP passwords in SYSVOL, ntds.dit/SAM file access | 87.8% | 89.2% | 59.7% / 27.1% |
+| 22 | Volume rules: password guessing (10+ failures), spraying (5+ accounts), lockouts, SQL brute force. The first version skipped every rule; the benchmark caught it and it was fixed in the same loop | 87.8% | 89.2% | 60.1% / 27.5% |

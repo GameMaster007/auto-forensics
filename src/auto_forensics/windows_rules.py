@@ -49,6 +49,12 @@ class Rule:
     provider: str = ""  # substring of provider or channel, lowercase
     # Extra test across fields that a regex on one field cannot express.
     check: Callable[[dict[str, Any]], bool] | None = None
+    # Volume rules: report only when at least ``min_count`` events in one file
+    # match, and, if ``distinct`` names a field, at least ``min_distinct``
+    # different values of it (for example many user names in a spray).
+    min_count: int = 1
+    distinct: str = ""
+    min_distinct: int = 1
 
     def applies(self, event_id: int, provider: str) -> bool:
         return event_id in self.event_ids and (not self.provider or self.provider in provider)
@@ -120,8 +126,15 @@ RULES: tuple[Rule, ...] = (
          "T1059.005", PROC,
          {IMAGE: rx(r"\\(wscript|cscript|mshta)\.exe$"),
           CMD: rx(r"\\(temp|downloads|users\\public|appdata)\\[^\"]+\.(vbs|vbe|js|jse|hta|wsf)")}),
-    Rule("psh-scriptblock", "Suspicious PowerShell script block", "high", "execution", "T1059.001", _ids(4104),
-         {"ScriptBlockText": rx(r"(invoke-mimikatz|invoke-shellcode|invoke-reflectivepeinjection|amsiutils|"
+    Rule("psh-obfuscation", "Obfuscated PowerShell (split strings, backticks, char codes)", "high", "execution",
+         "T1027", _ids(4104, 4103, 800),
+         {"ScriptBlockText|Payload|Data": rx(r"(\(\s*'[a-z-]{1,4}'\s*\+\s*'[a-z-]{1,4}'.*){2,}|"
+                                             r"([a-z]`){2,}[a-z]|(\[char\]\s*\d{2,3}\s*[,+]\s*){4,}|"
+                                             r"-join\s*\(?\s*\[char\[\]\]|-bxor\s+0x|"
+                                             r"\.replace\(\s*'[^']{1,4}'\s*,\s*''\s*\).*iex")}),
+    Rule("psh-scriptblock", "Suspicious PowerShell script block", "high", "execution", "T1059.001",
+         _ids(4104, 4103, 800),
+         {"ScriptBlockText|Payload|Data": rx(r"(invoke-mimikatz|invoke-shellcode|invoke-reflectivepeinjection|amsiutils|"
                                 r"amsiinitfailed|\[reflection\.assembly\]::load|frombase64string.*(iex|invoke-expression)|"
                                 r"(iex|invoke-expression).*(downloadstring|webclient)|invoke-kerberoast|"
                                 r"get-gpppassword|powerview|sharphound|invoke-bloodhound|virtualalloc|"
@@ -163,8 +176,15 @@ RULES: tuple[Rule, ...] = (
          {"ImagePath|ServiceFileName": rx(r"(cmd(\.exe)?\s*/c|%comspec%|powershell|\\\\127\.0\.0\.1\\|admin\$|"
                                           r"\\temp\\|\\windows\\[a-z0-9]{8}\.exe|psexesvc|remcom|paexec|"
                                           r"\.bat\b|echo\s)")}),
-    Rule("bits-job", "BITS job transferred a file", "medium", "persistence", "T1197", _ids(59, 60),
-         {"url|RemoteName": rx(r"https?://")}, provider="bits"),
+    # Windows, Office and browsers use BITS for their own updates; those hosts are not reported.
+    Rule("bits-job", "BITS job fetched a file from a non-vendor host or ran a local program", "medium",
+         "persistence", "T1197", _ids(59, 60),
+         {"url|RemoteName": rx(r"^(https?://|[a-z]:\\|\\\\)")},
+         {"url|RemoteName": rx(r"^https?://([^/:]+\.)?(microsoft\.com|windowsupdate\.com|update\.microsoft\.com|"
+                               r"msn\.com|msn-com\.akamaized\.net|live\.com|onenote\.net|sfx\.ms|office\.com|"
+                               r"office\.net|msedge\.net|bing\.com|gvt1\.com|google\.com|gstatic\.com|"
+                               r"mozilla\.net|adobe\.com|dell\.com|hp\.com|lenovo\.com)(:\d+)?/")},
+         provider="bits"),
     # ---------------- privilege escalation ----------------
     Rule("uac-bypass-registry", "UAC bypass handler registered", "high", "privilege-escalation", "T1548.002",
          _ids(12, 13, 14),
@@ -203,6 +223,13 @@ RULES: tuple[Rule, ...] = (
     # ---------------- defense evasion ----------------
     Rule("log-cleared-cmd", "Event logs cleared from the command line", "high", "defense-evasion", "T1070.001", PROC,
          {CMD: rx(r"wevtutil(\.exe)?\s+(cl|clear-log)\b|clear-eventlog|remove-eventlog")}),
+    Rule("boot-debug-signing", "Kernel debugging or test signing enabled at boot", "high", "defense-evasion",
+         "T1553.006", _ids(4826), {}, provider="security-auditing",
+         check=lambda m: "%%1842" in (str(m.get("KernelDebug")), str(m.get("TestSigning")),
+                                       str(m.get("DisableIntegrityChecks")))),
+    Rule("eventlog-service-down", "Windows Event Log service stopped or crashed", "high", "defense-evasion",
+         "T1562.002", _ids(7036, 7031, 7034), {"param1": rx(r"^windows event log$")},
+         {"param2": rx(r"^running$")}, provider="service control manager"),
     Rule("log-cleared-system", "System event log cleared", "high", "defense-evasion", "T1070.001", _ids(104),
          {}, provider="eventlog"),
     Rule("shadow-delete", "Shadow copies or backups deleted", "high", "impact", "T1490", PROC,
@@ -269,6 +296,15 @@ RULES: tuple[Rule, ...] = (
          {"OriginalFileName": rx(r"^(cmd|powershell|psexec|psexesvc|procdump|rundll32|regsvr32|mshta|"
                                  r"certutil|wmic|net1?|whoami|nltest)\.exe(\.mui)?$")},
          provider=SYSMON, check=lambda m: _renamed(m)),
+    Rule("compile-after-delivery", "Code compiled on the host into a program in a user folder", "medium",
+         "defense-evasion", "T1027.004", PROC,
+         {IMAGE: rx(r"\\(csc|vbc|jsc|ilasm)\.exe$"),
+          CMD: rx(r"/out:\s*\"?([a-z]:\\(users|programdata|windows\\temp)\\[^\"]*|[^\\\s\"]+)\.(exe|dll)\b")},
+         {PARENT: rx(r"\\(msbuild|devenv|vbcscompiler|dotnet)\.exe$")}),
+    Rule("ps-downgrade", "PowerShell version 2 engine started (bypasses script logging)", "high", "defense-evasion",
+         "T1562.010", _ids(400), {"Data": rx(r"engineversion=2\.")}, provider="powershell"),
+    Rule("cve-exploit-audit", "Windows logged an attempt to exploit a known vulnerability", "high", "initial-access",
+         "T1190", _ids(1), {"CVEID": rx(r"cve-\d{4}-\d+")}, provider="audit-cve"),
     Rule("hidden-file", "File hidden or protected with attrib", "medium", "defense-evasion", "T1564.001", PROC,
          {CMD: rx(r"attrib(\.exe)?\s+.*\+(h|s)\b")}),
     Rule("unsigned-driver", "Driver loaded that is not validly signed", "high", "defense-evasion", "T1014", _ids(6),
@@ -331,6 +367,58 @@ RULES: tuple[Rule, ...] = (
          "credential-access", "T1557.001", _ids(4624),
          {"TargetUserName": rx(r"\$$"), "AuthenticationPackageName": rx(r"^ntlm$"), "LogonType": rx(r"^3$")},
          {"IpAddress": rx(r"^(-|127\.0\.0\.1|::1|)$")}),
+    Rule("silent-exit-lsass", "LSASS dumped through the silent process exit mechanism", "critical",
+         "credential-access", "T1003.001", _ids(3001), {"param1": rx(r"\\lsass\.exe$")}, provider="processexitmonitor"),
+    Rule("dsrm-password", "Directory Services Restore Mode password set", "high", "persistence", "T1098",
+         _ids(4794), {}, provider="security-auditing"),
+    Rule("sid-history", "SID history added to an account", "critical", "privilege-escalation", "T1134.005",
+         _ids(4765, 4766), {}, provider="security-auditing"),
+    Rule("sedebug-enabled", "Debug privilege enabled by a program outside Windows", "medium", "privilege-escalation",
+         "T1134", _ids(4703), {"EnabledPrivilegeList": rx(r"sedebugprivilege")},
+         {"ProcessName": rx(r"^c:\\(windows\\(system32|syswow64|servicing|winsxs)|program files( \(x86\))?)\\")},
+         provider="security-auditing"),
+    Rule("mssql-sa-failure", "Failed SQL Server login to the sa account", "medium", "credential-access", "T1110",
+         _ids(18456), {"Data": rx(r"^sa\b")}, provider="mssql"),
+    # ---------------- Active Directory changes (Security log on a DC) ----------------
+    Rule("ad-delegation-set", "Kerberos delegation configured on an account", "high", "privilege-escalation",
+         "T1098", _ids(4738, 4742), {"AllowedToDelegateTo": rx(r"^(?!-$).+")}, provider="security-auditing"),
+    Rule("ad-spn-on-user", "Service principal name added to a user account (targeted kerberoasting)", "medium",
+         "credential-access", "T1558.003", _ids(4738), {"ServicePrincipalNames": rx(r"^(?!-$).+")},
+         provider="security-auditing"),
+    Rule("ad-dcshadow-spn", "Global catalog SPN added to a computer account (DCShadow)", "high", "defense-evasion",
+         "T1207", _ids(4742), {"ServicePrincipalNames": rx(r"\bGC/|E3514235-4B06-11D1-AB04-00C04FC2DCD2")},
+         provider="security-auditing"),
+    Rule("ad-sensitive-attribute", "Sensitive Active Directory attribute changed", "high", "persistence", "T1098",
+         _ids(5136), {"AttributeLDAPDisplayName": rx(
+             r"^(msds-keycredentiallink|msds-allowedtoactonbehalfofotheridentity|msds-allowedtodelegateto|"
+             r"sidhistory|serviceprincipalname|scriptpath|msds-supportedencryptiontypes|useraccountcontrol|"
+             r"admincount|primarygroupid|altsecurityidentities)$")}, provider="security-auditing"),
+    Rule("ad-adminsdholder", "AdminSDHolder permissions changed", "critical", "persistence", "T1098", _ids(5136),
+         {"ObjectDN": rx(r"cn=adminsdholder,")}, provider="security-auditing"),
+    Rule("ad-gpo-changed", "Group Policy object changed", "medium", "defense-evasion", "T1484.001", _ids(5136),
+         {"ObjectClass": rx(r"^grouppolicycontainer$"),
+          "AttributeLDAPDisplayName": rx(r"^(gpcmachineextensionnames|gpcuserextensionnames|gpcfilesyspath|versionnumber)$")},
+         provider="security-auditing"),
+    Rule("gpp-password-read", "Group Policy Preferences file with stored passwords read from SYSVOL", "high",
+         "credential-access", "T1552.006", _ids(5145, 4663),
+         {"RelativeTargetName|ObjectName": rx(r"(groups|services|scheduledtasks|datasources|drives|printers)\.xml$"),
+          "ShareName|ObjectName": rx(r"sysvol")}, provider="security-auditing"),
+    Rule("ntds-sam-file-access", "AD database or SAM hive file opened", "high", "credential-access", "T1003.003",
+         _ids(4663, 4656), {"ObjectName": rx(r"\\ntds\.dit$|\\config\\(sam|security|system)$")},
+         {"ProcessName": rx(r"\\(lsass|ntfrs|dfsrs|wbengine|vssvc|svchost|msmpeng)\.exe$")},
+         provider="security-auditing"),
+    # ---------------- volume rules ----------------
+    Rule("password-guessing", "Repeated failed logons (password guessing)", "medium", "credential-access", "T1110.001",
+         _ids(4625, 4771, 4776), {}, provider="security-auditing", min_count=10,
+         check=lambda m: str(m.get("event_id")) == "4625" or str(m.get("Status", "")).lower() not in {"0x0", ""}),
+    Rule("password-spray", "Failed logons across many accounts (password spraying)", "high", "credential-access",
+         "T1110.003", _ids(4625, 4771, 4776), {}, provider="security-auditing", min_count=5,
+         distinct="TargetUserName", min_distinct=5,
+         check=lambda m: str(m.get("event_id")) == "4625" or str(m.get("Status", "")).lower() not in {"0x0", ""}),
+    Rule("account-lockouts", "Several accounts locked out", "medium", "credential-access", "T1110", _ids(4740), {},
+         provider="security-auditing", min_count=3, distinct="TargetUserName", min_distinct=2),
+    Rule("mssql-brute-force", "Repeated failed SQL Server logins", "medium", "credential-access", "T1110",
+         _ids(18456), {}, provider="mssql", min_count=5),
     # ---------------- discovery ----------------
     Rule("domain-discovery", "Domain, account or trust discovery command", "medium", "discovery", "T1087.002", PROC,
          {CMD: rx(r"\bnet1?(\.exe)?\s+(user|group|localgroup|accounts)\b.*(/domain|admins)|nltest.*/(dclist|"
@@ -342,6 +430,12 @@ RULES: tuple[Rule, ...] = (
                   r"netstat\s+-(an|ano)|net\s+(share|session|view|use)|wmic\s+.*(qfe|product|service|"
                   r"useraccount|group)\s|get-wmiobject|reg\s+query\s+hk)")},
          {PARENT: rx(r"\\(explorer)\.exe$")}),
+    Rule("local-group-enum", "Local users or privileged groups enumerated by a command-line tool", "medium",
+         "discovery", "T1069.001", _ids(4798, 4799),
+         {"CallerProcessName": rx(r"\\(net1?|powershell|pwsh|wmic|cmd|rundll32|dsquery|whoami)\.exe$|^-$")},
+         {"SubjectUserName": rx(r"\$$")}, provider="security-auditing"),
+    Rule("msi-from-url", "Windows Installer package run from a URL", "medium", "execution", "T1218.007",
+         _ids(1040, 1042, 11707, 1033), {"Data": rx(r"https?://")}, provider="msiinstaller"),
     Rule("sam-enum", "Remote SAM enumeration", "medium", "discovery", "T1087.001", _ids(4661, 5145),
          {"ObjectName|RelativeTargetName": rx(r"(sam_domain|sam_alias|sam_group|^samr$)")},
          {"SubjectUserName": rx(r"\$$")}),
@@ -453,6 +547,7 @@ class WindowsRuleDetector:
         del binary_features, timeline
         findings: list[Finding] = []
         counts: dict[tuple[str, str], int] = {}
+        values: dict[tuple[str, str], set[str]] = {}
         firsts: dict[tuple[str, str], Finding] = {}
         for event in artifacts:
             if _event_id(event) is None:
@@ -465,7 +560,13 @@ class WindowsRuleDetector:
                     continue
                 key = (rule.rule_id, citation.source_file)
                 counts[key] = counts.get(key, 0) + 1
+                if rule.distinct:
+                    values.setdefault(key, set()).add(str(event.metadata.get(rule.distinct) or "").lower())
                 if key in firsts:
+                    continue
+                if counts[key] < rule.min_count:
+                    continue
+                if rule.distinct and len(values.get(key, ())) < rule.min_distinct:
                     continue
                 finding = Finding(
                     finding_id=stable_id("win", rule.rule_id, citation.sha256, citation.row),
@@ -487,7 +588,10 @@ class WindowsRuleDetector:
                 if len(findings) >= self.max_findings:
                     return findings
         for (rule_id, source), finding in firsts.items():
-            extra = counts[(rule_id, source)] - 1
-            if extra:
-                finding.recommendation += f" {extra} more matching event(s) in the same file."
+            total = counts[(rule_id, source)]
+            distinct = len(values.get((rule_id, source), ()))
+            if distinct > 1:
+                finding.recommendation += f" {total} matching events across {distinct} accounts in the same file."
+            elif total > 1:
+                finding.recommendation += f" {total - 1} more matching event(s) in the same file."
         return findings

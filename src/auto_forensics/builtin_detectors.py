@@ -150,11 +150,14 @@ class DefenderDetector:
         del binary_features, timeline
         findings: list[Finding] = []
         for item in artifacts:
-            src = item.source.lower()
+            src = f"{item.source} {item.metadata.get('provider') or ''} {item.metadata.get('channel') or ''}".lower()
             text = f"{item.event_type} {item.description}".lower()
             if "defender" not in src and "windows_defender" not in text:
                 continue
-            if "threat" in text or "malware" in text or "detected" in text:
+            # 1006/1116 = malware detected, 1007/1117 = action taken, 1015 = suspicious behaviour.
+            event_id = str(item.metadata.get("event_id") or "")
+            if event_id in {"1006", "1007", "1015", "1116", "1117"} or item.metadata.get("Threat Name") \
+                    or "threat" in text or "malware" in text or "detected" in text:
                 findings.append(
                     _finding(
                         title="Windows Defender threat detection",
