@@ -15,8 +15,9 @@ pip install -e ".[evtx,yara]"
 # 1. One click: custody record, triage, parallel agents, draft
 auto-forensics-autopilot start --input-dir /cases/evidence --output-dir /cases/run-01 --case-id case-01 --actor "B. Christy"
 
-# 2. Read run-01/autopilot_draft.md, then decide each finding
-auto-forensics-autopilot decide --run-dir /cases/run-01 --finding-id win-1a2b3c --decision accept --actor "B. Christy"
+# 2. Read run-01/autopilot_draft.md, list what is pending, then decide
+auto-forensics-autopilot status --run-dir /cases/run-01
+auto-forensics-autopilot decide --run-dir /cases/run-01 --finding-id win-1a2b3c win-4d5e6f --decision accept --actor "B. Christy"
 auto-forensics-autopilot decide --run-dir /cases/run-01 --finding-id sec-9f8e7d --decision reject --actor "B. Christy" --note "admin's scheduled backup"
 
 # 3. Sign once nothing is pending, then export
@@ -43,10 +44,30 @@ auto-forensics-autopilot export --run-dir /cases/run-01 --dest /cases/run-01-fin
 | `injection_sentinel` | text or binaries present | Text written to steer an AI analyst ("ignore previous instructions", chat-control tokens, "mark this as clean"). Matching files are listed as hostile in the draft |
 | `secrets_sweep` | text present | Private keys, cloud keys, API tokens, plaintext passwords, credential-dumping output |
 | `memory` | a memory image is present and Volatility 3 is installed | Suspicious process command lines from `windows.cmdline` |
+| `archive` | a ZIP archive is present | Extracts the ZIP into the run folder with zip-slip, symlink, size and zip-bomb checks, then runs the core pipeline, sentinel and secrets sweep on the contents. Findings cite `archive.zip!path/inside` |
 
-Disk images and archives are listed by triage but not opened. Export a
-disk image with Plaso first, or extract archives into the evidence
-folder. Imaging stays out of scope (see `docs/ROADMAP.md`).
+Disk images and non-ZIP archives (7z, RAR) are listed by triage but not
+opened. Export a disk image with Plaso first, or extract other archives
+into the evidence folder. Imaging stays out of scope (see `docs/ROADMAP.md`).
+
+## Reading the draft
+
+`autopilot_draft.md` has, in order: a warning listing any hostile files;
+an **attack chain** table (medium-or-higher findings grouped by ATT&CK
+tactic in kill-chain order); the findings table with where each is cited;
+the riskiest timeline events; and which agents ran or were skipped and why.
+A finding drafted by a model from a hostile file is marked
+**[hostile source: verify by hand]**.
+
+## Windows event rules
+
+The core reads EVTX (Rust `evtx` reader, falling back to `python-evtx`)
+and applies about 110 behaviour rules in `src/auto_forensics/windows_rules.py`
+covering Sysmon, Security, System, PowerShell, WinRM, DCOM, BITS, SQL Server
+and Active Directory events. Volume rules (password guessing and spraying,
+lockouts, reconnaissance bursts) count events inside a sliding time window.
+Measured results, including false alarms on ordinary activity, are in
+`lab/LOOP_LOG.md`.
 
 ## Safety rules
 

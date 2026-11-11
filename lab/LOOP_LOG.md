@@ -85,3 +85,5 @@ produce no false alarms.
 | 31 | Memory agent tested with simulated Volatility output: suspicious command lines flagged and cited by row, one failing image does not stop the others, skipped with a reason when Volatility is missing | 2 new tests |
 | 32 | Model-drafted findings that cite a file the sentinel flags as hostile carry a "model read hostile text" warning in the draft | 1 new test |
 | 33 | Evidence ZIPs are extracted into the run folder (never the evidence folder) with zip-slip, symlink, case-collision, size, count and zip-bomb checks, then analysed by the core pipeline, sentinel and secrets sweep; findings cite `archive.zip!member` and are verified against the extracted copy | 9 new tests |
+| 34 | User guide updated: archives, pending list, attack chain, multi-id decide, hostile-source flag, Windows rules section | docs |
+| 35 | README: autopilot section; removed two stale claims (review step and Plaso/Hayabusa import are implemented) | docs |

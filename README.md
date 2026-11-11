@@ -10,16 +10,15 @@ a directory of evidence, drafts findings, and keeps a finding only when
 it points at an artifact from that directory: the artifact id, the
 source file, a row or a byte offset, and the SHA-256. A finding
 without that pointer is dropped. The draft is labelled
-`analyst-unverified` until a person accepts or rejects it. That review
-step is stored as a field and is not implemented yet.
+`analyst-unverified` until a person accepts or rejects it with
+`auto-forensics review`, which appends to a custody log.
 
 Maintained by [Benjamin Christy](https://github.com/GameMaster007).
 
 This is not a claim that a model does forensics. Plaso, Hayabusa, and
-Chainsaw remain the right tools for parsing. This repository does not
-image disks, collect endpoints, or train its own model. Importing
-those tools' output is on the [roadmap](docs/ROADMAP.md) and is not in
-this version.
+Chainsaw remain the right tools for parsing, and their exports are read
+as cited rows. This repository does not image disks, collect endpoints,
+or train its own model.
 
 ## Why it is worth studying
 
@@ -55,6 +54,28 @@ python -m pip install -e ".[dev]"
 ```
 
 The command `auto-forensics` is installed by that editable install.
+
+## Autopilot: one command, then an analyst signs
+
+The `auto-forensics-autopilot` plugin runs the whole triage from one
+command: custody hashes, triage, parallel agents (the core pipeline,
+an injection sentinel, a secrets sweep, memory and ZIP-archive agents),
+and a coordinator that writes a cited draft without quoting evidence
+text. Nothing can be exported until an analyst has accepted or rejected
+every finding and signed.
+
+```bash
+python -m pip install -e ".[evtx,yara]"
+auto-forensics-autopilot start  --input-dir EVIDENCE --output-dir RUN --case-id case-01 --actor "Your Name"
+auto-forensics-autopilot status --run-dir RUN
+auto-forensics-autopilot decide --run-dir RUN --finding-id ID [ID ...] --decision accept --actor "Your Name"
+auto-forensics-autopilot sign   --run-dir RUN --actor "Your Name"
+auto-forensics-autopilot export --run-dir RUN --dest FINAL
+```
+
+Guide: [docs/AUTOPILOT.md](docs/AUTOPILOT.md). Test lab and measured
+results on public attack logs (detection, ATT&CK tactic, false alarms):
+[lab/README.md](lab/README.md) and [lab/LOOP_LOG.md](lab/LOOP_LOG.md).
 
 ## Quickstart
 
