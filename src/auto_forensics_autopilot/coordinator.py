@@ -20,6 +20,32 @@ from auto_forensics.models import Finding
 from .agents import iter_lines, line_digest
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+KILL_CHAIN = (
+    "reconnaissance", "resource-development", "initial-access", "execution", "persistence",
+    "privilege-escalation", "defense-evasion", "credential-access", "discovery", "lateral-movement",
+    "collection", "command-and-control", "exfiltration", "impact",
+)
+
+
+def attack_chain(findings: list[Finding]) -> list[dict[str, Any]]:
+    """Group findings by ATT&CK tactic in kill-chain order; unknown tactics go last."""
+    groups: dict[str, list[Finding]] = {}
+    for finding in findings:
+        if SEVERITY_ORDER.get(finding.severity, 9) > SEVERITY_ORDER["medium"]:
+            continue
+        groups.setdefault((finding.tactic or "unknown").lower(), []).append(finding)
+    order = {name: index for index, name in enumerate(KILL_CHAIN)}
+    chain = []
+    for tactic in sorted(groups, key=lambda name: (order.get(name, len(order)), name)):
+        items = groups[tactic]
+        chain.append({
+            "tactic": tactic,
+            "findings": len(items),
+            "top_severity": min((f.severity for f in items), key=lambda sev: SEVERITY_ORDER.get(sev, 9)),
+            "techniques": sorted({f.technique_id for f in items if f.technique_id}),
+            "titles": sorted({f.title for f in items})[:6],
+        })
+    return chain
 DRAFT_STATUS = "DRAFT - not signed. Do not rely on this until an analyst signs it."
 
 
@@ -152,6 +178,7 @@ def build_draft(
         "headline": headline,
         "severity_counts": severity_counts,
         "tactics": tactics,
+        "attack_chain": attack_chain(findings),
         "findings": [_finding_entry(f) for f in findings],
         "dropped": dropped,
         "hostile_files": sorted(set(hostile_files)),
@@ -177,6 +204,14 @@ def render_markdown(draft: dict[str, Any], *, title: str = "Autopilot draft") ->
             "",
         ]
         lines += [f"- `{_cell(path)}`" for path in draft["hostile_files"]] + [""]
+    if draft.get("attack_chain"):
+        lines += ["## Attack chain", "",
+                  "Medium-or-higher findings by ATT&CK tactic, in kill-chain order. Each still needs a decision.",
+                  "", "| Tactic | Findings | Highest | Techniques | What was seen |", "| --- | --- | --- | --- | --- |"]
+        for step in draft["attack_chain"]:
+            lines.append(f"| {_cell(step['tactic'])} | {step['findings']} | {_cell(step['top_severity'])} | "
+                         f"{_cell(', '.join(step['techniques']))} | {_cell('; '.join(step['titles']))} |")
+        lines.append("")
     lines += ["## Findings", "", "| ID | Severity | Title | Tactic | Agent | Cited at | Decision |",
               "| --- | --- | --- | --- | --- | --- | --- |"]
     for finding in draft["findings"]:

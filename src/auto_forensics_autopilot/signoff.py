@@ -92,8 +92,21 @@ def status(run_dir: Path) -> dict[str, Any]:
     signature = None
     if (run_dir / SIGNATURE_FILE).is_file():
         signature = read_json(run_dir / SIGNATURE_FILE)
+    by_id = {f["finding_id"]: f for f in draft["findings"]}
     return {
         "case_id": draft["case_id"],
+        "pending_findings": [
+            {
+                "finding_id": fid,
+                "severity": by_id[fid]["severity"],
+                "title": by_id[fid]["title"],
+                "cited_at": "; ".join(
+                    c["source_file"] + (f" row {c['row']}" if c.get("row") else f" @{c.get('offset')}")
+                    for c in by_id[fid]["citations"]
+                ),
+            }
+            for fid in pending
+        ],
         "total": len(ids),
         "accepted": sum(1 for fid in ids if decided.get(fid, {}).get("decision") == "accept"),
         "rejected": sum(1 for fid in ids if decided.get(fid, {}).get("decision") == "reject"),

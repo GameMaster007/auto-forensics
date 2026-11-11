@@ -155,6 +155,8 @@ def test_sentinel_and_secrets_rules_do_not_fire_on_ordinary_text(tmp_path: Path)
         "Please ignore the previous instructions from IT about the printer; the new driver is fine.",
         "Do not include personal data in the ticket.",
         "Reminder from helpdesk: to reset your password: visit the staff portal.",
+        "See https://hooks.example.com/services/docs for the webhook guide.",
+        "The JWT format is header.payload.signature.",
         "The password policy is 12 characters.",
         "We reviewed the system design.",
     ]
@@ -273,6 +275,13 @@ def test_cli_round_trip(evidence: Path, tmp_path: Path, capsys: pytest.CaptureFi
     "set PASS=hunter22",
     "-----BEGIN RSA " + "PRIVATE KEY-----",
     "mimikatz # sekurlsa::logonpasswords",
+    # Built from parts so secret scanners do not flag these test fixtures.
+    "url=" + "https://hooks.slack.com/services/" + "T0123ABCD/B0123ABCD/" + "a" * 24,
+    "key=" + "AIza" + "B" * 35,
+    "DefaultEndpointsProtocol=https;AccountName=x;" + "AccountKey=" + "Q" * 86 + "==",
+    "stripe=" + "sk_" + "live_" + "4" * 24,
+    "token " + "eyJ" + "hbGciOiJIUzI1" + ".eyJ" + "zdWIiOiIxMjM0" + "." + "sig" * 5,
+    "Administrator:500:" + "aad3b435b51404eeaad3b435b51404ee" + ":" + "31d6cfe0d16ae931b73c59d7e0c089c0" + ":::",
 ])
 def test_secrets_rules_fire_on_real_secrets(line: str) -> None:
     assert any(rule.matches(line) for rule in SecretsSweepAgent.rules), line
@@ -306,3 +315,32 @@ def test_hidden_text_signal() -> None:
     assert hidden_text_signal("pass\u200bword")
     assert not hidden_text_signal("ordinary text, nothing hidden")
     assert not hidden_text_signal("\ufeffBOM at the start of a file")
+
+
+def test_cli_status_lists_pending_and_decide_takes_many_ids(evidence: Path, tmp_path: Path,
+                                                            capsys: pytest.CaptureFixture[str]) -> None:
+    out = tmp_path / "multi"
+    assert cli_main(["start", "--input-dir", str(evidence), "--output-dir", str(out), "--case-id", "case-m"]) == 0
+    capsys.readouterr()
+    draft = json.loads((out / DRAFT_JSON).read_text())
+    ids = [f["finding_id"] for f in draft["findings"]]
+    assert cli_main(["status", "--run-dir", str(out)]) == 0
+    listing = capsys.readouterr().out
+    assert all(fid in listing for fid in ids) and f"{len(ids)} pending" in listing
+    assert cli_main(["decide", "--run-dir", str(out), "--finding-id", *ids, "--decision", "accept",
+                     "--actor", "analyst"]) == 0
+    assert len((out / signoff.SIGNOFF_LOG).read_text().splitlines()) == len(ids)
+    assert signoff.status(out)["pending"] == []
+
+
+def test_attack_chain_is_in_kill_chain_order() -> None:
+    from auto_forensics_autopilot.coordinator import KILL_CHAIN, attack_chain
+
+    def f(fid: str, tactic: str, severity: str = "high") -> Finding:
+        return Finding(finding_id=fid, title=fid, severity=severity, confidence=0.7, tactic=tactic, technique_id="T1")
+
+    chain = attack_chain([f("a", "lateral-movement"), f("b", "execution"), f("c", "execution", "critical"),
+                          f("d", "persistence", "low"), f("e", "made-up")])
+    assert [step["tactic"] for step in chain] == ["execution", "lateral-movement", "made-up"]
+    assert chain[0]["findings"] == 2 and chain[0]["top_severity"] == "critical"
+    assert KILL_CHAIN.index("execution") < KILL_CHAIN.index("lateral-movement")

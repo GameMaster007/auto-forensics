@@ -39,10 +39,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     stat = sub.add_parser("status", help="Show how many findings are decided and whether the draft is signed.")
     stat.add_argument("--run-dir", required=True, type=Path)
+    stat.add_argument("--json", action="store_true", help="Also print the full status as JSON.")
 
     dec = sub.add_parser("decide", help="Accept or reject one finding.")
     dec.add_argument("--run-dir", required=True, type=Path)
-    dec.add_argument("--finding-id", required=True)
+    dec.add_argument("--finding-id", required=True, nargs="+",
+                     help="One or more finding ids; each is decided and logged separately.")
     dec.add_argument("--decision", required=True, choices=sorted(signoff.DECISIONS))
     dec.add_argument("--actor", required=True)
     dec.add_argument("--note", default="", help="Reason. Required for reject.")
@@ -75,11 +77,19 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Draft: {args.output_dir / DRAFT_MD}")
             print("Next: decide every finding, then sign.")
         elif args.command == "status":
-            print(json.dumps(signoff.status(args.run_dir), indent=2))
+            state = signoff.status(args.run_dir)
+            print(f"Case {state['case_id']}: {state['accepted']} accepted, {state['rejected']} rejected, "
+                  f"{len(state['pending'])} pending of {state['total']}."
+                  + (f" Signed by {state['signed_by']}." if state["signed"] else ""))
+            for item in state["pending_findings"]:
+                print(f"  {item['finding_id']}  [{item['severity']}] {item['title']}  ({item['cited_at']})")
+            if args.json:
+                print(json.dumps(state, indent=2))
         elif args.command == "decide":
-            entry = signoff.decide(args.run_dir, finding_id=args.finding_id, decision=args.decision,
-                                   actor=args.actor, note=args.note, override=args.override)
-            print(f"{entry['finding_id']}: {entry['decision']} by {entry['actor']}")
+            for finding_id in dict.fromkeys(args.finding_id):
+                entry = signoff.decide(args.run_dir, finding_id=finding_id, decision=args.decision,
+                                       actor=args.actor, note=args.note, override=args.override)
+                print(f"{entry['finding_id']}: {entry['decision']} by {entry['actor']}")
         elif args.command == "sign":
             sig = signoff.sign(args.run_dir, actor=args.actor, statement=args.statement)
             print(f"Signed by {sig['actor']} at {sig['signed_at']}: {sig['accepted']} accepted, {sig['rejected']} rejected.")
