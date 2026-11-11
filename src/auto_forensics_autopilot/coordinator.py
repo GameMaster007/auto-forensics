@@ -69,7 +69,7 @@ def verify_agent_finding(
     """Return None when the finding's citations hold, else the reason it is dropped.
 
     ``locate`` maps a cited name that is not under ``input_dir`` (an archive
-    member) to the extracted copy it was hashed from.
+    member or a file copied out of a disk image) to the extracted copy it was hashed from.
     """
     if not finding.citations:
         return "no citation"
@@ -103,6 +103,8 @@ def check_label(finding: Finding) -> str:
     if finding.worker == "archive":
         # The archive's own core run checked these; the coordinator re-checked only the member's hash.
         return "member hash; row checked by the archive's core run"
+    if finding.worker == "disk_image":
+        return "copied file hash; row checked by the image's core run"
     return "file hash only"
 
 

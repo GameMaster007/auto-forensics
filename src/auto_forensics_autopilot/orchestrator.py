@@ -153,7 +153,8 @@ def _start_locked(
     # Stage 3: agents in parallel, one shared store.
     store = MemoryCaseStore()
     ctx = AgentContext(case_id=case_id, input_dir=evidence, run_dir=out, profile=profile, llm=llm,
-                       llama_endpoint=llama_endpoint, llama_model=llama_model, rules_dir=rules_dir)
+                       llama_endpoint=llama_endpoint, llama_model=llama_model, rules_dir=rules_dir,
+                       inventory=inventory_map(inventory_rows))
     to_run = [p.name for p in plans if p.run and p.name in AGENTS]
     with ThreadPoolExecutor(max_workers=MAX_PARALLEL_AGENTS, thread_name_prefix="af-agent") as pool:
         results = list(pool.map(lambda name: _run_agent(name, ctx, store), to_run))
@@ -172,13 +173,18 @@ def _start_locked(
     locate: dict[str, Path] = {}
     collisions: list[str] = []
     hostile = []
+    extracted_dirs = {
+        "archive": (out / "archives", "archives.json", lambda m: Path(m["folder"]) / m["extracted"]),
+        "disk_image": (out / "disk", "disk_images.json", lambda m: Path(m["folder"]) / "files" / m["extracted"]),
+    }
     for result in results:
-        if result.name in {"injection_sentinel", "archive"}:
+        if result.name in {"injection_sentinel", "archive", "disk_image"}:
             hostile.extend(result.notes.get("files_flagged", []))
-        if result.name == "archive":
+        if result.name in extracted_dirs:
+            base, listing, where = extracted_dirs[result.name]
             members = result.notes.pop("members", [])
-            (out / "archives").mkdir(exist_ok=True)
-            write_json(out / "archives" / "archives.json", members)
+            base.mkdir(exist_ok=True)
+            write_json(base / listing, members)
             result.notes["members_extracted"] = len(members)
             for member in members:
                 if member["cited_as"] in inventory:
@@ -186,7 +192,7 @@ def _start_locked(
                     collisions.append(member["cited_as"])
                     continue
                 inventory[member["cited_as"]] = member["sha256"]
-                locate[member["cited_as"]] = out / "archives" / member["folder"] / member["extracted"]
+                locate[member["cited_as"]] = base / where(member)
     findings, dropped = merge_findings(store.findings(), evidence, inventory, locate)
     gaps: list[dict[str, str]] = []
     for result in results:
@@ -196,10 +202,14 @@ def _start_locked(
             gaps.append({"what": f"agent {result.name}", "why": f"agent status {result.status}"})
         for rel in result.notes.get("not_zip", []):
             gaps.append({"what": rel, "why": "archive is not a ZIP and was not opened"})
+        gaps.extend(result.notes.pop("gaps", []))
     for name in collisions:
         gaps.append({"what": name, "why": "archive member has the same name as an evidence file; member not cited"})
-    for rel in profile.kinds.get("disk_image", []):
-        gaps.append({"what": rel, "why": "disk image is not mounted; export it with Plaso first"})
+    disk_plan = next((p for p in plans if p.name == "disk_image"), None)
+    if disk_plan is not None and not disk_plan.run:
+        for rel in profile.kinds.get("disk_image", []):
+            gaps.append({"what": rel, "why": f"disk image was not opened ({disk_plan.reason}); "
+                                             "or export it with Plaso first"})
     draft = build_draft(
         coverage_gaps=gaps,
         case_id=case_id,

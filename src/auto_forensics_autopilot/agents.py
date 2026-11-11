@@ -49,6 +49,8 @@ class AgentContext:
     llama_endpoint: str = "http://localhost:11434"
     llama_model: str = "llama3.1:8b"
     rules_dir: Path | None = None
+    # Custody hashes by evidence path, so large files (disk images) are not read again.
+    inventory: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -551,14 +553,122 @@ class ArchiveAgent:
                            notes={"members": members_out, "files_flagged": hostile, "not_zip": skipped})
 
 
+# --------------------------------------------------------------------------
+# Disk image agent
+# --------------------------------------------------------------------------
+
+
+def _analyse_extracted(ctx: AgentContext, folder: Path, run_dir: Path, worker: str,
+                       errors: list[str], label: str) -> tuple[list[Finding], list[str]]:
+    """Run the core pipeline, sentinel and secrets sweep on files copied into the run folder."""
+    from auto_forensics.case_store import MemoryCaseStore
+
+    from .triage import profile_evidence
+
+    sub_ctx = AgentContext(case_id=ctx.case_id, input_dir=folder, run_dir=run_dir, profile=profile_evidence(folder),
+                           llm=ctx.llm, llama_endpoint=ctx.llama_endpoint, llama_model=ctx.llama_model,
+                           rules_dir=ctx.rules_dir)
+    sub_store = MemoryCaseStore()
+    flagged: list[str] = []
+    for agent_cls in (CorePipelineAgent, InjectionSentinelAgent, SecretsSweepAgent):
+        agent = agent_cls()
+        try:
+            result = agent.run(sub_ctx, sub_store, ToolRegistry(worker=f"{worker}/{agent.name}", store=sub_store))
+        except IntegrityError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{label} {agent.name}: {type(exc).__name__}")
+            continue
+        if agent.name == "injection_sentinel":
+            flagged.extend(result.notes.get("files_flagged", []))
+    return sub_store.findings(), flagged
+
+
+def disk_available() -> tuple[bool, str]:
+    from .disk_images import disk_support
+
+    return disk_support()
+
+
+class DiskImageAgent:
+    """Open disk images read-only, copy key artefacts into the run folder, and analyse them.
+
+    Each image gets its own core run and line-rule scans over the copied
+    files. Findings are re-cited as ``<image>!/<drive>/<path in image>`` and
+    submitted under this agent's name; the coordinator verifies them
+    against the copies.
+    """
+
+    name = "disk_image"
+
+    def run(self, ctx: AgentContext, store: CaseStore, tools: ToolRegistry) -> AgentResult:
+        from .disk_images import SEPARATOR, DiskBudget, group_images, read_image
+
+        tools.allow("read_disk_image", read_image)
+        budget = DiskBudget()
+        groups, orphans = group_images(ctx.profile.kinds.get("disk_image", []))
+        members_out: list[dict[str, Any]] = []
+        gaps: list[dict[str, str]] = [
+            {"what": rel, "why": "disk image segment without its first segment; it was not opened"} for rel in orphans
+        ]
+        hostile: list[str] = []
+        errors: list[str] = []
+        submitted: list[Finding] = []
+        images: list[dict[str, Any]] = []
+        for rel, segment_list in groups.items():
+            path = ctx.input_dir / rel
+            digest = ctx.inventory.get(rel) or sha256_file(path).lower()
+            segments = [{"path": seg, "sha256": ctx.inventory.get(seg, ""),
+                         "size_bytes": (ctx.input_dir / seg).stat().st_size} for seg in segment_list]
+            folder = f"{Path(rel).stem[:24]}-{digest[:8]}-{hashlib.sha256(rel.encode()).hexdigest()[:8]}"
+            image_dir = ctx.run_dir / "disk" / folder
+            try:
+                result = tools.call("read_disk_image", path, rel, digest, image_dir, budget, segments=segments)
+            except Exception as exc:  # noqa: BLE001 - an unreadable image is reported, not fatal
+                errors.append(f"{rel}: {exc}")
+                gaps.append({"what": rel, "why": f"disk image could not be opened: {exc}"[:300]})
+                continue
+            gaps.extend(result.gaps)
+            summary_path = image_dir / "disk_summary.json"
+            summary_path.write_text(json.dumps(result.summary, indent=2, sort_keys=True, ensure_ascii=True) + "\n",
+                                    encoding="utf-8")
+            images.append({"image": rel, "folder": folder, "summary": f"disk/{folder}/disk_summary.json",
+                           "files_copied": len(result.members)})
+            by_copy = {member.extracted: member.member for member in result.members}
+            for member in result.members:
+                record = member.to_dict()
+                record["folder"] = folder
+                members_out.append(record)
+            if not result.members:
+                continue
+            found, flagged = _analyse_extracted(ctx, image_dir / "files", ctx.run_dir / "disk-runs" / folder,
+                                                "disk_image", errors, rel)
+            hostile.extend(f"{rel}{SEPARATOR}{by_copy[item]}" for item in flagged if item in by_copy)
+            for finding in found:
+                cited = [by_copy.get(Path(c.source_file).as_posix()) for c in finding.citations]
+                if any(name is None for name in cited):
+                    errors.append(f"{rel}: a finding cited a file that was not copied from the image")
+                    continue
+                for citation, name in zip(finding.citations, cited):
+                    citation.source_file = f"{rel}{SEPARATOR}{name}"
+                finding.finding_id = stable_id("disk", finding.finding_id, rel)
+                submitted.append(finding)
+        store.add_findings(self.name, submitted)
+        status = "error" if errors and not members_out else ("partial" if errors else "ok")
+        return AgentResult(self.name, status=status, detail="; ".join(errors)[:600], finding_count=len(submitted),
+                           notes={"members": members_out, "files_flagged": hostile, "gaps": gaps, "images": images,
+                                  "bytes_copied": budget.used_bytes})
+
+
 AGENTS: dict[str, Callable[[], Any]] = {
     "core_pipeline": CorePipelineAgent,
     "injection_sentinel": InjectionSentinelAgent,
     "secrets_sweep": SecretsSweepAgent,
     "memory": MemoryAgent,
     "archive": ArchiveAgent,
+    "disk_image": DiskImageAgent,
 }
 
 
 def agent_availability() -> dict[str, tuple[bool, str]]:
-    return {"memory": volatility_available()}
+    return {"memory": volatility_available(), "disk_image": disk_available()}

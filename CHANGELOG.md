@@ -4,6 +4,14 @@
 
 ### Autopilot plugin and detection
 
+- Disk images: with the new `disk` extra (dissect.target), the autopilot
+  opens raw/DD, split raw, EnCase E01 and VMDK images read-only, copies event
+  logs, registry hives, Prefetch, LNK/Jump Lists, browser history, PowerShell
+  history, scheduled tasks, USB setup logs and Recycle Bin index files into
+  the run folder within a size budget, writes `disk_summary.json`, and
+  analyses the copies. Findings cite `image.E01!/C:/path/in/image`. Without
+  the extra, the draft says to install it. See "Disk images" in
+  `docs/AUTOPILOT.md`.
 - New `auto_forensics_autopilot` package and `auto-forensics-autopilot`
   command: custody record, triage, parallel agents (core pipeline,
   injection sentinel, secrets sweep, memory), coordinator, and a sign-off

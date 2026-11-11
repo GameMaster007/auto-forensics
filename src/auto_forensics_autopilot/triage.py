@@ -8,6 +8,7 @@ skipped, so a skipped agent is visible in the draft rather than silent.
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,8 @@ MEMORY_SUFFIXES = {".raw", ".mem", ".vmem", ".lime", ".dmp", ".dump", ".core"}
 TEXT_SUFFIXES = {".txt", ".log", ".md", ".csv", ".json", ".jsonl", ".xml", ".html", ".htm", ".ini", ".cfg", ".yml", ".yaml"}
 ARCHIVE_SUFFIXES = {".zip", ".7z", ".rar", ".gz", ".tar", ".tgz"}
 DISK_IMAGE_SUFFIXES = {".e01", ".ex01", ".dd", ".img", ".vmdk", ".vhd", ".vhdx", ".aff", ".aff4"}
+# EnCase segments after the first (.E02 ... .EZZ) carry the same signature as .E01.
+EWF_MAGIC = (b"EVF\x09\x0d\x0a\xff\x00", b"EVF2\x0d\x0a\x81\x00")
 
 # Memory images are large. A small file named .dmp is usually a minidump
 # or a test fixture, which the memory agent cannot use.
@@ -70,6 +73,21 @@ def _head(path: Path) -> bytes:
         return b""
 
 
+def _boot_sector(head: bytes) -> bool:
+    """An MBR, GPT, or volume boot record: what a raw disk or partition image starts with."""
+    return len(head) >= 512 and (head[510:512] == b"\x55\xaa" or head[512:520] == b"EFI PART")
+
+
+def _split_raw_segment(path: Path, suffix: str, head: bytes) -> bool:
+    """``.001`` that starts like a disk, or ``.002``+ whose ``.001`` does (not a split 7z/RAR)."""
+    if not re.fullmatch(r"\.\d{3}", suffix):
+        return False
+    if suffix == ".001":
+        return _boot_sector(head)
+    first = path.with_suffix(".001")
+    return first.is_file() and not first.is_symlink() and _boot_sector(_head(first))
+
+
 def classify(path: Path, size: int) -> str:
     """Return one kind for a file from its suffix, size, and magic bytes."""
     suffix = path.suffix.lower()
@@ -80,7 +98,9 @@ def classify(path: Path, size: int) -> str:
         return "event_log"
     if suffix == ".evtx":
         return "event_log"
-    if suffix in DISK_IMAGE_SUFFIXES or head.startswith(b"EVF\x09\x0d\x0a\xff\x00"):
+    if suffix in DISK_IMAGE_SUFFIXES or head.startswith(EWF_MAGIC) or _split_raw_segment(path, suffix, head):
+        return "disk_image"
+    if suffix == ".raw" and _boot_sector(head):
         return "disk_image"
     if suffix in MEMORY_SUFFIXES:
         return "memory_image" if size >= MIN_MEMORY_IMAGE_BYTES else "binary"
@@ -164,9 +184,10 @@ def plan_agents(profile: EvidenceProfile, available: dict[str, tuple[bool, str]]
               f"{profile.count('memory_image')} memory image(s) found", "no memory image found"),
     ]
     if profile.count("disk_image"):
-        plans.append(AgentPlan(
-            "disk_image", False,
-            "disk images are listed but not mounted; export them with Plaso first (imaging is out of scope)",
+        plans.append(gated(
+            "disk_image", True,
+            f"{profile.count('disk_image')} disk image file(s): key artefacts are copied into the run folder "
+            "and analysed", "",
         ))
     if profile.count("archive"):
         zips = [p for p in profile.kinds.get("archive", []) if p.lower().endswith(".zip")]

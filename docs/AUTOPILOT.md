@@ -45,10 +45,74 @@ auto-forensics-autopilot export --run-dir /cases/run-01 --dest /cases/run-01-fin
 | `secrets_sweep` | text present | Private keys, cloud keys, API tokens, plaintext passwords, credential-dumping output |
 | `memory` | a memory image is present and Volatility 3 is installed | Suspicious process command lines from `windows.cmdline` |
 | `archive` | a ZIP archive is present | Extracts the ZIP into the run folder with zip-slip, symlink, size and zip-bomb checks, then runs the core pipeline, sentinel and secrets sweep on the contents. Findings cite `archive.zip!path/inside` |
+| `disk_image` | a disk image is present and the `disk` extra is installed | Opens the image read-only, copies key Windows artefacts into the run folder, then runs the core pipeline, sentinel and secrets sweep on the copies. Findings cite `pc.E01!/C:/path/in/image`. See [Disk images](#disk-images) |
 
-Disk images and non-ZIP archives (7z, RAR) are listed by triage but not
-opened. Export a disk image with Plaso first, or extract other archives
-into the evidence folder. Imaging stays out of scope (see `docs/ROADMAP.md`).
+Non-ZIP archives (7z, RAR) are listed by triage but not opened; extract
+them into the evidence folder. Making an image of a disk stays out of
+scope (see `docs/ROADMAP.md`): the autopilot reads images you already have.
+
+## Disk images
+
+Install the extra once:
+
+```bash
+pip install -e ".[disk,evtx]"
+```
+
+It adds [dissect.target](https://github.com/fox-it/dissect.target) (and
+`dissect.fat` for USB sticks). Without it, a disk image is still hashed in
+the custody record, and the draft lists it as a coverage gap that says to
+install the `disk` extra.
+
+**What it reads.** Raw/DD images (`.dd`, `.img`, `.raw`, `.001`, `.002`,
+...), EnCase images (`.E01` with `.E02`, `.E03`, ... next to it) and VMDK.
+Put every segment in the evidence folder; the autopilot opens the first
+one and the reader finds the rest. A `.raw` or `.001` file counts as a disk
+image only if it starts like one (a partition table or boot sector), so a
+memory dump or a split 7-Zip file is not mistaken for one.
+
+**What it copies out.** Only these files, from every volume in the image:
+
+| Kind | Where in the image |
+| --- | --- |
+| Event logs | `Windows/System32/winevt/Logs/*.evtx` (and old `*.evt`) |
+| Registry hives | `SYSTEM`, `SOFTWARE`, `SAM`, `SECURITY`, `Amcache.hve`, each user's `NTUSER.DAT` and `UsrClass.dat` |
+| Prefetch | `Windows/Prefetch/*.pf` |
+| Recent files | LNK files and Jump Lists in each user's `Recent` folder, Office `Recent` |
+| Browser history | Chrome and Edge `History`, Firefox `places.sqlite`, Internet Explorer `index.dat` and `WebCacheV01.dat` |
+| PowerShell | `PSReadLine/ConsoleHost_history.txt` |
+| Scheduled tasks | `Windows/System32/Tasks/**`, `Windows/Tasks/*.job` |
+| USB history | `Windows/inf/setupapi.dev.log` (and XP's `setupapi.log`) |
+| Recycle Bin | `$Recycle.Bin/*/$I*` (the index files, not the deleted content) |
+
+Documents, pictures and other user files are not copied. Copies go to
+`RUN/disk/<image>-<hash>/files/C/...`, never next to the evidence. Each
+copy is hashed as it is written and listed in `RUN/disk/disk_images.json`
+with the path it came from. A finding about a copy cites the image and the
+path inside it, for example
+`pc.E01!/C:/Windows/System32/winevt/Logs/Security.evtx`, and the
+coordinator re-checks it against the copy just as it does for ZIP members.
+
+**Limits.** At most 5,000 files and 2 GB per run, and 512 MB per file.
+A file that is too big, past the budget, or has a name that cannot be
+stored safely on Windows (`CON`, `a:b`, a trailing dot, a name that differs
+from another only by case) is skipped and listed as a coverage gap. Links
+and junctions inside the image are not followed. The NTFS `$MFT` is not
+copied by default (it can be hundreds of MB).
+
+**Summary.** `RUN/disk/<image>-<hash>/disk_summary.json` records what
+dissect reports cheaply: the OS, host name, time zone, users, user folders,
+USB devices, installed programs, run keys, recent files, Recycle Bin and
+services (up to 500 rows each), the volumes it found, and the segment
+hashes from the custody record. For a volume without Windows, such as a
+USB stick, it lists up to 2,000 file names with sizes and times instead.
+Anything dissect cannot report becomes a coverage gap; it never stops the run.
+
+**Time and space.** The image is read in full three times: the custody
+hash, the core pipeline's own inventory, and the final "has the evidence
+changed?" check. For a 7 GB E01 on a laptop SSD expect a few minutes for
+each pass (longer from a USB disk). Copying the artefacts reads only those
+files. Leave a few GB free on the run folder's disk.
 
 ## Reading the draft
 

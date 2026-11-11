@@ -59,7 +59,8 @@ The command `auto-forensics` is installed by that editable install.
 
 The `auto-forensics-autopilot` plugin runs the whole triage from one
 command: custody hashes, triage, parallel agents (the core pipeline,
-an injection sentinel, a secrets sweep, memory and ZIP-archive agents),
+an injection sentinel, a secrets sweep, memory, ZIP-archive and
+disk-image agents),
 and a coordinator that writes a cited draft without quoting evidence
 text. Nothing can be exported until an analyst has accepted or rejected
 every finding and signed.
