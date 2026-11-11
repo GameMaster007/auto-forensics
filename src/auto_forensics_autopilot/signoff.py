@@ -13,7 +13,10 @@ reach the final report.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +33,26 @@ FINAL_JSON = "final_report.json"
 FINAL_MD = "final_report.md"
 DECISIONS = {"accept", "reject"}
 MAX_NOTE = 2000
+MIN_FINGERPRINT = 12
+SIGNING_KEY_ENV = "AUTO_FORENSICS_SIGNING_KEY"
+
+
+def fingerprint(run_dir: Path) -> str:
+    """SHA-256 of the run manifest file. Shown at ``start``; the analyst types it back at ``sign``.
+
+    The manifest holds the draft and custody hashes, so anyone who swaps the
+    draft must also rewrite the manifest, which changes this value. Keeping it
+    outside the run folder (in notes, a ticket, the terminal) is what makes
+    that visible.
+    """
+    return hashlib.sha256((run_dir.resolve() / MANIFEST_FILE).read_bytes()).hexdigest()
+
+
+def _seal(body: dict[str, Any]) -> str | None:
+    key = os.environ.get(SIGNING_KEY_ENV, "")
+    if not key:
+        return None
+    return hmac.new(key.encode("utf-8"), canonical_sha256(body).encode("ascii"), hashlib.sha256).hexdigest()
 
 
 def _clean(value: str, label: str, limit: int, required: bool = True) -> str:
@@ -74,6 +97,14 @@ def read_log(run_dir: Path) -> list[dict[str, Any]]:
             raise AutopilotError(f"signoff.jsonl line {number} is not an object")
         entries.append(entry)
     return entries
+
+
+def _check_entries(entries: list[dict[str, Any]]) -> None:
+    for number, entry in enumerate(entries, start=1):
+        if entry.get("decision") not in DECISIONS or not all(
+            isinstance(entry.get(key), str) for key in ("finding_id", "actor", "note", "at", "draft_sha256")
+        ):
+            raise AutopilotError(f"signoff.jsonl entry {number} is malformed")
 
 
 def latest_decisions(entries: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -171,18 +202,24 @@ def _check_evidence(run_dir: Path) -> dict[str, Any]:
     return custody
 
 
-def sign(run_dir: Path, *, actor: str, statement: str = "") -> dict[str, Any]:
+def sign(run_dir: Path, *, actor: str, fingerprint_seen: str, statement: str = "") -> dict[str, Any]:
     run_dir = run_dir.resolve()
     with directory_lock(run_dir):
         if (run_dir / SIGNATURE_FILE).exists():
             raise AutopilotError("This draft is already signed")
         draft, manifest = _load(run_dir)
+        seen = (fingerprint_seen or "").strip().lower()
+        current = fingerprint(run_dir)
+        if len(seen) < MIN_FINGERPRINT or not current.startswith(seen):
+            raise AutopilotError("The run fingerprint does not match the one shown when the run finished; "
+                                 "the draft or its manifest may have been replaced")
         actor = _clean(actor, "actor", 120)
         statement = _clean(statement, "statement", MAX_NOTE, required=False)
         custody = _check_evidence(run_dir)
         if canonical_sha256(custody) != manifest["custody_sha256"]:
             raise AutopilotError("The custody record was changed after the run")
         entries = read_log(run_dir)
+        _check_entries(entries)
         decided = latest_decisions(entries)
         pending = [f["finding_id"] for f in draft["findings"] if f["finding_id"] not in decided]
         if pending:
@@ -200,34 +237,69 @@ def sign(run_dir: Path, *, actor: str, statement: str = "") -> dict[str, Any]:
             "signoff_log_sha256": canonical_sha256(log_text),
             "accepted": sum(1 for d in decided.values() if d["decision"] == "accept"),
             "rejected": sum(1 for d in decided.values() if d["decision"] == "reject"),
+            "run_fingerprint": current,
         }
+        seal = _seal(signature)
+        signature["seal"] = {"method": "hmac-sha256", "value": seal} if seal else None
         write_json(run_dir / SIGNATURE_FILE, signature)
         return signature
 
 
-def _check_signature(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+def _check_signature(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], str]:
+    """Everything export relies on, re-checked; returns the decision log text that was checked."""
     if not (run_dir / SIGNATURE_FILE).is_file():
         raise AutopilotError("This draft is not signed; export is blocked until an analyst signs it")
     draft, manifest = _load(run_dir)
     signature = read_json(run_dir / SIGNATURE_FILE)
-    log_text = (run_dir / SIGNOFF_LOG).read_text(encoding="utf-8") if (run_dir / SIGNOFF_LOG).is_file() else ""
+    if not isinstance(signature, dict):
+        raise AutopilotError("signature.json is malformed")
+    seal = signature.get("seal")
+    body = {key: value for key, value in signature.items() if key != "seal"}
+    if os.environ.get(SIGNING_KEY_ENV):
+        expected = _seal(body)
+        if not isinstance(seal, dict) or not hmac.compare_digest(str(seal.get("value")), str(expected)):
+            raise AutopilotError("The signature seal does not verify with the configured signing key")
+    if signature.get("run_fingerprint") != fingerprint(run_dir):
+        raise AutopilotError("The run manifest changed after signing")
     if signature.get("draft_sha256") != manifest["draft_sha256"]:
         raise AutopilotError("The signature does not match this draft")
+    custody = read_json(run_dir / CUSTODY_FILE)
+    if not canonical_sha256(custody) == manifest["custody_sha256"] == signature.get("custody_sha256"):
+        raise AutopilotError("The custody record changed after the run")
+    log_text = (run_dir / SIGNOFF_LOG).read_text(encoding="utf-8") if (run_dir / SIGNOFF_LOG).is_file() else ""
     if signature.get("signoff_log_sha256") != canonical_sha256(log_text):
         raise AutopilotError("The decision log changed after signing")
+    entries = [json.loads(line) for line in log_text.splitlines() if line.strip()]
+    _check_entries(entries)
+    decided = latest_decisions(entries)
+    accepted = sum(1 for d in decided.values() if d["decision"] == "accept")
+    rejected = sum(1 for d in decided.values() if d["decision"] == "reject")
+    if (accepted, rejected) != (signature.get("accepted"), signature.get("rejected")):
+        raise AutopilotError("The signature's decision counts do not match the decision log")
+    if any(f["finding_id"] not in decided for f in draft["findings"]):
+        raise AutopilotError("A finding in the draft has no decision")
     _check_evidence(run_dir)
-    return draft, manifest, signature
+    return draft, manifest, signature, log_text
 
 
 def export(run_dir: Path, dest: Path) -> dict[str, Any]:
     run_dir = run_dir.resolve()
-    draft, manifest, signature = _check_signature(run_dir)
+    with directory_lock(run_dir):
+        return _export_locked(run_dir, dest)
+
+
+def _export_locked(run_dir: Path, dest: Path) -> dict[str, Any]:
+    draft, manifest, signature, log_text = _check_signature(run_dir)
     custody = read_json(run_dir / CUSTODY_FILE)
     dest = dest.resolve()
     if dest.is_relative_to(Path(custody["evidence_dir"]).resolve()):
         raise AutopilotError("Export destination must be outside the evidence directory")
+    if dest == run_dir or dest.is_relative_to(run_dir):
+        raise AutopilotError("Export destination must be outside the run folder")
+    if (dest / FINAL_JSON).exists() or (dest / FINAL_MD).exists():
+        raise AutopilotError("The export folder already holds a final report; choose a new folder")
     dest.mkdir(parents=True, exist_ok=True)
-    decided = latest_decisions(read_log(run_dir))
+    decided = latest_decisions([json.loads(line) for line in log_text.splitlines() if line.strip()])
     accepted = []
     rejected = []
     for finding in draft["findings"]:

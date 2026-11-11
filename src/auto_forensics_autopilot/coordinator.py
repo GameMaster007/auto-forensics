@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -146,21 +147,47 @@ def _finding_entry(finding: Finding, hostile: frozenset[str] = frozenset()) -> d
     }
 
 
+_ISO_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2})?$")
+# Event types the parsers assign themselves. Anything else came from the
+# evidence (a JSON "event_type" key, a text field) and is not repeated.
+_KNOWN_EVENT_TYPE = re.compile(
+    r"^(windows_event_\d{1,5}|process_(start|creation|terminate)|network_connection|registry_(modification|set)|"
+    r"file_(create|delete|stat)|scheduled_task_(create|created)|service_install|logon|logoff|windows_logon_failure|"
+    r"binary_(analyzed|risk_assessed)|yara_match|parse_error|text_note|dns_query)$")
+
+
+def _safe_time(value: Any) -> str | None:
+    text = str(value or "")
+    return text if _ISO_TIME.match(text) else None
+
+
+def _safe_type(value: Any) -> str:
+    text = str(value or "")
+    return text if _KNOWN_EVENT_TYPE.match(text) else "event"
+
+
 def _timeline_highlights(core_report: dict[str, Any] | None, limit: int = 15) -> list[dict[str, Any]]:
-    """Return the riskiest timeline events without their evidence text."""
+    """The riskiest timeline events, reduced to values the tool itself produced.
+
+    Event descriptions, sources and free-text types come from evidence and
+    are left out; a timestamp is kept only when it is a well-formed time.
+    """
     if not core_report:
         return []
     events = [e for e in core_report.get("timeline", []) if isinstance(e, dict)]
-    events.sort(key=lambda e: (-float(e.get("risk_score") or 0), str(e.get("timestamp") or "")))
+
+    def risk(event: dict[str, Any]) -> float:
+        try:
+            return float(event.get("risk_score") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    events.sort(key=lambda e: (-risk(e), str(_safe_time(e.get("timestamp")) or "")))
     picked = events[:limit]
-    picked.sort(key=lambda e: str(e.get("timestamp") or ""))
+    picked.sort(key=lambda e: str(_safe_time(e.get("timestamp")) or ""))
     return [
-        {
-            "timestamp": e.get("timestamp"),
-            "event_type": e.get("event_type"),
-            "source": e.get("source"),
-            "risk_score": e.get("risk_score"),
-        }
+        {"timestamp": _safe_time(e.get("timestamp")), "event_type": _safe_type(e.get("event_type")),
+         "risk_score": round(risk(e), 2)}
         for e in picked
     ]
 
@@ -203,9 +230,22 @@ def build_draft(
     }
 
 
+_MD_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+\-.!|<>~])")
+
+
 def _cell(value: Any) -> str:
+    """Text for a markdown table cell: one line, every markdown/HTML control character escaped."""
     text = "" if value is None else str(value)
-    return text.replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+    text = re.sub(r"[\x00-\x1f\x7f\u2028\u2029]", " ", text)
+    return _MD_SPECIAL.sub(r"\\\1", text).replace("&", "&amp;")
+
+
+def _code(value: Any) -> str:
+    """An inline code span that no backtick run inside the value can close."""
+    text = re.sub(r"[\x00-\x1f\x7f\u2028\u2029]", " ", "" if value is None else str(value))
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * (longest + 1)
+    return f"{fence} {text} {fence}"
 
 
 def render_markdown(draft: dict[str, Any], *, title: str = "Autopilot draft") -> str:
@@ -217,7 +257,7 @@ def render_markdown(draft: dict[str, Any], *, title: str = "Autopilot draft") ->
             "These files contain text aimed at an AI analyst. Read them only in a plain viewer.",
             "",
         ]
-        lines += [f"- `{_cell(path)}`" for path in draft["hostile_files"]] + [""]
+        lines += [f"- {_code(path)}" for path in draft["hostile_files"]] + [""]
     if draft.get("attack_chain"):
         lines += ["## Attack chain", "",
                   "Medium-or-higher findings by ATT&CK tactic, in kill-chain order. Each still needs a decision.",
@@ -235,15 +275,14 @@ def render_markdown(draft: dict[str, Any], *, title: str = "Autopilot draft") ->
         )
         flag = " **[hostile source: verify by hand]**" if finding.get("warnings") else ""
         lines.append(
-            f"| `{_cell(finding['finding_id'])}` | {_cell(finding['severity'])} | {_cell(finding['title'])}{flag} | "
+            f"| {_code(finding['finding_id'])} | {_cell(finding['severity'])} | {_cell(finding['title'])}{flag} | "
             f"{_cell(finding['tactic'])} | {_cell(finding['worker'])} | {_cell(cites)} | "
             f"{_cell(finding.get('decision', 'pending'))} |"
         )
     if draft.get("timeline_highlights"):
-        lines += ["", "## Timeline highlights", "", "| Time | Event | Source | Risk |", "| --- | --- | --- | --- |"]
+        lines += ["", "## Timeline highlights", "", "| Time | Event | Risk |", "| --- | --- | --- |"]
         for event in draft["timeline_highlights"]:
-            lines.append(f"| {_cell(event['timestamp'])} | {_cell(event['event_type'])} | "
-                         f"{_cell(event['source'])} | {_cell(event['risk_score'])} |")
+            lines.append(f"| {_cell(event['timestamp'])} | {_cell(event['event_type'])} | {_cell(event['risk_score'])} |")
     lines += ["", "## Agents", "", "| Agent | Ran | Status | Findings | Why |", "| --- | --- | --- | --- | --- |"]
     results = {item["name"]: item for item in draft.get("agents", [])}
     for plan in draft.get("plan", []):
@@ -254,5 +293,5 @@ def render_markdown(draft: dict[str, Any], *, title: str = "Autopilot draft") ->
     if draft.get("dropped"):
         lines += ["", f"{len(draft['dropped'])} draft finding(s) were dropped by the coordinator "
                       "(failed citation check or duplicate). See `autopilot_draft.json`."]
-    lines += ["", f"Custody record SHA-256: `{draft['custody_sha256']}`", ""]
+    lines += ["", f"Custody record SHA-256: {_code(draft['custody_sha256'])}", ""]
     return "\n".join(lines)

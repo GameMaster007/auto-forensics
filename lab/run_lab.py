@@ -113,7 +113,7 @@ def gate_checks(case_dir: Path, work: Path) -> dict[str, bool]:
 
     results["export_before_sign_refused"] = refused(lambda: signoff.export(run, work / "gate-out"))
     if draft["findings"]:
-        results["sign_with_pending_refused"] = refused(lambda: signoff.sign(run, actor="lab"))
+        results["sign_with_pending_refused"] = refused(lambda: signoff.sign(run, actor="lab", fingerprint_seen=signoff.fingerprint(run)))
         results["reject_without_reason_refused"] = refused(
             lambda: signoff.decide(run, finding_id=draft["findings"][0]["finding_id"], decision="reject", actor="lab"))
     for finding in draft["findings"]:
@@ -121,9 +121,9 @@ def gate_checks(case_dir: Path, work: Path) -> dict[str, bool]:
     target = sorted(p for p in evidence.rglob("*") if p.is_file())[0]
     original = target.read_bytes()
     target.write_bytes(original + b"\n")
-    results["sign_after_evidence_change_refused"] = refused(lambda: signoff.sign(run, actor="lab"))
+    results["sign_after_evidence_change_refused"] = refused(lambda: signoff.sign(run, actor="lab", fingerprint_seen=signoff.fingerprint(run)))
     target.write_bytes(original)
-    signoff.sign(run, actor="lab")
+    signoff.sign(run, actor="lab", fingerprint_seen=signoff.fingerprint(run))
     log = run / signoff.SIGNOFF_LOG
     saved = log.read_text(encoding="utf-8")
     log.write_text(saved.replace('"accept"', '"reject"', 1), encoding="utf-8")

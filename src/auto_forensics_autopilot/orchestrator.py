@@ -9,9 +9,11 @@ no draft is published.
 from __future__ import annotations
 
 import getpass
+import hashlib
 import json
 import os
 import platform
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -69,13 +71,28 @@ def _check_paths(input_dir: Path, output_dir: Path) -> tuple[Path, Path]:
     return evidence, out
 
 
+# Core messages for evidence or resources that changed, or a broken custody
+# inventory. These stop the whole run; other refusals only fail one agent.
+_INTEGRITY_FAILURE = re.compile(r"\bchanged\b|custody|inventory", re.IGNORECASE)
+
+
+class IntegrityAbort(AutopilotError):
+    """An agent saw the evidence change; nothing is published."""
+
+
 def _run_agent(name: str, ctx: AgentContext, store: MemoryCaseStore) -> AgentResult:
     tools = ToolRegistry(worker=name, store=store)
     started = time.monotonic()
     try:
         result = AGENTS[name]().run(ctx, store, tools)
+    except SecurityError as exc:
+        if _INTEGRITY_FAILURE.search(str(exc)):
+            raise IntegrityAbort(f"{name}: {exc}") from exc
+        # Our own refusal text (for example a report the core will not publish).
+        result = AgentResult(name, status="error", detail=f"SecurityError: {str(exc)[:200]}")
     except Exception as exc:  # noqa: BLE001 - an agent failure is recorded, not fatal
-        result = AgentResult(name, status="error", detail=f"{type(exc).__name__}: {str(exc)[:300]}")
+        # Only the type: a library message can quote evidence.
+        result = AgentResult(name, status="error", detail=f"{type(exc).__name__} (see the run log)")
     result.notes["seconds"] = round(time.monotonic() - started, 3)
     return result
 
@@ -198,6 +215,7 @@ def _start_locked(
     if core_manifest.is_file():
         manifest["core_manifest_sha256"] = canonical_sha256(read_json(core_manifest))
     write_json(out / MANIFEST_FILE, manifest)
+    draft["run_fingerprint"] = hashlib.sha256((out / MANIFEST_FILE).read_bytes()).hexdigest()
     return draft
 
 

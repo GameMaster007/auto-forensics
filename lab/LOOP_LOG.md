@@ -87,3 +87,18 @@ produce no false alarms.
 | 33 | Evidence ZIPs are extracted into the run folder (never the evidence folder) with zip-slip, symlink, case-collision, size, count and zip-bomb checks, then analysed by the core pipeline, sentinel and secrets sweep; findings cite `archive.zip!member` and are verified against the extracted copy | 9 new tests |
 | 34 | User guide updated: archives, pending list, attack chain, multi-id decide, hostile-source flag, Windows rules section | docs |
 | 35 | README: autopilot section; removed two stale claims (review step and Plaso/Hayabusa import are implemented) | docs |
+
+## Independent review
+
+After loop 36 a separate agent that had not seen this work reviewed the
+autopilot for security and integrity defects and confirmed 14 issues, each
+with a proof of concept. Each fix below has a regression test in
+`tests/test_autopilot_review_fixes.py` that reproduces the attack.
+
+| Loop | Review issue | Fix |
+| --- | --- | --- |
+| 36 | (CI check) | Full suite run on Python 3.10 with CI's extras: 895 passed; lint clean on 3.12 |
+| 37 | #1 evidence text reached the draft through timeline highlights; #8 integrity errors inside an agent were swallowed and agent errors could quote evidence | Highlights keep only tool-assigned event types, well-formed times and scores; integrity errors ("changed", custody, inventory) abort the run with nothing published; other agent failures record only the error type |
+| 38 | #2 file names could inject markdown/HTML into the draft and final report | Table text escapes every markdown/HTML control character; file names go in code spans whose fence is longer than any backtick run in the name |
+| 39 | #3 evidence and custody.json could be replaced together after signing; signature.json could be forged; #4 draft and manifest could be swapped before signing | Run fingerprint printed at `start` must be typed back at `sign`; export re-checks custody against manifest and signature, re-counts decisions, and checks the fingerprint; optional HMAC seal with `AUTO_FORENSICS_SIGNING_KEY`; export takes the run lock, refuses the run folder and existing reports; malformed log entries refused |
+| 40 | #5, #6 crafted fields made some rules take 8-31 s per event (ReDoS) | Unbounded `.*` gaps bounded to 400 chars; PowerShell rule split into two simple checks; fields capped at 8 KB (scripts 64 KB) and lines at 16 KB after Unicode folding; the reviewer's end-to-end DoS cases dropped from 31.2 s and 16.7 s to 0.0-0.1 s; timing-budget tests for every rule |

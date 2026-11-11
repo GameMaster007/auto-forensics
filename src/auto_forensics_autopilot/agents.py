@@ -35,7 +35,7 @@ from auto_forensics.tools import ToolRegistry
 from .triage import EvidenceProfile
 
 MAX_SCAN_BYTES = 8 * 1024 * 1024
-MAX_LINE_CHARS = 64 * 1024
+MAX_LINE_CHARS = 16 * 1024
 MAX_FINDINGS_PER_FILE = 25
 
 
@@ -202,7 +202,8 @@ class LineRuleAgent:
         hits = 0
         seen_rules: set[str] = set()
         for row, line in iter_lines(path):
-            folded = normalise_for_rules(line)
+            # Folding can lengthen a line (one character can become 18), so cut after it.
+            folded = normalise_for_rules(line)[:MAX_LINE_CHARS]
             for rule in self.rules:
                 if rule.rule_id in seen_rules:
                     continue
@@ -245,7 +246,7 @@ class LineRuleAgent:
 
 
 def _rx(text: str) -> re.Pattern[str]:
-    return re.compile(text, re.IGNORECASE)
+    return re.compile(text.replace(".*", r"[^\n]{0,400}"), re.IGNORECASE)
 
 
 class InjectionSentinelAgent(LineRuleAgent):
@@ -305,7 +306,8 @@ class SecretsSweepAgent(LineRuleAgent):
         LineRule("password-assignment",
                  # The value must look like a secret (6+ chars with a digit or symbol), so
                  # "reset your password: visit the portal" is not a hit.
-                 _rx(r"(?<![a-z])(password|passwd|pwd|pass)\s*[:=]\s*['\"]?(?=[^\s'\"]*[\d!@#$%^&*_+\-])[^\s'\",;]{6,}"),
+                 _rx(r"(?<![a-z])(password|passwd|pass)\s*[:=]\s*['\"]?(?=[^\s'\"]{0,128}[\d!@#$%^&*_+\-])"
+                     r"(?![/\\])[^\s'\",;]{6,128}"),
                  "Plaintext password found in evidence", "medium", "credential-access", "T1552.001", _rec),
         LineRule("bearer-token", re.compile(r"\b(ghp|gho|github_pat|xox[bp]|sk-[a-zA-Z0-9]{2})_?[A-Za-z0-9_\-]{16,}"),
                  "API token found in evidence", "high", "credential-access", "T1552.001", _rec),
@@ -317,7 +319,7 @@ class SecretsSweepAgent(LineRuleAgent):
                  "Cloud storage account key found in evidence", "high", "credential-access", "T1552.001", _rec),
         LineRule("payment-secret-key", re.compile(r"\b(sk|rk)_live_[0-9A-Za-z]{20,}\b"),
                  "Payment provider secret key found in evidence", "high", "credential-access", "T1552.001", _rec),
-        LineRule("jwt", re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}"),
+        LineRule("jwt", re.compile(r"\beyJ[A-Za-z0-9_\-]{10,4096}\.eyJ[A-Za-z0-9_\-]{10,4096}\.[A-Za-z0-9_\-]{10,4096}"),
                  "Signed session token (JWT) found in evidence", "medium", "credential-access", "T1528", _rec),
         LineRule("ntlm-hash-dump", re.compile(r"^[^:\s]{1,64}:\d{1,10}:[0-9a-fA-F]{32}:[0-9a-fA-F]{32}:::"),
                  "Password hash dump (user:rid:lm:nt) found in evidence", "critical", "credential-access",
@@ -342,10 +344,11 @@ def volatility_available() -> tuple[bool, str]:
 
 
 SUSPICIOUS_CMDLINE = (
-    ("encoded-powershell", _rx(r"powershell[^\n]*\s-(e|en|enc|encodedcommand)\s"), "high", "execution", "T1059.001"),
+    ("encoded-powershell", _rx(r"powershell[^\n]{0,400}\s-(e|en|enc|encodedcommand)\s"), "high", "execution",
+     "T1059.001"),
     ("temp-execution", _rx(r"\\(temp|appdata\\local\\temp|downloads)\\[^\\]+\.(exe|dll|scr)"), "medium",
      "execution", "T1204"),
-    ("lsass-access", _rx(r"(procdump|comsvcs\.dll)[^\n]*lsass"), "critical", "credential-access", "T1003.001"),
+    ("lsass-access", _rx(r"(procdump|comsvcs\.dll)[^\n]{0,400}lsass"), "critical", "credential-access", "T1003.001"),
 )
 
 

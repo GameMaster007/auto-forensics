@@ -31,8 +31,13 @@ SYSMON = "sysmon"
 I = re.IGNORECASE
 
 
+# ".*" between two parts of a rule makes matching quadratic or worse on long
+# attacker-controlled fields. Every unbounded gap becomes a bounded one.
+GAP = r"[^\n]{0,400}"
+
+
 def rx(pattern: str) -> re.Pattern[str]:
-    return re.compile(pattern, I)
+    return re.compile(pattern.replace(".*", GAP), I)
 
 
 @dataclass(frozen=True)
@@ -78,6 +83,11 @@ PARENT = "ParentImage|ParentProcessName"
 # Access masks are written with or without leading zeros (0x1fffff, 0x001fffff).
 LSASS_ACCESS = r"^0x0*(1010|1410|1438|143a|147a|1fffff|1f0fff|1f1fff|1f2fff|1f3fff|40|1400|410|10)$"
 VM_READ = 0x10
+FIELD_LIMIT = 8 * 1024
+LONG_FIELDS = {"ScriptBlockText", "Payload", "Data"}
+LONG_FIELD_LIMIT = 64 * 1024
+_PS_FLAGS = re.compile(r"\s-(e|en|enc|enco|encodedcommand)\s+[a-z0-9+/=]{8,}|-w(indowstyle)?\s+hid(den)?\b|"
+                       r"-nop\b[^\n]{0,200}-ep?\s+bypass", re.IGNORECASE)
 # Endpoint security products read LSASS as part of normal work. Matched by their
 # install folder, not by name alone, so a renamed tool elsewhere still fires.
 INSTALLED_SECURITY_TOOL = (r"^c:\\program files( \(x86\))?\\(crowdstrike|windows defender|"
@@ -103,8 +113,8 @@ def _mask(value: object) -> int:
 RULES: tuple[Rule, ...] = (
     # ---------------- execution ----------------
     Rule("ps-encoded", "PowerShell with an encoded or hidden command", "high", "execution", "T1059.001", PROC,
-         {CMD: rx(r"(powershell|pwsh).*(\s-(e|en|enc|enco|encodedcommand)\s+[a-z0-9+/=]{8,}|"
-                  r"-w(indowstyle)?\s+hid(den)?\b|-nop\b.*-ep?\s+bypass)")}),
+         {CMD: rx(r"\b(powershell|pwsh)(\.exe)?\b")},
+         check=lambda m: bool(_PS_FLAGS.search(str(_field(m, CMD) or "")[:FIELD_LIMIT]))),
     Rule("ps-download", "PowerShell download cradle", "high", "execution", "T1059.001", PROC,
          {CMD: rx(r"(downloadstring|downloadfile|downloaddata|invoke-webrequest|iwr\s|net\.webclient|"
                   r"start-bitstransfer|invoke-restmethod)")}),
@@ -318,7 +328,8 @@ RULES: tuple[Rule, ...] = (
     Rule("compile-after-delivery", "Code compiled on the host into a program in a user folder", "medium",
          "defense-evasion", "T1027.004", PROC,
          {IMAGE: rx(r"\\(csc|vbc|jsc|ilasm)\.exe$"),
-          CMD: rx(r"/out:\s*\"?([a-z]:\\(users|programdata|windows\\temp)\\[^\"]*|[^\\\s\"]+)\.(exe|dll)\b")},
+          CMD: rx(r"/out:\s*\"?([a-z]:\\(users|programdata|windows\\temp)\\[^\"]{0,260}|[^\\\s\":]{1,260})"
+                  r"\.(exe|dll)\b")},
          {PARENT: rx(r"\\(msbuild|devenv|vbcscompiler|dotnet)\.exe$")}),
     Rule("ps-downgrade", "PowerShell version 2 engine started (bypasses script logging)", "high", "defense-evasion",
          "T1562.010", _ids(400), {"Data": rx(r"engineversion=2\.")}, provider="powershell"),
@@ -539,10 +550,12 @@ def _renamed(metadata: dict[str, Any]) -> bool:
 
 
 def _field(metadata: dict[str, Any], names: str) -> str | None:
+    """First present field, cut to a size that keeps matching fast on hostile input."""
     for name in names.split("|"):
         for key in (name, name.lower()):
             if key in metadata and metadata[key] not in (None, ""):
-                return str(metadata[key])
+                limit = LONG_FIELD_LIMIT if name in LONG_FIELDS else FIELD_LIMIT
+                return str(metadata[key])[:limit]
     return None
 
 

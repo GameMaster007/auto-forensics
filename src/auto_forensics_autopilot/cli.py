@@ -53,6 +53,8 @@ def build_parser() -> argparse.ArgumentParser:
     sgn = sub.add_parser("sign", help="Sign the draft once every finding is decided.")
     sgn.add_argument("--run-dir", required=True, type=Path)
     sgn.add_argument("--actor", required=True)
+    sgn.add_argument("--fingerprint", required=True,
+                     help="The run fingerprint printed by 'start' (at least the first 12 characters).")
     sgn.add_argument("--statement", default="")
 
     exp = sub.add_parser("export", help="Write the signed final report.")
@@ -75,6 +77,8 @@ def main(argv: list[str] | None = None) -> int:
                 if agent["status"] != "ok":
                     print(f"Agent {agent['name']}: {agent['status']} {agent['detail']}".rstrip())
             print(f"Draft: {args.output_dir / DRAFT_MD}")
+            print(f"Run fingerprint: {draft['run_fingerprint']}")
+            print("Write the fingerprint down outside the run folder; you need it to sign.")
             print("Next: decide every finding, then sign.")
         elif args.command == "status":
             state = signoff.status(args.run_dir)
@@ -91,7 +95,8 @@ def main(argv: list[str] | None = None) -> int:
                                        actor=args.actor, note=args.note, override=args.override)
                 print(f"{entry['finding_id']}: {entry['decision']} by {entry['actor']}")
         elif args.command == "sign":
-            sig = signoff.sign(args.run_dir, actor=args.actor, statement=args.statement)
+            sig = signoff.sign(args.run_dir, actor=args.actor, fingerprint_seen=args.fingerprint,
+                               statement=args.statement)
             print(f"Signed by {sig['actor']} at {sig['signed_at']}: {sig['accepted']} accepted, {sig['rejected']} rejected.")
         elif args.command == "export":
             final = signoff.export(args.run_dir, args.dest)
@@ -99,6 +104,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Report: {args.dest / signoff.FINAL_MD}")
     except SecurityError as exc:
         print(f"Refused: {exc}", file=sys.stderr)
+        return 2
+    except (ValueError, KeyError, TypeError, OSError) as exc:
+        # A corrupt or hand-edited run file: say so instead of printing a traceback.
+        print(f"Refused: a run file is missing or malformed ({type(exc).__name__})", file=sys.stderr)
         return 2
     return 0
 
