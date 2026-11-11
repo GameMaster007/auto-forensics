@@ -16,7 +16,7 @@ from .manifest import (
 )
 from .models import Citation
 from .report_validation import validate_report_data
-from .security import SecurityError, read_limited_text, sha256_file, stays_in_tree
+from .security import IntegrityError, SecurityError, read_limited_text, sha256_file, stays_in_tree
 from .version import __version__
 
 
@@ -76,12 +76,12 @@ def verify_run(manifest_path: Path, *, input_dir: Path | None = None) -> dict[st
     report_path = manifest_path.parent / manifest["output"]["report"]
     try:
         if not stays_in_tree(report_path, manifest_path.parent):
-            raise SecurityError("Published report is missing or reached through a symlink")
+            raise IntegrityError("Published report is missing or reached through a symlink")
         report = json.loads(read_limited_text(report_path, MAX_REPORT_BYTES))
         if not isinstance(report, dict) or not isinstance(report.get("findings"), list):
             raise SecurityError("Published report is not a case report object")
         if report.get("case_id") != manifest["case_id"]:
-            raise SecurityError("Published report case identifier differs from its manifest")
+            raise IntegrityError("Published report case identifier differs from its manifest")
         validate_report_data(report)
         if reviews_match:
             from .reviews import review_state_error

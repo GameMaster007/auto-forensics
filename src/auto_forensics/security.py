@@ -17,6 +17,15 @@ class SecurityError(ValueError):
     pass
 
 
+class IntegrityError(SecurityError):
+    """Evidence, a resource, or a published file changed or no longer matches its record.
+
+    Callers that run several analyses (the autopilot) stop everything on this
+    type instead of recording one failed step; other ``SecurityError`` values
+    are refusals of a single input or request.
+    """
+
+
 def validate_json_nesting(value: Any, *, max_depth: int = 128) -> None:
     """Bound JSON depth and reject nonfinite or non-JSON values iteratively."""
     stack = [iter((value,))]
@@ -213,7 +222,7 @@ def capture_regular_evidence(
                 while remaining:
                     chunk = source.read(min(1024 * 1024, remaining))
                     if not chunk:
-                        raise SecurityError("Cited evidence changed during capture")
+                        raise IntegrityError("Cited evidence changed during capture")
                     digest.update(chunk)
                     if output is not None:
                         output.write(chunk)
@@ -223,7 +232,7 @@ def capture_regular_evidence(
                     offset += len(chunk)
                     remaining -= len(chunk)
                 if source.read(1):
-                    raise SecurityError("Cited evidence changed during capture")
+                    raise IntegrityError("Cited evidence changed during capture")
             finally:
                 if output is not None:
                     output.close()
@@ -233,7 +242,7 @@ def capture_regular_evidence(
         if (before.st_size, before.st_mtime_ns, before.st_dev, before.st_ino) != (
             after.st_size, after.st_mtime_ns, current.st_dev, current.st_ino
         ):
-            raise SecurityError("Cited evidence changed during capture")
+            raise IntegrityError("Cited evidence changed during capture")
         return digest.hexdigest(), bytes(window)
     except OSError as exc:
         raise SecurityError("Cited evidence could not be captured as a regular file") from exc
@@ -260,7 +269,7 @@ def read_regular_text(path: Path, root: Path, max_bytes: int) -> str:
             guard()
             current = path.stat(follow_symlinks=False)
             if (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
-                raise SecurityError("Published report changed before reading")
+                raise IntegrityError("Published report changed before reading")
             with os.fdopen(descriptor, "rb", closefd=False) as handle:
                 data = handle.read(max_bytes + 1)
             guard()
@@ -269,7 +278,7 @@ def read_regular_text(path: Path, root: Path, max_bytes: int) -> str:
             if (before.st_size, before.st_mtime_ns, before.st_dev, before.st_ino) != (
                 after.st_size, after.st_mtime_ns, current.st_dev, current.st_ino
             ):
-                raise SecurityError("Published report changed while reading")
+                raise IntegrityError("Published report changed while reading")
         finally:
             os.close(descriptor)
         if len(data) > max_bytes:

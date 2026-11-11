@@ -178,12 +178,12 @@ def decide_all(out: Path, draft: dict, decision: str = "accept") -> None:
 def test_export_blocked_until_signed(evidence: Path, tmp_path: Path) -> None:
     draft, out = run(evidence, tmp_path)
     with pytest.raises(AutopilotError, match="not signed"):
-        signoff.export(out, tmp_path / "final")
+        signoff.export(out, tmp_path / "final", signature_seen=signoff.signature_fingerprint(out))
     with pytest.raises(AutopilotError, match="need a decision"):
         signoff.sign(out, actor="analyst", fingerprint_seen=signoff.fingerprint(out))
     decide_all(out, draft)
     signoff.sign(out, actor="analyst", fingerprint_seen=signoff.fingerprint(out))
-    final = signoff.export(out, tmp_path / "final")
+    final = signoff.export(out, tmp_path / "final", signature_seen=signoff.signature_fingerprint(out))
     assert final["status"].startswith("SIGNED")
     assert len(final["findings"]) == len(draft["findings"])
 
@@ -197,7 +197,7 @@ def test_reject_needs_reason_and_rejected_findings_leave_report(evidence: Path, 
     for finding in draft["findings"][1:]:
         signoff.decide(out, finding_id=finding["finding_id"], decision="accept", actor="analyst")
     signoff.sign(out, actor="analyst", fingerprint_seen=signoff.fingerprint(out))
-    final = signoff.export(out, tmp_path / "final")
+    final = signoff.export(out, tmp_path / "final", signature_seen=signoff.signature_fingerprint(out))
     assert first not in {f["finding_id"] for f in final["findings"]}
     assert final["rejected_findings"][0]["analyst_note"] == "false positive"
 
@@ -229,13 +229,13 @@ def test_tampered_draft_or_log_blocks_export(evidence: Path, tmp_path: Path) -> 
     saved = log.read_text()
     log.write_text(saved.replace('"accept"', '"reject"', 1))
     with pytest.raises(AutopilotError, match="decision log changed"):
-        signoff.export(out, tmp_path / "final")
+        signoff.export(out, tmp_path / "final", signature_seen=signoff.signature_fingerprint(out))
     log.write_text(saved)
     data = json.loads((out / DRAFT_JSON).read_text())
     data["findings"] = []
     (out / DRAFT_JSON).write_text(json.dumps(data))
     with pytest.raises(AutopilotError, match="changed after the run"):
-        signoff.export(out, tmp_path / "final")
+        signoff.export(out, tmp_path / "final", signature_seen=signoff.signature_fingerprint(out))
 
 
 def test_decisions_closed_after_signing(evidence: Path, tmp_path: Path) -> None:
@@ -260,17 +260,18 @@ def test_cli_round_trip(evidence: Path, tmp_path: Path, capsys: pytest.CaptureFi
     out = tmp_path / "cli"
     assert cli_main(["start", "--input-dir", str(evidence), "--output-dir", str(out), "--case-id", "case-cli"]) == 0
     assert "hostile" in capsys.readouterr().out.lower() or True
-    assert cli_main(["export", "--run-dir", str(out), "--dest", str(tmp_path / "f")]) == 2
+    assert cli_main(["export", "--run-dir", str(out), "--dest", str(tmp_path / "f"), "--signature", "0" * 64]) == 2
     draft = json.loads((out / DRAFT_JSON).read_text())
     for finding in draft["findings"]:
         assert cli_main(["decide", "--run-dir", str(out), "--finding-id", finding["finding_id"],
                          "--decision", "accept", "--actor", "analyst"]) == 0
     with pytest.raises(SystemExit):  # --fingerprint is required
         cli_main(["sign", "--run-dir", str(out), "--actor", "analyst"])
-    assert cli_main(["sign", "--run-dir", str(out), "--actor", "analyst", "--fingerprint", "0" * 16]) == 2
+    assert cli_main(["sign", "--run-dir", str(out), "--actor", "analyst", "--fingerprint", "0" * 40]) == 2
     assert cli_main(["sign", "--run-dir", str(out), "--actor", "analyst",
-                     "--fingerprint", signoff.fingerprint(out)[:16]]) == 0
-    assert cli_main(["export", "--run-dir", str(out), "--dest", str(tmp_path / "f")]) == 0
+                     "--fingerprint", signoff.fingerprint(out)]) == 0
+    assert cli_main(["export", "--run-dir", str(out), "--dest", str(tmp_path / "f"),
+                     "--signature", signoff.signature_fingerprint(out)]) == 0
     assert (tmp_path / "f" / signoff.FINAL_MD).is_file()
 
 

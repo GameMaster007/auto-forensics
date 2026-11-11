@@ -43,7 +43,7 @@ from .manifest import (
 from .models import ArtifactEvent, BinaryFeature, CaseReport, Citation, Finding, TimelineEvent, utc_now_iso
 from .pdf_report import write_pdf_report
 from .plugins import PluginRegistry
-from .security import SecurityError, bounded_tree_paths, sha256_file, stays_in_tree, validate_case_id
+from .security import IntegrityError, SecurityError, bounded_tree_paths, sha256_file, stays_in_tree, validate_case_id
 from .sigma_rules import evaluate_sigma_rules
 from .stix_export import build_stix_bundle
 from .timeline import normalize_timeline, timeline_sort_key
@@ -539,7 +539,7 @@ def _pipeline_inputs(config: PipelineConfig) -> list[dict[str, Any]]:
     if config.expected_input_files is not None:
         validate_file_inventory(config.expected_input_files)
         if any(compare_inventory(config.expected_input_files, rows).values()):
-            raise SecurityError("Evidence no longer matches the required custody or replay inventory; report was not published")
+            raise IntegrityError("Evidence no longer matches the required custody or replay inventory; report was not published")
     return rows
 
 
@@ -738,9 +738,9 @@ def _run_case(config: PipelineConfig) -> CaseReport:
         iocs=iocs,
     )
     if _pipeline_inputs(config) != input_files:
-        raise SecurityError("Evidence changed during analysis; the report was not published")
+        raise IntegrityError("Evidence changed during analysis; the report was not published")
     if hash_analysis_resources(resource_paths) != resources:
-        raise SecurityError("Analysis resources changed during analysis; the report was not published")
+        raise IntegrityError("Analysis resources changed during analysis; the report was not published")
     with tempfile.TemporaryDirectory(prefix=".af-publish-", dir=config.output_dir.parent) as temporary:
         render_dir = Path(temporary)
         render_dir.mkdir(parents=True, exist_ok=True)
@@ -834,7 +834,7 @@ def rewrite_published_report(
                 handle.write(review_log_content)
             entries = read_review_log(staging / review_log)
             if len(entries) != review_count:
-                raise SecurityError("Review log count differs from the requested publication")
+                raise IntegrityError("Review log count differs from the requested publication")
             for entry in entries:
                 previous = review_times.get(entry["finding_id"], entry["at"])
                 review_times[entry["finding_id"]] = max(previous, entry["at"], key=timeline_sort_key)

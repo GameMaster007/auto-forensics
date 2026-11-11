@@ -23,6 +23,7 @@ from typing import Any
 from .file_ops import atomic_write_text
 from .report_validation import validate_report_data
 from .security import (
+    IntegrityError,
     SecurityError,
     bounded_tree_paths,
     read_limited_text,
@@ -171,7 +172,7 @@ def hash_input_tree(input_dir: Path, max_files: int = 10_000) -> list[dict[str, 
         if not stays_in_tree(path, root) or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
             after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
         ):
-            raise SecurityError(f"Evidence changed while hashing: {path.relative_to(root)}")
+            raise IntegrityError(f"Evidence changed while hashing: {path.relative_to(root)}")
         rows.append(
             {
                 "path": str(path.relative_to(root)),

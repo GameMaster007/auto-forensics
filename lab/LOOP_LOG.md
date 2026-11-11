@@ -112,3 +112,39 @@ with a proof of concept. Each fix below has a regression test in
 
 After loop 47: 985 tests pass; lab 100; 0 false alarms on 20,000 benign
 events; detection unchanged (87.8% / 89.2% / 60.1%).
+
+## Re-review and final loops
+
+The same reviewer re-ran its proofs of concept against loop 47: 11 of 14
+fixed, 3 partial, and 8 new defects introduced or exposed by the fixes.
+
+| Loop | Change | Result |
+| --- | --- | --- |
+| 48 | Re-review requested (fresh proofs of concept against the fixes) | 11 fixed, 3 partial, 8 new |
+| 49 | End-to-end benchmark on both real sets with every fix | Dev 87.8% in 38 s; hold-out 60.1% in 157 s, 0 errors, but one hold-out file produced 500 serious findings |
+| 50 | Core event-ID findings: one per event ID per file with a count (not one per event); process creation 4688 and PowerShell 4103/4104 are low context, not alerts (content rules still raise the suspicious ones) | Worst file 500 to 42 serious findings; hold-out run 157 s to 27 s; hold-out "detected" 60.1% to 44.7%, because many of those files had been counted as detected only because every process creation raised an alert |
+| 51 | Command-line obfuscation rule (caret splitting, `%VAR:~x,y%` substrings, split quotes) | General technique; did not change the hold-out |
+| 52 | N2: sealed signature cannot be exported without the key; export needs the signature fingerprint printed by `sign` (kept outside the run folder); fingerprints need 32+ hex characters; final report says sealed or unsealed. N3: `sign` refuses when an agent failed unless `--accept-gaps`, which is recorded in the final report | 5 new tests |
+| 53 | N4: core raises a dedicated `IntegrityError` at its integrity checks; the autopilot aborts on that type instead of guessing from message words | A folder named "inventory" no longer aborts a run |
+| 54 | N5 text agents scan both the byte-wise and UTF-16 readings, so a fake BOM cannot hide text; N6 an archive member cannot shadow a real file of the same name; N7 archive type read from 4 bytes, whole-archive zip-bomb ratio, run-wide extraction budget, identical archives in two folders both analysed; N8 archive findings labelled honestly, "you" removed from injection context | 5 new tests |
+| 55 | N1 padding evasion: whitespace runs collapsed in command lines; token gap widened to 2,000 chars (cost unchanged with 8 KB fields); command lines over 2,000 chars from programs outside Program Files are a medium finding | Reviewer's padding cases now caught; timing budgets still pass |
+| 56 | Regression caught by the lab: guessed UTF-16 readings of binaries produced hidden-text alarms; such lines are now scanned only if mostly ordinary text | Lab back to 100 |
+| 57 | Regression caught by a new test: soft hyphens (0xAD bytes in binaries) triggered hidden-text; removed from that rule | 1,010 tests pass |
+
+## Where it ended (loop 57)
+
+| Measure | Start | End |
+| --- | --- | --- |
+| Tests | 771 passed | 1,010 passed (3.13), new tests also pass on 3.10 |
+| Synthetic lab / hold-out | 86.55 / 89.38 | 100 / 100 (saturated; see note at loop 7) |
+| Real attack logs, dev set (278 files), end to end | 41.0% detected, 9.2% right tactic, 958 s | 86.7%, 49.4%, 37 s |
+| Dev2 (37 files, added at loop 19) | 81.1% | 86.5% |
+| Hold-out (293 files, never used to write rules) | 44.4% / 11.8% | 45.1% / 25.7% |
+| Worst file, serious findings | 500 | 42 |
+| False alarms in 20,000 benign events | 70 | 0 |
+
+The hold-out detection rate ends close to where it started because loop 50
+stopped counting routine telemetry as detections; the correct-tactic rate
+more than doubled. Raising it further needs rules for the Security-log
+techniques that set covers, written from ATT&CK knowledge rather than from
+its files, and real benign logs to check them against.

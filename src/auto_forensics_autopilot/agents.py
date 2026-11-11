@@ -29,7 +29,7 @@ from typing import Any, Callable, Iterator
 from auto_forensics.case_store import CaseStore
 from auto_forensics.models import Citation, Finding
 from auto_forensics.pipeline import PipelineConfig, run_case
-from auto_forensics.security import sha256_file
+from auto_forensics.security import IntegrityError, sha256_file
 from auto_forensics.tools import ToolRegistry
 
 from .triage import EvidenceProfile
@@ -95,17 +95,50 @@ def _text_encoding(head: bytes) -> str | None:
     return None
 
 
-def iter_lines(path: Path, limit: int = MAX_SCAN_BYTES) -> Iterator[tuple[int, str]]:
-    """Yield (1-based physical line, text) for at most ``limit`` bytes of a file.
+def decodings_for(path: Path, limit: int = MAX_SCAN_BYTES) -> list[str]:
+    """Every reading of a file worth scanning: always byte-wise, plus UTF-16/32 when NULs suggest it.
 
-    Lines split on LF only (a trailing CR is dropped), so row numbers match
-    what an editor and the core's CSV/JSONL readers show. UTF-16/32 text is
-    decoded as such; other bytes are read as UTF-8, falling back to Latin-1 so
-    a binary's embedded strings are still scanned. Long lines are cut.
+    Scanning both means a fake byte-order mark or a UTF-16-looking header
+    cannot hide plain text, and real UTF-16 text is still read.
     """
     with path.open("rb") as handle:
         data = handle.read(limit)
-    encoding = _text_encoding(data)
+    modes = ["bytes"]
+    wide = _text_encoding(data)
+    if wide:
+        modes.append(wide)
+    elif b"\x00" in data:
+        modes.extend([f"{GUESSED}utf-16-le", f"{GUESSED}utf-16-be"])
+    return modes
+
+
+GUESSED = "guess:"
+
+
+def _looks_like_text(line: str) -> bool:
+    """A line from a guessed UTF-16 reading is scanned only if it is mostly ordinary text.
+
+    Reading binary data as UTF-16 yields random characters, including the
+    invisible and right-to-left marks the hidden-text rule looks for.
+    """
+    if len(line) < 8:
+        return False
+    plain = sum(1 for ch in line if ch.isascii() and (ch.isprintable() or ch == "\t"))
+    return plain / len(line) >= 0.85
+
+
+def iter_lines(path: Path, limit: int = MAX_SCAN_BYTES, decoding: str = "auto") -> Iterator[tuple[int, str]]:
+    """Yield (1-based physical line, text) for at most ``limit`` bytes of a file.
+
+    ``decoding`` is "bytes" (UTF-8, falling back to Latin-1 per line), a
+    UTF-16/32 codec name, or "auto" (the BOM/NUL-pattern guess). Lines split
+    on LF only and a trailing CR is dropped, so rows are physical lines.
+    """
+    with path.open("rb") as handle:
+        data = handle.read(limit)
+    if decoding.startswith(GUESSED):
+        decoding = decoding[len(GUESSED):]
+    encoding = _text_encoding(data) if decoding == "auto" else (None if decoding == "bytes" else decoding)
     if encoding:
         text = data.decode(encoding, errors="replace").lstrip("\ufeff")
         for number, line in enumerate(text.split("\n"), start=1):
@@ -215,7 +248,9 @@ def hidden_text_signal(line: str) -> bool:
     """True when a line hides text: a bidi override, or an invisible character between letters."""
     if any(ch in _BIDI for ch in line):
         return True
-    return bool(re.search(r"\w[\u200b\u200c\u200d\u2060\u00ad]+\w", line))
+    # Soft hyphens (U+00AD) are left out: real documents use them, and binary
+    # bytes read as Latin-1 produce them.
+    return bool(re.search(r"\w[\u200b\u200c\u200d\u2060]+\w", line))
 
 
 class LineRuleAgent:
@@ -238,7 +273,9 @@ class LineRuleAgent:
         findings: list[Finding] = []
         hits = 0
         seen_rules: set[str] = set()
-        for row, line in iter_lines(path):
+        for decoding, row, line in ((d, r, t) for d in decodings_for(path) for r, t in iter_lines(path, decoding=d)):
+            if decoding.startswith(GUESSED) and not _looks_like_text(line):
+                continue
             # Folding can lengthen a line (one character can become 18), so cut after it.
             folded = normalise_for_rules(line)[:MAX_LINE_CHARS]
             for rule in self.rules:
@@ -252,13 +289,14 @@ class LineRuleAgent:
                 hits += 1
                 seen_rules.add(rule.rule_id)
                 findings.append(Finding(
-                    finding_id=stable_id(self.name, rel, row, rule.rule_id),
+                    finding_id=stable_id(self.name, rel, row, rule.rule_id, decoding),
                     title=rule.title,
                     severity=rule.severity,
                     confidence=self.confidence,
                     tactic=rule.tactic,
                     technique_id=rule.technique_id,
-                    evidence=[f"rule={rule.rule_id}", f"file={rel}", f"row={row}", f"line_sha256={line_digest(line)}"],
+                    evidence=[f"rule={rule.rule_id}", f"file={rel}", f"row={row}", f"decoding={decoding}",
+                              f"line_sha256={line_digest(line)}"],
                     recommendation=rule.recommendation,
                     citations=[_file_citation(ctx.input_dir, rel, digest, row)],
                     origin="detector",
@@ -285,7 +323,7 @@ class LineRuleAgent:
 
 
 def _rx(text: str) -> re.Pattern[str]:
-    return re.compile(text.replace(".*", r"[^\n]{0,400}"), re.IGNORECASE)
+    return re.compile(text.replace(".*", r"[^\n]{0,2000}"), re.IGNORECASE)
 
 
 class InjectionSentinelAgent(LineRuleAgent):
@@ -302,7 +340,7 @@ class InjectionSentinelAgent(LineRuleAgent):
     _rec = "Treat this file as hostile input. Review it in a plain viewer, not through a model."
     # Words that show a line is addressed to a model rather than a person.
     _addressed = (r"\b(ai|a\.i\.|assistant|model|llm|chatbot|gpt|claude|llama|copilot|analy[sz](er|is tool)|"
-                  r"triage tool|language model|you)\b|^\W*(system|assistant)\s*:")
+                  r"triage tool|language model)\b|\byou (are|must|will|should)\b|^\W*(system|assistant)\s*:")
     _to_machine = _rx(_addressed + r"|\b(benign|clean|safe|no (threats?|findings?|malware))\b")
     # The verdict rule already names the verdict, so it needs the address itself.
     _to_machine_only = _rx(_addressed)
@@ -386,11 +424,11 @@ def volatility_available() -> tuple[bool, str]:
 
 
 SUSPICIOUS_CMDLINE = (
-    ("encoded-powershell", _rx(r"powershell[^\n]{0,400}\s-(e|en|enc|encodedcommand)\s"), "high", "execution",
+    ("encoded-powershell", _rx(r"powershell[^\n]{0,2000}\s-(e|en|enc|encodedcommand)\s"), "high", "execution",
      "T1059.001"),
     ("temp-execution", _rx(r"\\(temp|appdata\\local\\temp|downloads)\\[^\\]+\.(exe|dll|scr)"), "medium",
      "execution", "T1204"),
-    ("lsass-access", _rx(r"(procdump|comsvcs\.dll)[^\n]{0,400}lsass"), "critical", "credential-access", "T1003.001"),
+    ("lsass-access", _rx(r"(procdump|comsvcs\.dll)[^\n]{0,2000}lsass"), "critical", "credential-access", "T1003.001"),
 )
 
 
@@ -457,10 +495,11 @@ class ArchiveAgent:
     def run(self, ctx: AgentContext, store: CaseStore, tools: ToolRegistry) -> AgentResult:
         from auto_forensics.case_store import MemoryCaseStore
 
-        from .archives import SEPARATOR, extract_zip
+        from .archives import SEPARATOR, ExtractionBudget, extract_zip
         from .triage import profile_evidence
 
         tools.allow("extract_zip", extract_zip)
+        budget = ExtractionBudget()
         members_out: list[dict[str, Any]] = []
         hostile: list[str] = []
         errors: list[str] = []
@@ -468,14 +507,16 @@ class ArchiveAgent:
         submitted: list[Finding] = []
         for rel in ctx.profile.kinds.get("archive", []):
             path = ctx.input_dir / rel
-            if not (rel.lower().endswith(".zip") or path.read_bytes()[:4] == b"PK\x03\x04"):
+            with path.open("rb") as handle:
+                magic = handle.read(4)
+            if not (rel.lower().endswith(".zip") or magic == b"PK\x03\x04"):
                 skipped.append(rel)
                 continue
             digest = sha256_file(path).lower()
-            folder = f"{Path(rel).stem[:40]}-{digest[:8]}"
+            folder = f"{Path(rel).stem[:40]}-{digest[:8]}-{hashlib.sha256(rel.encode()).hexdigest()[:8]}"
             extracted = ctx.run_dir / "archives" / folder
             try:
-                members = tools.call("extract_zip", path, rel, digest, extracted)
+                members = tools.call("extract_zip", path, rel, digest, extracted, budget)
             except Exception as exc:  # noqa: BLE001 - a refused archive is reported, not fatal
                 errors.append(f"{rel}: {exc}")
                 continue
@@ -492,6 +533,8 @@ class ArchiveAgent:
                 agent = agent_cls()
                 try:
                     result = agent.run(sub_ctx, sub_store, ToolRegistry(worker=f"archive/{agent.name}", store=sub_store))
+                except IntegrityError:
+                    raise
                 except Exception as exc:  # noqa: BLE001
                     errors.append(f"{rel} {agent.name}: {type(exc).__name__}")
                     continue

@@ -87,7 +87,8 @@ def verify_agent_finding(
         if citation.row is None:
             return "line digest recorded without a row"
         path = (locate or {}).get(citation.source_file) or input_dir / citation.source_file
-        line = next((text for number, text in iter_lines(path) if number == citation.row), None)
+        decoding = _evidence_value(finding, "decoding") or "auto"
+        line = next((text for number, text in iter_lines(path, decoding=decoding) if number == citation.row), None)
         if line is None:
             return "cited row does not exist"
         if line_digest(line) != expected_line:
@@ -99,8 +100,9 @@ def check_label(finding: Finding) -> str:
     """What the coordinator could actually confirm for a non-core finding."""
     if _evidence_value(finding, "line_sha256") is not None:
         return "row re-read"
-    if finding.worker == "archive" and finding.verification:
-        return f"verified in archive run ({finding.verification})"
+    if finding.worker == "archive":
+        # The archive's own core run checked these; the coordinator re-checked only the member's hash.
+        return "member hash; row checked by the archive's core run"
     return "file hash only"
 
 
@@ -264,7 +266,7 @@ def _code(value: Any) -> str:
 
 
 def render_markdown(draft: dict[str, Any], *, title: str = "Autopilot draft") -> str:
-    lines = [f"# {title}: {_cell(draft['case_id'])}", "", f"**{draft['status']}**", "", draft["headline"], ""]
+    lines = [f"# {title}: {_cell(draft['case_id'])}", "", f"**{_cell(draft['status'])}**", "", _cell(draft["headline"]), ""]
     if draft.get("hostile_files"):
         lines += [
             "## Warning: hostile evidence",

@@ -13,7 +13,6 @@ import hashlib
 import json
 import os
 import platform
-import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -24,7 +23,7 @@ from auto_forensics.case_store import MemoryCaseStore
 from auto_forensics.file_ops import atomic_write_text, directory_lock
 from auto_forensics.manifest import hash_input_tree
 from auto_forensics.models import utc_now_iso
-from auto_forensics.security import SecurityError, validate_case_id
+from auto_forensics.security import IntegrityError, SecurityError, validate_case_id
 from auto_forensics.tools import ToolRegistry
 from auto_forensics.version import __version__ as CORE_VERSION
 
@@ -71,11 +70,6 @@ def _check_paths(input_dir: Path, output_dir: Path) -> tuple[Path, Path]:
     return evidence, out
 
 
-# Core messages for evidence or resources that changed, or a broken custody
-# inventory. These stop the whole run; other refusals only fail one agent.
-_INTEGRITY_FAILURE = re.compile(r"\bchanged\b|custody|inventory", re.IGNORECASE)
-
-
 class IntegrityAbort(AutopilotError):
     """An agent saw the evidence change; nothing is published."""
 
@@ -85,9 +79,9 @@ def _run_agent(name: str, ctx: AgentContext, store: MemoryCaseStore) -> AgentRes
     started = time.monotonic()
     try:
         result = AGENTS[name]().run(ctx, store, tools)
+    except IntegrityError as exc:
+        raise IntegrityAbort(f"{name}: {exc}") from exc
     except SecurityError as exc:
-        if _INTEGRITY_FAILURE.search(str(exc)):
-            raise IntegrityAbort(f"{name}: {exc}") from exc
         # Our own refusal text (for example a report the core will not publish).
         result = AgentResult(name, status="error", detail=f"SecurityError: {str(exc)[:200]}")
     except Exception as exc:  # noqa: BLE001 - an agent failure is recorded, not fatal
@@ -176,6 +170,7 @@ def _start_locked(
         core_report = read_json(core_path)
     inventory = inventory_map(inventory_rows)
     locate: dict[str, Path] = {}
+    collisions: list[str] = []
     hostile = []
     for result in results:
         if result.name in {"injection_sentinel", "archive"}:
@@ -186,6 +181,10 @@ def _start_locked(
             write_json(out / "archives" / "archives.json", members)
             result.notes["members_extracted"] = len(members)
             for member in members:
+                if member["cited_as"] in inventory:
+                    # A real evidence file has this exact name; never let a member shadow it.
+                    collisions.append(member["cited_as"])
+                    continue
                 inventory[member["cited_as"]] = member["sha256"]
                 locate[member["cited_as"]] = out / "archives" / member["folder"] / member["extracted"]
     findings, dropped = merge_findings(store.findings(), evidence, inventory, locate)
@@ -197,6 +196,8 @@ def _start_locked(
             gaps.append({"what": f"agent {result.name}", "why": f"agent status {result.status}"})
         for rel in result.notes.get("not_zip", []):
             gaps.append({"what": rel, "why": "archive is not a ZIP and was not opened"})
+    for name in collisions:
+        gaps.append({"what": name, "why": "archive member has the same name as an evidence file; member not cited"})
     for rel in profile.kinds.get("disk_image", []):
         gaps.append({"what": rel, "why": "disk image is not mounted; export it with Plaso first"})
     draft = build_draft(

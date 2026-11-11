@@ -111,7 +111,7 @@ def gate_checks(case_dir: Path, work: Path) -> dict[str, bool]:
             return True
         return False
 
-    results["export_before_sign_refused"] = refused(lambda: signoff.export(run, work / "gate-out"))
+    results["export_before_sign_refused"] = refused(lambda: signoff.export(run, work / "gate-out", signature_seen=signoff.signature_fingerprint(run)))
     if draft["findings"]:
         results["sign_with_pending_refused"] = refused(lambda: signoff.sign(run, actor="lab", fingerprint_seen=signoff.fingerprint(run)))
         results["reject_without_reason_refused"] = refused(
@@ -127,14 +127,14 @@ def gate_checks(case_dir: Path, work: Path) -> dict[str, bool]:
     log = run / signoff.SIGNOFF_LOG
     saved = log.read_text(encoding="utf-8")
     log.write_text(saved.replace('"accept"', '"reject"', 1), encoding="utf-8")
-    results["export_after_log_tamper_refused"] = refused(lambda: signoff.export(run, work / "gate-out2"))
+    results["export_after_log_tamper_refused"] = refused(lambda: signoff.export(run, work / "gate-out2", signature_seen=signoff.signature_fingerprint(run)))
     log.write_text(saved, encoding="utf-8")
-    results["export_after_sign_allowed"] = not refused(lambda: signoff.export(run, work / "gate-out3"))
+    results["export_after_sign_allowed"] = not refused(lambda: signoff.export(run, work / "gate-out3", signature_seen=signoff.signature_fingerprint(run)))
     draft_path = run / DRAFT_JSON
     data = json.loads(draft_path.read_text(encoding="utf-8"))
     data["headline"] = "nothing to see here"
     draft_path.write_text(json.dumps(data), encoding="utf-8")
-    results["export_after_draft_tamper_refused"] = refused(lambda: signoff.export(run, work / "gate-out4"))
+    results["export_after_draft_tamper_refused"] = refused(lambda: signoff.export(run, work / "gate-out4", signature_seen=signoff.signature_fingerprint(run)))
     return results
 
 

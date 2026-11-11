@@ -54,12 +54,16 @@ def build_parser() -> argparse.ArgumentParser:
     sgn.add_argument("--run-dir", required=True, type=Path)
     sgn.add_argument("--actor", required=True)
     sgn.add_argument("--fingerprint", required=True,
-                     help="The run fingerprint printed by 'start' (at least the first 12 characters).")
+                     help="The run fingerprint printed by 'start' (at least the first 32 characters).")
     sgn.add_argument("--statement", default="")
+    sgn.add_argument("--accept-gaps", action="store_true",
+                     help="Sign even though an agent failed; the gap is recorded in the signature and final report.")
 
     exp = sub.add_parser("export", help="Write the signed final report.")
     exp.add_argument("--run-dir", required=True, type=Path)
     exp.add_argument("--dest", required=True, type=Path)
+    exp.add_argument("--signature", required=True,
+                     help="The signature fingerprint printed by 'sign' (at least the first 32 characters).")
     return parser
 
 
@@ -96,10 +100,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{entry['finding_id']}: {entry['decision']} by {entry['actor']}")
         elif args.command == "sign":
             sig = signoff.sign(args.run_dir, actor=args.actor, fingerprint_seen=args.fingerprint,
-                               statement=args.statement)
+                               statement=args.statement, accept_gaps=args.accept_gaps)
             print(f"Signed by {sig['actor']} at {sig['signed_at']}: {sig['accepted']} accepted, {sig['rejected']} rejected.")
+            print(f"Signature fingerprint: {sig['signature_fingerprint']}")
+            print("Write it down outside the run folder; you need it to export.")
         elif args.command == "export":
-            final = signoff.export(args.run_dir, args.dest)
+            final = signoff.export(args.run_dir, args.dest, signature_seen=args.signature)
             print(final["headline"])
             print(f"Report: {args.dest / signoff.FINAL_MD}")
     except SecurityError as exc:

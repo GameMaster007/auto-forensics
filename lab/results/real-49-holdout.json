@@ -1,0 +1,3588 @@
+{
+  "files": 293,
+  "errors": [],
+  "detection_rate": 0.6007,
+  "tactic_match_rate": 0.2714,
+  "median_serious_findings": 1,
+  "max_serious_findings": 500,
+  "seconds_total": 156.5,
+  "by_tactic": {
+    "collection": "0/1 detected, 0 tactic-matched",
+    "command-and-control": "1/2 detected, 1 tactic-matched",
+    "credential-access": "29/47 detected, 19 tactic-matched",
+    "defense-evasion": "23/55 detected, 7 tactic-matched",
+    "discovery": "15/29 detected, 5 tactic-matched",
+    "execution": "18/19 detected, 11 tactic-matched",
+    "impact": "3/5 detected, 2 tactic-matched",
+    "initial-access": "1/3 detected, 0 tactic-matched",
+    "lateral-movement": "11/18 detected, 4 tactic-matched",
+    "persistence": "52/82 detected, 25 tactic-matched",
+    "privilege-escalation": "12/19 detected, 2 tactic-matched",
+    "unlabelled": "11/13 detected, 0 tactic-matched"
+  },
+  "missed": [
+    "Antivirus/ID1151-Defender health status.evtx",
+    "EVTX_full_APT_attack_steps/ID4674,5142-Mimikatz print spool privileges requested.evtx",
+    "TA0001-Initial access/T1078-Valid accounts/ID1149-RDP success logins to multiple hosts.evtx",
+    "TA0001-Initial access/T1078-Valid accounts/ID33205-SQL Server failed login with disabled SA account.evtx",
+    "TA0002-Execution/T1569.002-Service execution/ID7009-Service deployment time out (meterpreter).evtx",
+    "TA0003-Persistence/T1098.xxx-Account manipulation/ID33205-SQL Server member added to database role.evtx",
+    "TA0003-Persistence/T1098.xxx-Account manipulation/ID33205-SQL Server member added to server role.evtx",
+    "TA0003-Persistence/T1098.xxx-Account manipulation/ID33205-SQL Server user linked to a database.evtx",
+    "TA0003-Persistence/T1098.xxx-Account manipulation/ID4723-5145-password reset with changeNTLM (Mimikatz).evtx",
+    "TA0003-Persistence/T1098.xxx-Account manipulation/ID4738-Account is sensitive and cannot be delegated.evtx",
+    "TA0003-Persistence/T1098.xxx-Account manipulation/ID4738-Account with password not required.evtx",
+    "TA0003-Persistence/T1098.xxx-Account manipulation/ID4738-Do not require Kerberos preauthentication.evtx",
+    "TA0003-Persistence/T1098.xxx-Account manipulation/ID4738-Password cannot be changed.evtx",
+    "TA0003-Persistence/T1098.xxx-Account manipulation/ID4738-Password never expires.evtx",
+    "TA0003-Persistence/T1098.xxx-Account manipulation/ID4738-Use only Kerberos DES encryption types.evtx",
+    "TA0003-Persistence/T1098.xxx-Account manipulation/ID4738-User set with reversible psw encryption.evtx",
+    "TA0003-Persistence/T1098.xxx-Account manipulation/ID4781-4738-User renamed to admin or likely.evtx",
+    "TA0003-Persistence/T1098.xxx-Account manipulation/ID4781-Computer account renamed without a trailing $ (CVE-2021-42278).evtx",
+    "TA0003-Persistence/T1098.xxx-Account manipulation/ID5136-4662 AD object owner changed.evtx",
+    "TA0003-Persistence/T1136-Create account/ID33205-SQL Server Disabled SA user activated.evtx",
+    "TA0003-Persistence/T1136-Create account/ID33205-SQL Server local user created.evtx",
+    "TA0003-Persistence/T1136-Create account/ID4741-Computer account created with privileges.evtx",
+    "TA0003-Persistence/T1136-Create account/ID4742-4743-Fast created & deleted computer account.evtx",
+    "TA0003-Persistence/T1505-Server Software Component/ID11-Exchange transport config modified.evtx",
+    "TA0003-Persistence/T1505-Server Software Component/ID6-Failed to install an Exchange transport agent.evtx",
+    "TA0003-Persistence/T1505.001-SQL Stored Procedures/ID11715-SQL Server started in single mode for psw recovery.evtx",
+    "TA0003-Persistence/T1505.001-SQL Stored Procedures/ID15457-SQL server CLR lateral movement.evtx",
+    "TA0003-Persistence/T1543.003-Create or Modify System Process-Windows Service/ID13-New service for Mimikatz.evtx",
+    "TA0003-Persistence/T1546-Event Triggered Execution/ID13-WMIimplant registry crash control.evtx",
+    "TA0003-Persistence/T1546-Event Triggered Execution/ID5136-AdminSDholder backdoor obfuscation (via localizationDisplayId).evtx",
+    "TA0003-Persistence/T1547-Boot or Logon Autostart Execution/ID12-LSA Protect mode enabled RunAsPPL.evtx",
+    "TA0003-Persistence/T1547-Boot or Logon Autostart Execution/ID4622-New SSP loaded in LSA (only legitim).evtx",
+    "TA0003-Persistence/T1547-Boot or Logon Autostart Execution/ID4664-symbolic link created.evtx",
+    "TA0003-Persistence/T1574-Hijack Execution Flow/ID150-Failed DLL loaded by DNS server.evtx",
+    "TA0003-Persistence/T1574-Hijack Execution Flow/ID770-Success DLL loaded by DNS server.evtx",
+    "TA0004-Privilege Escalation/T1068-Exploitation for Privilege Escalation/ID4673-Privilege SeMachineAccountPrivilege called.evtx",
+    "TA0004-Privilege Escalation/T1134-Access Token Manipulation/ID4704-4705-User righ assigned to account.evtx",
+    "TA0004-Privilege Escalation/T1134-Access Token Manipulation/ID4717-4718-System security granded to account.evtx",
+    "TA0004-Privilege Escalation/T1484-Domain or Tenant Policy Modification/ID 4865 4706 - trust added.evtx",
+    "TA0004-Privilege Escalation/T1546-Image File Execution Options Injection/ID11-New sethc file created from CMD copy.evtx",
+    "TA0004-Privilege Escalation/T1574-DLL side-loading/ID316,300,301,316,823,848-Mimispool printer server instal.evtx",
+    "TA0004-Privilege Escalation/T1574-DLL side-loading/ID354-808-Mimispool printer installation (PrintNightmare).evtx",
+    "TA0005-Defense Evasion/T1027-Obfuscated Files or Information/ID400-800-CrackMapExec payload execution.evtx",
+    "TA0005-Defense Evasion/T1070.006-Timestomp/ID4616-system time changed.evtx",
+    "TA0005-Defense Evasion/T1078.002-Valid accounts-Domain accounts/ID4964-Login of a member of a special group.evtx",
+    "TA0005-Defense Evasion/T1112-Modify registry/ID11,13-SMBexec service registration.evtx",
+    "TA0005-Defense Evasion/T1202- Indirect Command Execution/ID9-WSL module installation (KBC).evtx",
+    "TA0005-Defense Evasion/T1207-Rogue domain controller/ID4662-Sensitive attributes accessed (DCshadow).evtx",
+    "TA0005-Defense Evasion/T1207-Rogue domain controller/ID5137-Fake domain controller registration (DCshadow).evtx",
+    "TA0005-Defense Evasion/T1222.001-File and Directory Permissions Modification/ID5124-OCSP security settings changed.evtx",
+    "TA0005-Defense Evasion/T1222.001-File and Directory Permissions Modification/ID5136-Permission change on OU by computer.evtx",
+    "TA0005-Defense Evasion/T1222.001-File and Directory Permissions Modification/ID5136-Permission change on OU by user.evtx",
+    "TA0005-Defense Evasion/T1222.001-File and Directory Permissions Modification/ID5136-Permission change on top root AD (DCsync).evtx",
+    "TA0005-Defense Evasion/T1222.001-File and Directory Permissions Modification/ID5136-Permissions changed on a GPO.evtx",
+    "TA0005-Defense Evasion/T1222.001-File and Directory Permissions Modification/ID5143-File share permissions changed.evtx",
+    "TA0005-Defense Evasion/T1553- Subvert Trust Controls/ID12-13 SIP provider registration.evtx",
+    "TA0005-Defense Evasion/T1555.004-Windows Credential Manager/ID 5376, 5379, 5382, 5381, 5382 credential manager and vault.evtx",
+    "TA0005-Defense Evasion/T1562.001-Impair Defenses-Disable or Modify tool/ID1-SYSMON driver unload (FilterManager).evtx",
+    "TA0005-Defense Evasion/T1562.001-Impair Defenses-Disable or Modify tool/ID13-Defender service configuration disabled.evtx",
+    "TA0005-Defense Evasion/T1562.001-Impair Defenses-Disable or Modify tool/ID5007-Defender threat exclusion (native).evtx",
+    "TA0005-Defense Evasion/T1562.001-Impair Defenses-Disable or Modify tool/ID8-Module Virtualization disabled (Credential Guard).evtx",
+    "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID33205-SQL Server  audit object disabled.evtx",
+    "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID33205-SQL Server Database audit specification deleted.evtx",
+    "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID33205-SQL Server Database audit specification disabled.evtx",
+    "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID33205-SQL Server audit object deleted.evtx",
+    "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID33205-SQL Server audit specification deleted.evtx",
+    "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID33205-SQL Server audit specification disabled.evtx",
+    "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID4739-Domain policy changed by non system account.evtx",
+    "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID4885,4876,4877,5123,5124-ADCS PKI OCSP.evtx",
+    "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID4908-Special group table changed.evtx",
+    "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID541-DNS server auditing changed.evtx",
+    "TA0005-Defense Evasion/T1562.004-Impair Defenses-Disable or Modify System Firewall/ID2003-4950-Firewall disabled.evtx",
+    "TA0005-Defense Evasion/T1562.004-Impair Defenses-Disable or Modify System Firewall/ID2004-Any any firewall rule created.evtx",
+    "TA0005-Defense Evasion/T1562.004-Impair Defenses-Disable or Modify System Firewall/ID2004-New firewall rule created by PowerShell.evtx",
+    "TA0006-Credential Access/T1003-Credential dumping/ID4661-4658 Mimikatz sekurlsa password dump SAM.evtx",
+    "TA0006-Credential Access/T1003-Credential dumping/ID4661-Suspicious SAM access to password attributes by LSASS (Dcshadow).evtx",
+    "TA0006-Credential Access/T1003-Credential dumping/ID4663-Task Manager used to dump LSASS process.evtx",
+    "TA0006-Credential Access/T1110.xxx-Brut force/ID33205-SQL Server failed login because only Windows auth.evtx",
+    "TA0006-Credential Access/T1110.xxx-Brut force/ID33205-SQL Server failed login with SA wrong password.evtx",
+    "TA0006-Credential Access/T1110.xxx-Brut force/ID33205-SQL Server failed login with non existing accounts.evtx",
+    "TA0006-Credential Access/T1110.xxx-Brut force/ID4-OpenSSH brutforce with non existing users (sshd logs).evtx",
+    "TA0006-Credential Access/T1110.xxx-Brut force/ID4-OpenSSH brutforce with valid users.evtx",
+    "TA0006-Credential Access/T1552.004-Unsecured Credentials-Private Keys/ID70-CAPI-Private key accessed Mimikatz.evtx",
+    "TA0006-Credential Access/T1555-Credentials from Password Stores/ID4662-Sensitve DPAPI attributes accessed.evtx",
+    "TA0006-Credential Access/T1557-Man in the middle/ID515-DNS entry created with wildcard.evtx",
+    "TA0006-Credential Access/T1558-Steal or Forge Kerberos Tickets/ID4624-Success login with Golden ticket.evtx",
+    "TA0006-Credential Access/T1558-Steal or Forge Kerberos Tickets/ID4768-4769-Kerberos host ticket without a trailing $.evtx",
+    "TA0006-Credential Access/T1558-Steal or Forge Kerberos Tickets/ID4769-Golden ticket issued.evtx",
+    "TA0006-Credential Access/T1649- Steal or Forge Authentication Certificates/ID 4882 - ADCS ESC 7.evtx",
+    "TA0006-Credential Access/T1649- Steal or Forge Authentication Certificates/ID 4886-4887 - ADCS ESC 1.evtx",
+    "TA0006-Credential Access/T1649- Steal or Forge Authentication Certificates/ID 4886-4887 - ADCS ESC 2.evtx",
+    "TA0006-Credential Access/T1649- Steal or Forge Authentication Certificates/ID 4886-4887 - ADCS ESC 3.evtx",
+    "TA0007-Discovery/T1016-System Network Configuration Discovery/ID6004-DNS-server-failed zone transfer.evtx",
+    "TA0007-Discovery/T1018-Remote System Discovery/ID5145-DNS hosts files access via network share.evtx",
+    "TA0007-Discovery/T1046-Network Service Scanning/ID131-RDP brutforce (no user info).evtx",
+    "TA0007-Discovery/T1046-Network Service Scanning/ID4624-Anonymous login with domain specified (DonPapi).evtx",
+    "TA0007-Discovery/T1069-Permission Groups Discovery/ID4661-Local group enumeration with RID brutforce with CME.evtx",
+    "TA0007-Discovery/T1069-Permission Groups Discovery/ID4661-SAM sensitive domain users & groups discovery.evtx",
+    "TA0007-Discovery/T1069-Permission Groups Discovery/ID4662-Domain group enumeration CME.evtx",
+    "TA0007-Discovery/T1087-Account discovery/ID1-SPN discovery (SYSMON process).evtx",
+    "TA0007-Discovery/T1087-Account discovery/ID4662-4624-Honeypot account property read.evtx",
+    "TA0007-Discovery/T1087-Account discovery/ID4769-Kerberos TGS host enumeration (Bloodhound).evtx",
+    "TA0007-Discovery/T1087-Account discovery/ID600-Active Directory module called by PowerShell.evtx",
+    "TA0007-Discovery/T1087-Account discovery/ID800 - SPN discovery (PowerShell).evtx",
+    "TA0007-Discovery/T1135.xxx-Network Share Discovery/ID5140-Failed ADMIN$ share access.evtx",
+    "TA0007-Discovery/T1201-Password Policy Discovery/ID4661-Password policy enumeration.evtx",
+    "TA0008-Lateral Movement/T1021.001-Remote Desktop Protocol/ID4825-Denied RDP connection with valid credentials.evtx",
+    "TA0008-Lateral Movement/T1021.002-SMB Windows Admin Shares/ID5140-ADMIN$ share connection with Golden ticket.evtx",
+    "TA0008-Lateral Movement/T1021.002-SMB Windows Admin Shares/ID5142- New file share created.evtx",
+    "TA0008-Lateral Movement/T1021.002-SMB Windows Admin Shares/ID5142-5143-Mimispool print share created and modified.evtx",
+    "TA0008-Lateral Movement/T1021.004-Remote Service SSH/ID4-OpenSSH server listening.evtx",
+    "TA0008-Lateral Movement/T1021.006-Windows Remote Management/ID4656-WS Management listener enumeration.evtx",
+    "TA0008-Lateral Movement/WSUS Remote Code Execution (CVE-2025-59287 filtered.evtx",
+    "TA0009-Collection/T1125-Video capture/ID13-RDP shadow session configuration enabled (registry).evtx",
+    "TA0011-Command and Control/T1090-Proxy/ID5600-proxy configuration changed.evtx",
+    "TA0040-Impact/T1486-Data Encrypted for Impact/ID 768,775,793,796,817,840-BitLocker encryption activated.evtx",
+    "TA0040-Impact/T1565-Data manipulation/ID11-DNS hosts files modified.evtx"
+  ],
+  "agent_errors": [],
+  "rows": [
+    {
+      "file": "Antivirus/ID1116-1117-Defender threat detected.evtx",
+      "tactic": null,
+      "seconds": 0.099,
+      "detected": true,
+      "tactic_match": null,
+      "serious": 6,
+      "titles": [
+        "Windows Defender threat detection"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "Antivirus/ID1151-Defender health status.evtx",
+      "tactic": null,
+      "seconds": 0.616,
+      "detected": false,
+      "tactic_match": null,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "EVTX_full_APT_attack_steps/ID11,13,17,18-PSexec as system execution.evtx",
+      "tactic": null,
+      "seconds": 0.039,
+      "detected": true,
+      "tactic_match": null,
+      "serious": 4,
+      "titles": [
+        "Process created with alternate credentials or a stolen token",
+        "PsExec-style named pipe",
+        "Remote execution tool on the command line",
+        "Renamed system tool (file name does not match the original name)"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "EVTX_full_APT_attack_steps/ID4624,4688,5140,5145-Eternal Romance - MS17_010_psexec (GLOBAL).evtx",
+      "tactic": null,
+      "seconds": 0.11,
+      "detected": true,
+      "tactic_match": null,
+      "serious": 8,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation",
+        "File written over an admin share",
+        "PowerShell with an encoded or hidden command"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "EVTX_full_APT_attack_steps/ID4674,5142-Mimikatz print spool privileges requested.evtx",
+      "tactic": null,
+      "seconds": 0.015,
+      "detected": false,
+      "tactic_match": null,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "EVTX_full_APT_attack_steps/ID4674,6416 New external device connected (PrintNightmare).evtx",
+      "tactic": null,
+      "seconds": 0.029,
+      "detected": true,
+      "tactic_match": null,
+      "serious": 3,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "EVTX_full_APT_attack_steps/ID4688,4698,4699,5145,4624-ATexec remote trask creation (GLOBAL).evtx",
+      "tactic": null,
+      "seconds": 0.047,
+      "detected": true,
+      "tactic_match": null,
+      "serious": 5,
+      "titles": [
+        "Event 4688: process_creation",
+        "Event 4698: scheduled_task_created",
+        "File written over an admin share"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "EVTX_full_APT_attack_steps/ID4688,5140,5145-WMIexec execution via SMB (GLOBAL).evtx",
+      "tactic": null,
+      "seconds": 0.255,
+      "detected": true,
+      "tactic_match": null,
+      "serious": 8,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation",
+        "WMI provider host started a shell (remote WMI execution)"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "EVTX_full_APT_attack_steps/ID4720,4698-Fortinet APT group abuse on Windows.evtx",
+      "tactic": null,
+      "seconds": 0.022,
+      "detected": true,
+      "tactic_match": null,
+      "serious": 3,
+      "titles": [
+        "Event 4698: scheduled_task_created",
+        "Event 4720: windows_event_4720"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "EVTX_full_APT_attack_steps/ID4742,4935,4662,4661,5137-DCshadow attack (GLOBAL) failed.evtx",
+      "tactic": null,
+      "seconds": 0.026,
+      "detected": true,
+      "tactic_match": null,
+      "serious": 2,
+      "titles": [
+        "Global catalog SPN added to a computer account (DCShadow)",
+        "Sensitive Active Directory attribute changed"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "EVTX_full_APT_attack_steps/ID47x,4661-4662,5136,4688,4697-SAM the admin (CVE-2021-42287).evtx",
+      "tactic": null,
+      "seconds": 0.108,
+      "detected": true,
+      "tactic_match": null,
+      "serious": 11,
+      "titles": [
+        "Event 4688: process_creation",
+        "Event 4724: windows_event_4724",
+        "Event 4776: windows_event_4776",
+        "File written over an admin share",
+        "Service installed that runs a shell or a file from a share/temp folder"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "EVTX_full_APT_attack_steps/ID5140-5145,4688,4697-Encrypted payload deployed with service over SMB (GLOBAL).evtx",
+      "tactic": null,
+      "seconds": 0.698,
+      "detected": true,
+      "tactic_match": null,
+      "serious": 61,
+      "titles": [
+        "Event 4688: process_creation",
+        "File written over an admin share",
+        "PowerShell with an encoded or hidden command",
+        "Service installed that runs a shell or a file from a share/temp folder"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "EVTX_full_APT_attack_steps/ID5145-4624-DonPAPI full extraction.evtx",
+      "tactic": null,
+      "seconds": 2.461,
+      "detected": true,
+      "tactic_match": null,
+      "serious": 5,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation",
+        "Event 4702: windows_event_4702",
+        "File written over an admin share"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0001-Initial access/T1078-Valid accounts/ID1149-RDP success logins to multiple hosts.evtx",
+      "tactic": "initial-access",
+      "seconds": 0.015,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0001-Initial access/T1078-Valid accounts/ID33205-SQL Server failed login with disabled SA account.evtx",
+      "tactic": "initial-access",
+      "seconds": 0.012,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0001-Initial access/T1078-Valid accounts/ID4625-failed login with denied access due to account restriction.evtx",
+      "tactic": "initial-access",
+      "seconds": 0.024,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 2,
+      "titles": [
+        "Event 4625: windows_logon_failure"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0002-Execution/T1047-Windows Management Instrumentation/ID1-WMI spwaning PowerShell process - WMImplant.evtx",
+      "tactic": "execution",
+      "seconds": 0.017,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "WMI provider host started a shell (remote WMI execution)"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0002-Execution/T1047-Windows Management Instrumentation/ID1-WMIexec process execution.evtx",
+      "tactic": "execution",
+      "seconds": 0.017,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "Sysmon process execution: ran from a user-writable folder"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0002-Execution/T1047-Windows Management Instrumentation/ID3-7-10-Suspicious DLL loaded (CME+Mimikatz).evtx",
+      "tactic": "execution",
+      "seconds": 0.024,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 3,
+      "titles": [
+        "LSASS memory opened by another process",
+        "Sysmon network connection signal"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0002-Execution/T1047-Windows Management Instrumentation/ID4688-5145-WMIexec execution via SMB.evtx",
+      "tactic": "execution",
+      "seconds": 3.793,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 5,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0002-Execution/T1053.005-Scheduled Task/ID4688-4698 Persistent scheduled task with SYSTEM privileges creation.evtx",
+      "tactic": "execution",
+      "seconds": 0.041,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 5,
+      "titles": [
+        "Event 4688: process_creation",
+        "Event 4698: scheduled_task_created",
+        "Scheduled task created from the command line"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0002-Execution/T1053.005-Scheduled Task/ID4688-Interactive shell using AT schedule task.evtx",
+      "tactic": "execution",
+      "seconds": 0.025,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 2,
+      "titles": [
+        "Event 4688: process_creation",
+        "Scheduled task created from the command line"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0002-Execution/T1053.005-Scheduled Task/ID4688-Scheduled task creation.evtx",
+      "tactic": "execution",
+      "seconds": 0.025,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 2,
+      "titles": [
+        "Event 4688: process_creation",
+        "Scheduled task created from the command line"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0002-Execution/T1053.005-Scheduled Task/ID4698-4699-Fast created & deleted task by ATexec (susp. arg.).evtx",
+      "tactic": "execution",
+      "seconds": 0.024,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "Event 4698: scheduled_task_created"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0002-Execution/T1053.005-Scheduled Task/ID4698-4699-Fast created & deleted task by SMBexec (sups. arg.).evtx",
+      "tactic": "execution",
+      "seconds": 0.021,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "Event 4698: scheduled_task_created"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0002-Execution/T1053.005-Scheduled Task/ID5145-Remote schedule task creation (ATexec).evtx",
+      "tactic": "execution",
+      "seconds": 0.02,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "File written over an admin share"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0002-Execution/T1059.001-PowerShell/ID4103-4104-Payload download via PowerShell.evtx",
+      "tactic": "execution",
+      "seconds": 0.029,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 4,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104",
+        "Suspicious PowerShell script block"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0002-Execution/T1059.001-PowerShell/ID4688-Encoded PowerShell MSF payload via process execution.evtx",
+      "tactic": "execution",
+      "seconds": 0.802,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 60,
+      "titles": [
+        "Event 4688: process_creation",
+        "PowerShell with an encoded or hidden command",
+        "Service installed that runs a shell or a file from a share/temp folder"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0002-Execution/T1059.001-PowerShell/ID800-4103-Interactive PipeShell over named pipe (server and client).evtx",
+      "tactic": "execution",
+      "seconds": 0.146,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 17,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0002-Execution/T1059.003-Windows Command Shell/ID4688-SQL Server payload injectection for reverse shell (MSF).evtx",
+      "tactic": "execution",
+      "seconds": 3.281,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 143,
+      "titles": [
+        "Event 4688: process_creation",
+        "Program ran from a user-writable folder",
+        "Script interpreter ran a script from a user-writable folder",
+        "Shell started by a browser, server or update process"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0002-Execution/T1204-User execution/ID4688-Edge payload download via command.evtx",
+      "tactic": "execution",
+      "seconds": 0.047,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 8,
+      "titles": [
+        "Event 4688: process_creation",
+        "LSASS dump or credential theft tool on the command line"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0002-Execution/T1569.002-Service execution/ID5145-remote service creation over SMB.evtx",
+      "tactic": "execution",
+      "seconds": 0.018,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "File written over an admin share"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0002-Execution/T1569.002-Service execution/ID5145-service massive remote creation via named pipe - Tchopper.evtx",
+      "tactic": "execution",
+      "seconds": 0.201,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "File written over an admin share"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0002-Execution/T1569.002-Service execution/ID7000,7009,7045-Payload deployed via service - Tchopper.evtx",
+      "tactic": "execution",
+      "seconds": 14.969,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 245,
+      "titles": [
+        "Event 7045: service_install",
+        "Service installed that runs a shell or a file from a share/temp folder"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0002-Execution/T1569.002-Service execution/ID7009-Service deployment time out (meterpreter).evtx",
+      "tactic": "execution",
+      "seconds": 0.015,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID33205-SQL Server member added to database role.evtx",
+      "tactic": "persistence",
+      "seconds": 0.013,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID33205-SQL Server member added to server role.evtx",
+      "tactic": "persistence",
+      "seconds": 0.012,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID33205-SQL Server user linked to a database.evtx",
+      "tactic": "persistence",
+      "seconds": 0.013,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4688-SPN added to an account.evtx",
+      "tactic": "persistence",
+      "seconds": 0.02,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 2,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4723-5145-password reset with changeNTLM (Mimikatz).evtx",
+      "tactic": "persistence",
+      "seconds": 0.02,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4724-5145-password reset with setNTLM (Mimikatz).evtx",
+      "tactic": "persistence",
+      "seconds": 0.043,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 2,
+      "titles": [
+        "Event 4724: windows_event_4724",
+        "Remote SAM enumeration"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4728-4756-Member added to sensitive domain groups.evtx",
+      "tactic": "persistence",
+      "seconds": 0.03,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 4,
+      "titles": [
+        "Event 4728: windows_event_4728",
+        "Event 4756: windows_event_4756"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4728-Massive account group membership change.evtx",
+      "tactic": "persistence",
+      "seconds": 0.043,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 11,
+      "titles": [
+        "Event 4728: windows_event_4728"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4728-Member adding to a group by the same account.evtx",
+      "tactic": "persistence",
+      "seconds": 0.014,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "Event 4728: windows_event_4728"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4732-4733-Quick added-removed user from local group.evtx",
+      "tactic": "persistence",
+      "seconds": 0.02,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 3,
+      "titles": [
+        "Event 4732: windows_event_4732"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4732-DNSadmin new member added.evtx",
+      "tactic": "persistence",
+      "seconds": 0.014,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "Event 4732: windows_event_4732"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4732-User added to local admin groups.evtx",
+      "tactic": "persistence",
+      "seconds": 0.019,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 3,
+      "titles": [
+        "Event 4732: windows_event_4732"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4738,5136-SPN set on user account.evtx",
+      "tactic": "persistence",
+      "seconds": 0.016,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "Sensitive Active Directory attribute changed"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4738-Account is sensitive and cannot be delegated.evtx",
+      "tactic": "persistence",
+      "seconds": 0.013,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4738-Account with password not required.evtx",
+      "tactic": "persistence",
+      "seconds": 0.011,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4738-Do not require Kerberos preauthentication.evtx",
+      "tactic": "persistence",
+      "seconds": 0.013,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4738-Password cannot be changed.evtx",
+      "tactic": "persistence",
+      "seconds": 0.013,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4738-Password never expires.evtx",
+      "tactic": "persistence",
+      "seconds": 0.013,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4738-Use only Kerberos DES encryption types.evtx",
+      "tactic": "persistence",
+      "seconds": 0.013,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4738-User set with reversible psw encryption.evtx",
+      "tactic": "persistence",
+      "seconds": 0.014,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4742,5136-Enable Trust this computer for delegation (to any service, Kerberos only).evtx",
+      "tactic": "persistence",
+      "seconds": 0.017,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "Sensitive Active Directory attribute changed"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4742,5136-Enable Trust this computer for delegation (to specified service, Kerberos only).evtx",
+      "tactic": "persistence",
+      "seconds": 0.023,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 2,
+      "titles": [
+        "Kerberos delegation configured on an account",
+        "Sensitive Active Directory attribute changed"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4742,5136-Enable Trust this computer for delegation (to specified service, any protocol).evtx",
+      "tactic": "persistence",
+      "seconds": 0.02,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 2,
+      "titles": [
+        "Kerberos delegation configured on an account",
+        "Sensitive Active Directory attribute changed"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4742,5136-SPN set on computer account.evtx",
+      "tactic": "persistence",
+      "seconds": 0.017,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "Sensitive Active Directory attribute changed"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4742-SPN set on computer account (DCshadow).evtx",
+      "tactic": "persistence",
+      "seconds": 0.016,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "Global catalog SPN added to a computer account (DCShadow)"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4756-Exchange admin group change.evtx",
+      "tactic": "persistence",
+      "seconds": 0.095,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 15,
+      "titles": [
+        "Event 4756: windows_event_4756"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4781-4738-User renamed to admin or likely.evtx",
+      "tactic": "persistence",
+      "seconds": 0.013,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID4781-Computer account renamed without a trailing $ (CVE-2021-42278).evtx",
+      "tactic": "persistence",
+      "seconds": 0.013,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID5136-4662 AD object owner changed.evtx",
+      "tactic": "persistence",
+      "seconds": 0.016,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1098.xxx-Account manipulation/ID5136-Computer account set for RBCD delegation.evtx",
+      "tactic": "persistence",
+      "seconds": 0.019,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "Sensitive Active Directory attribute changed"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1136-Create account/ID33205-SQL Server Disabled SA user activated.evtx",
+      "tactic": "persistence",
+      "seconds": 0.016,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1136-Create account/ID33205-SQL Server local user created.evtx",
+      "tactic": "persistence",
+      "seconds": 0.016,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1136-Create account/ID4688-User creation via commandline.evtx",
+      "tactic": "persistence",
+      "seconds": 0.04,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 6,
+      "titles": [
+        "Event 4688: process_creation",
+        "Event 4720: windows_event_4720",
+        "Event 4722: windows_event_4722",
+        "Event 4728: windows_event_4728",
+        "Event 4732: windows_event_4732"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1136-Create account/ID472, 4728 Hidden user creation.evtx",
+      "tactic": "persistence",
+      "seconds": 0.062,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 10,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation",
+        "Event 4720: windows_event_4720",
+        "Event 4722: windows_event_4722",
+        "Event 4724: windows_event_4724",
+        "Event 4728: windows_event_4728",
+        "Event 4732: windows_event_4732"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1136-Create account/ID4720-4726 Fast created-deleted user.evtx",
+      "tactic": "persistence",
+      "seconds": 0.015,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "Event 4720: windows_event_4720"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1136-Create account/ID4720-Admin like user created.evtx",
+      "tactic": "persistence",
+      "seconds": 0.016,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "Event 4720: windows_event_4720"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1136-Create account/ID4720-Fake computer account created.evtx",
+      "tactic": "persistence",
+      "seconds": 0.014,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "Event 4720: windows_event_4720"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1136-Create account/ID4720-Local user created.evtx",
+      "tactic": "persistence",
+      "seconds": 0.019,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 2,
+      "titles": [
+        "Event 4720: windows_event_4720",
+        "Event 4732: windows_event_4732"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1136-Create account/ID4722-Guest account activated.evtx",
+      "tactic": "persistence",
+      "seconds": 0.015,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "Event 4722: windows_event_4722"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1136-Create account/ID4741-Computer account created with privileges.evtx",
+      "tactic": "persistence",
+      "seconds": 0.012,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1136-Create account/ID4742-4743-Fast created & deleted computer account.evtx",
+      "tactic": "persistence",
+      "seconds": 0.016,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1197-BITS jobs/ID3-59-60-BITS job created.evtx",
+      "tactic": "persistence",
+      "seconds": 0.022,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "BITS job fetched a file from a non-vendor host or ran a local program"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1197-BITS jobs/ID4688-BITS transfer initiated.evtx",
+      "tactic": "persistence",
+      "seconds": 0.024,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 3,
+      "titles": [
+        "Event 4688: process_creation",
+        "System binary used to fetch or proxy-execute code"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1197-BITS jobs/ID60-High volume file downloaded with BITS.evtx",
+      "tactic": "persistence",
+      "seconds": 0.017,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "BITS job fetched a file from a non-vendor host or ran a local program"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1197-BITS jobs/ID800-4103-4104-PowerShell BITS job started.evtx",
+      "tactic": "persistence",
+      "seconds": 0.069,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 8,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1505-Server Software Component/ID11-Exchange transport config modified.evtx",
+      "tactic": "persistence",
+      "seconds": 0.019,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1505-Server Software Component/ID6-Failed to install an Exchange transport agent.evtx",
+      "tactic": "persistence",
+      "seconds": 0.026,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1505.001-SQL Stored Procedures/ID11715-SQL Server started in single mode for psw recovery.evtx",
+      "tactic": "persistence",
+      "seconds": 0.019,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1505.001-SQL Stored Procedures/ID15457-SQL Server CMDshell enabled.evtx",
+      "tactic": "persistence",
+      "seconds": 0.017,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "SQL Server xp_cmdshell enabled or used"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1505.001-SQL Stored Procedures/ID15457-SQL server CLR lateral movement.evtx",
+      "tactic": "persistence",
+      "seconds": 0.013,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1505.001-SQL Stored Procedures/ID4688-SQL Server started in single mode for psw recovery.evtx",
+      "tactic": "persistence",
+      "seconds": 0.025,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 4,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1505.001-SQL Stored Procedures/ID4688-sqlcmd tool abuse in SQL Server.evtx",
+      "tactic": "persistence",
+      "seconds": 0.016,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1543.003-Create or Modify System Process-Windows Service/ID13-New service for Mimikatz.evtx",
+      "tactic": "persistence",
+      "seconds": 0.013,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1543.003-Create or Modify System Process-Windows Service/ID4688-4697 RDP hijack via service creation.evtx",
+      "tactic": "persistence",
+      "seconds": 0.021,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 3,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation",
+        "Service created or changed from the command line"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1543.003-Create or Modify System Process-Windows Service/ID4688-Command SC to create service on remote host.evtx",
+      "tactic": "persistence",
+      "seconds": 0.017,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 2,
+      "titles": [
+        "Event 4688: process_creation",
+        "Service created or changed from the command line"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1543.003-Create or Modify System Process-Windows Service/ID4688-Service abuse with Failure Command.evtx",
+      "tactic": "persistence",
+      "seconds": 0.021,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 2,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1543.003-Create or Modify System Process-Windows Service/ID4688-Service abuse with malicious path.evtx",
+      "tactic": "persistence",
+      "seconds": 0.025,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 4,
+      "titles": [
+        "Event 4688: process_creation",
+        "Service created or changed from the command line"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1543.003-Create or Modify System Process-Windows Service/ID4688-Service created (command).evtx",
+      "tactic": "persistence",
+      "seconds": 0.022,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 3,
+      "titles": [
+        "Event 4688: process_creation",
+        "Service created or changed from the command line"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1543.003-Create or Modify System Process-Windows Service/ID4688-Service permissions modified (registry).evtx",
+      "tactic": "persistence",
+      "seconds": 0.021,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 2,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1543.003-Create or Modify System Process-Windows Service/ID4688-Service permissions modified (sc).evtx",
+      "tactic": "persistence",
+      "seconds": 0.018,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1543.003-Create or Modify System Process-Windows Service/ID4697-MSF payload deployed via service.evtx",
+      "tactic": "persistence",
+      "seconds": 0.021,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "Service installed that runs a shell or a file from a share/temp folder"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1543.003-Create or Modify System Process-Windows Service/ID4697-New service for Mimikatz.evtx",
+      "tactic": "persistence",
+      "seconds": 0.021,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "Event 1102: windows_event_1102"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1543.003-Create or Modify System Process-Windows Service/ID7045-4697-SMBexec service registration.evtx",
+      "tactic": "persistence",
+      "seconds": 0.025,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 2,
+      "titles": [
+        "Event 7045: service_install",
+        "Service installed that runs a shell or a file from a share/temp folder"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1543.003-Create or Modify System Process-Windows Service/ID7045-7036 PSexec service installation.evtx",
+      "tactic": "persistence",
+      "seconds": 0.02,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 3,
+      "titles": [
+        "Event 7045: service_install",
+        "Service installed that runs a shell or a file from a share/temp folder",
+        "System event log cleared"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1543.003-Create or Modify System Process-Windows Service/ID7045-New service for Mimikatz +npcap.evtx",
+      "tactic": "persistence",
+      "seconds": 0.028,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 6,
+      "titles": [
+        "Event 7045: service_install"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1543.003-Create or Modify System Process-Windows Service/ID7045-Random service installation.evtx",
+      "tactic": "persistence",
+      "seconds": 0.017,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 2,
+      "titles": [
+        "Event 7045: service_install",
+        "System event log cleared"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1543.003-Create or Modify System Process-Windows Service/ID800-4103-4104-Service abuse with Failure Command.evtx",
+      "tactic": "persistence",
+      "seconds": 0.036,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 6,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1543.003-Create or Modify System Process-Windows Service/ID800-4103-4104-Service abuse with malicious path.evtx",
+      "tactic": "persistence",
+      "seconds": 0.051,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 6,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1543.003-Create or Modify System Process-Windows Service/ID800-4103-4104-Service creation (PowerShell).evtx",
+      "tactic": "persistence",
+      "seconds": 0.044,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 6,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1546-Event Triggered Execution/ID13-WMIimplant registry crash control.evtx",
+      "tactic": "persistence",
+      "seconds": 0.029,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1546-Event Triggered Execution/ID19-20-WMI registration via PowerLurk.evtx",
+      "tactic": "persistence",
+      "seconds": 0.023,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "WMI event subscription created"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1546-Event Triggered Execution/ID4688-netsh helper DLL.evtx",
+      "tactic": "persistence",
+      "seconds": 0.02,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 3,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation",
+        "LSASS dump or credential theft tool on the command line"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1546-Event Triggered Execution/ID5136-AdminSDholder backdoor obfuscation (via localizationDisplayId).evtx",
+      "tactic": "persistence",
+      "seconds": 0.014,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1546-Event Triggered Execution/ID5136-AdminSDholder permissions changed.evtx",
+      "tactic": "persistence",
+      "seconds": 0.013,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "AdminSDHolder permissions changed"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1546-Event Triggered Execution/ID800-4103-4104-WMI registration via PowerLurk.evtx",
+      "tactic": "persistence",
+      "seconds": 0.025,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 4,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1547-Boot or Logon Autostart Execution/ID12-LSA Protect mode enabled RunAsPPL.evtx",
+      "tactic": "persistence",
+      "seconds": 0.013,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1547-Boot or Logon Autostart Execution/ID4622-New SSP loaded in LSA (only legitim).evtx",
+      "tactic": "persistence",
+      "seconds": 0.151,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1547-Boot or Logon Autostart Execution/ID4664-symbolic link created.evtx",
+      "tactic": "persistence",
+      "seconds": 0.014,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1574-Hijack Execution Flow/ID150-Failed DLL loaded by DNS server.evtx",
+      "tactic": "persistence",
+      "seconds": 0.013,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1574-Hijack Execution Flow/ID4688-DNS DLL serverlevelplugindll command.evtx",
+      "tactic": "persistence",
+      "seconds": 0.016,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 2,
+      "titles": [
+        "Event 4688: process_creation",
+        "LSASS dump or credential theft tool on the command line"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1574-Hijack Execution Flow/ID770-Success DLL loaded by DNS server.evtx",
+      "tactic": "persistence",
+      "seconds": 0.013,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0003-Persistence/T1574-Hijack Execution Flow/ID800-4103-4104-Print spooler privilege escalation (CVE-2020-1048).evtx",
+      "tactic": "persistence",
+      "seconds": 0.031,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 5,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0004-Privilege Escalation/T1068-Exploitation for Privilege Escalation/ID12-13 Mini_Plasma_PoC_AbortHydration_ArbitraryRegKey_EoP.evtx",
+      "tactic": "privilege-escalation",
+      "seconds": 3.915,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 42,
+      "titles": [
+        "Process opened another with injection rights",
+        "Program in a user-writable folder read another process's memory",
+        "Program ran from a user-writable folder",
+        "Sysmon network connection signal",
+        "Sysmon process execution: ran from a user-writable folder"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0004-Privilege Escalation/T1068-Exploitation for Privilege Escalation/ID4673-Privilege SeMachineAccountPrivilege called.evtx",
+      "tactic": "privilege-escalation",
+      "seconds": 0.015,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0004-Privilege Escalation/T1134-Access Token Manipulation/ID4648-4624-RunAsCS login.evtx",
+      "tactic": "privilege-escalation",
+      "seconds": 0.03,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 5,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4648: windows_event_4648",
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0004-Privilege Escalation/T1134-Access Token Manipulation/ID4688,4624-RottenPotatoNG.evtx",
+      "tactic": "privilege-escalation",
+      "seconds": 0.027,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 4,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0004-Privilege Escalation/T1134-Access Token Manipulation/ID4688,4648,4624-Runas execution with different user.evtx",
+      "tactic": "privilege-escalation",
+      "seconds": 0.041,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 7,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4648: windows_event_4648",
+        "Event 4688: process_creation",
+        "Process created with alternate credentials or a stolen token"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0004-Privilege Escalation/T1134-Access Token Manipulation/ID4704-4705-User righ assigned to account.evtx",
+      "tactic": "privilege-escalation",
+      "seconds": 0.018,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0004-Privilege Escalation/T1134-Access Token Manipulation/ID4717-4718-System security granded to account.evtx",
+      "tactic": "privilege-escalation",
+      "seconds": 0.014,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0004-Privilege Escalation/T1134.005-Access Token Manipulation SID-History Injection/ID 4765 - SID history added.evtx",
+      "tactic": "privilege-escalation",
+      "seconds": 0.017,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "SID history added to an account"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0004-Privilege Escalation/T1484-Domain or Tenant Policy Modification/ID 4865 4706 - trust added.evtx",
+      "tactic": "privilege-escalation",
+      "seconds": 0.017,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0004-Privilege Escalation/T1484.001-Domain Policy Modification-Group Policy Modification/ID5136-4662 sensitive GPO edited.evtx",
+      "tactic": "privilege-escalation",
+      "seconds": 0.024,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "Group Policy object changed"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0004-Privilege Escalation/T1546-Image File Execution Options Injection/ID1-CMD executed via sticky key call.evtx",
+      "tactic": "privilege-escalation",
+      "seconds": 0.019,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "Shell started by a browser, server or update process"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0004-Privilege Escalation/T1546-Image File Execution Options Injection/ID11-New sethc file created from CMD copy.evtx",
+      "tactic": "privilege-escalation",
+      "seconds": 0.015,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0004-Privilege Escalation/T1546-Image File Execution Options Injection/ID12,13-Stickey key registry update.evtx",
+      "tactic": "privilege-escalation",
+      "seconds": 0.019,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "Debugger or exit monitor set for a program (IFEO hijack)"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0004-Privilege Escalation/T1546-Image File Execution Options Injection/ID4656-Failed sethc replacement by CMD.evtx",
+      "tactic": "privilege-escalation",
+      "seconds": 0.025,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "Event 1102: windows_event_1102"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0004-Privilege Escalation/T1546-Image File Execution Options Injection/ID4688-Stickey command reg update + execution.evtx",
+      "tactic": "privilege-escalation",
+      "seconds": 0.032,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 7,
+      "titles": [
+        "Autorun registry key added from the command line",
+        "Event 4688: process_creation",
+        "Shell started by a browser, server or update process"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0004-Privilege Escalation/T1574-DLL side-loading/1-Print spool spawned a CMD shell (PrintNightMare).evtx",
+      "tactic": "privilege-escalation",
+      "seconds": 0.019,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "Shell started by a browser, server or update process"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0004-Privilege Escalation/T1574-DLL side-loading/ID316,300,301,316,823,848-Mimispool printer server instal.evtx",
+      "tactic": "privilege-escalation",
+      "seconds": 0.019,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0004-Privilege Escalation/T1574-DLL side-loading/ID354-808-Mimispool printer installation (PrintNightmare).evtx",
+      "tactic": "privilege-escalation",
+      "seconds": 0.02,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0004-Privilege Escalation/T1574-DLL side-loading/ID4688,6416,4648-SystemNightMare.evtx",
+      "tactic": "privilege-escalation",
+      "seconds": 0.134,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 12,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4648: windows_event_4648",
+        "Event 4688: process_creation",
+        "Explicit credentials used to reach another host",
+        "Shell started by a browser, server or update process",
+        "System binary used to fetch or proxy-execute code"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1027-Obfuscated Files or Information/4624,4674,4688- CrackMap Exec SMB mimikatz.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.172,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 5,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1027-Obfuscated Files or Information/ID1-CrackMapExec payload execution.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.03,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "WMI provider host started a shell (remote WMI execution)"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1027-Obfuscated Files or Information/ID400-800-CrackMapExec payload execution.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.03,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1027-Obfuscated Files or Information/ID4103-4104-CrackMapExec payload execution.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.178,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 25,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104",
+        "Suspicious PowerShell script block"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1027-Obfuscated Files or Information/ID4688-Obfuscated payload transfer via service name - Tchopper.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 36.161,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 500,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1070.001-Clear Windows event logs/ID104-1102-Event log cleared.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.067,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 2,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "System event log cleared"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1070.001-Clear Windows event logs/ID4688-Clear event log attempt (native).evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.152,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 28,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1070.001-Clear Windows event logs/ID4688-Clear event log attempt (wmi).evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.019,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 2,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1070.001-Clear Windows event logs/ID800-4103-4104-Clear event log attempt.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.028,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 4,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1070.006-Timestomp/ID4616-system time changed.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.018,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1078.002-Valid accounts-Domain accounts/ID4964-Login of a member of a special group.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.018,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1112-Modify registry/ID11,13-SMBexec service registration.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.017,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1112-Modify registry/ID4624,4670,4688,4674-Registry permission change via WMI (DAMP).evtx",
+      "tactic": "defense-evasion",
+      "seconds": 1.873,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 5,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4670: windows_event_4670",
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1112-Modify registry/ID800-4103-4104-Registry permission change via WMI (DAMP) PowerShell on source.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.982,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 67,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1140-Deobfuscate-Decode Files or Information/ID4688-Certutil download.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.025,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 3,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation",
+        "System binary used to fetch or proxy-execute code"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1202- Indirect Command Execution/ID9-WSL module installation (KBC).evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.115,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1207-Rogue domain controller/ID4662-Sensitive attributes accessed (DCshadow).evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.024,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1207-Rogue domain controller/ID5137-Fake domain controller registration (DCshadow).evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.016,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1222.001-File and Directory Permissions Modification/ID5124-OCSP security settings changed.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.02,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1222.001-File and Directory Permissions Modification/ID5136-Permission change on OU by computer.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.017,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1222.001-File and Directory Permissions Modification/ID5136-Permission change on OU by user.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.02,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1222.001-File and Directory Permissions Modification/ID5136-Permission change on top root AD (DCsync).evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.018,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1222.001-File and Directory Permissions Modification/ID5136-Permissions changed on a GPO.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.02,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1222.001-File and Directory Permissions Modification/ID5143-File share permissions changed.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.021,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1553- Subvert Trust Controls/ID12-13 SIP provider registration.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.023,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1555.004-Windows Credential Manager/ID 5376, 5379, 5382, 5381, 5382 credential manager and vault.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.021,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.001-Impair Defenses-Disable or Modify tool/ID1-SYSMON driver unload (FilterManager).evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.02,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.001-Impair Defenses-Disable or Modify tool/ID13-Defender service configuration disabled.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.019,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.001-Impair Defenses-Disable or Modify tool/ID4688-Defender critical features disabled (command).evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.049,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 9,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.001-Impair Defenses-Disable or Modify tool/ID4688-Defender service deactivation attempt.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.032,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 6,
+      "titles": [
+        "Event 4688: process_creation",
+        "Security tooling disabled or excluded"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.001-Impair Defenses-Disable or Modify tool/ID5007-Defender threat exclusion (native).evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.021,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.001-Impair Defenses-Disable or Modify tool/ID8-Module Virtualization disabled (Credential Guard).evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.041,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.001-Impair Defenses-Disable or Modify tool/ID800-4103-4104 Defender critical features disabled (PowerShell).evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.291,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 30,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.001-Impair Defenses-Disable or Modify tool/ID800-4103-4104 Defender default action allow any (PowerShell).evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.035,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 6,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.001-Impair Defenses-Disable or Modify tool/ID800-4103-4104 Defender exclusion added (PowerShell).evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.098,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 12,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID33205-SQL Server  audit object disabled.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.014,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID33205-SQL Server Database audit specification deleted.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.012,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID33205-SQL Server Database audit specification disabled.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.012,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID33205-SQL Server audit object deleted.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.013,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID33205-SQL Server audit specification deleted.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.013,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID33205-SQL Server audit specification disabled.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.012,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID4688-Audit policy clear attempt.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.018,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 2,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID4688-Audit policy deactivation attempt.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.021,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 3,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID4719-Audit policy deactivation.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.157,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 30,
+      "titles": [
+        "Event 4719: windows_event_4719"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID4739-Domain policy changed by non system account.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.017,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID4885,4876,4877,5123,5124-ADCS PKI OCSP.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.031,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID4908-Special group table changed.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.021,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.002-Disable Windows Event Logging/ID541-DNS server auditing changed.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.017,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.004-Impair Defenses-Disable or Modify System Firewall/ID2003-4950-Firewall disabled.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.017,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.004-Impair Defenses-Disable or Modify System Firewall/ID2004-Any any firewall rule created.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.015,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.004-Impair Defenses-Disable or Modify System Firewall/ID2004-New firewall rule created by PowerShell.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.015,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.004-Impair Defenses-Disable or Modify System Firewall/ID4103-4104-2004-OpenSSH firewall rule activation.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 16.616,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 252,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104",
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.004-Impair Defenses-Disable or Modify System Firewall/ID4688-5447-4950-Firewall disabled (command).evtx",
+      "tactic": "defense-evasion",
+      "seconds": 2.591,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 8,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4670: windows_event_4670",
+        "Event 4688: process_creation",
+        "Security tooling disabled or excluded"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1562.004-Impair Defenses-Disable or Modify System Firewall/ID800-4103-Firewall disabled.evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.029,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 6,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0005-Defense Evasion/T1564-Hide artifacts/ID4688-Linux Subsystem installation (WSL).evtx",
+      "tactic": "defense-evasion",
+      "seconds": 0.043,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 9,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1003-Credential dumping/ID1-12-13-Wdigest authentication activation.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.019,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "Security tooling disabled in the registry"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1003-Credential dumping/ID1-LSASS dump with LSASSY (SYSMON).evtx",
+      "tactic": "credential-access",
+      "seconds": 0.035,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 5,
+      "titles": [
+        "LSASS dump or credential theft tool on the command line",
+        "LSASS memory opened by another process",
+        "Sysmon process execution: ran from a user-writable folder",
+        "WMI provider host started a shell (remote WMI execution)"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1003-Credential dumping/ID10-Mimikatz LSASS process dump.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.021,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 2,
+      "titles": [
+        "LSASS dump or credential theft tool on the command line",
+        "LSASS memory opened by another process"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1003-Credential dumping/ID11-LSASS credentials dump via Task Manager.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.018,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "Credential dump file written"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1003-Credential dumping/ID11-Mimikatz LSA SSP clear text password exfiltration.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.015,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "LSASS wrote a log or dump file (malicious security package)"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1003-Credential dumping/ID325-327-IFM created - ESENT.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.017,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "AD database snapshot or copy logged by ESENT (ntdsutil)"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1003-Credential dumping/ID4656, 5145, 4674-Impacket secret dump via SMB.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.064,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 3,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "File written over an admin share",
+        "Remote SAM enumeration"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1003-Credential dumping/ID4656-4663-4658 Mimikatz sekurlsa password dump.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.036,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 3,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation",
+        "LSASS opened with read access (Security audit)"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1003-Credential dumping/ID4661-4658 Mimikatz sekurlsa password dump SAM.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.198,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1003-Credential dumping/ID4661-Suspicious SAM access to password attributes by LSASS (Dcshadow).evtx",
+      "tactic": "credential-access",
+      "seconds": 0.023,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1003-Credential dumping/ID4662-DCsync attack using Mimikatz.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.085,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "Directory replication requested by a non-DC account (DCSync)"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1003-Credential dumping/ID4663-Task Manager used to dump LSASS process.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.021,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1003-Credential dumping/ID4688-4663-4656-LSASS dump with LSASSY (process).evtx",
+      "tactic": "credential-access",
+      "seconds": 0.067,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 5,
+      "titles": [
+        "Event 4688: process_creation",
+        "LSASS dump or credential theft tool on the command line",
+        "LSASS opened with read access (Security audit)"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1003-Credential dumping/ID4688-Diskshadow abuse.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.03,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 4,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1003-Credential dumping/ID4688-IFM created.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.036,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 6,
+      "titles": [
+        "Active Directory database copied (ntdsutil / shadow copy)",
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1003-Credential dumping/ID4688-Task Manager access indicator for potential LSASS dump.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.05,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 9,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1003-Credential dumping/ID4756-Exchange critical group change (DCsync).evtx",
+      "tactic": "credential-access",
+      "seconds": 0.024,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 3,
+      "titles": [
+        "Event 4756: windows_event_4756"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1003-Credential dumping/ID4794-4688-DSRM password set with NTDSutil.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.024,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 2,
+      "titles": [
+        "Directory Services Restore Mode password set",
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1003-Credential dumping/ID800-4103-4104-LSASS dump with LSASSY (PowerShell).evtx",
+      "tactic": "credential-access",
+      "seconds": 0.355,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 45,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1040-Traffic sniffing/ID-4688 Native Windows sniffer Pktmon usage.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.025,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 6,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1110.xxx-Brut force/ID 4776,4625-AccountRestore local bruteforce.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.073,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 16,
+      "titles": [
+        "Event 4625: windows_logon_failure"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1110.xxx-Brut force/ID18456-SQL Server failed login because only Windows auth.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.017,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "Repeated failed SQL Server logins"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1110.xxx-Brut force/ID33205-SQL Server failed login because only Windows auth.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.015,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1110.xxx-Brut force/ID33205-SQL Server failed login with SA wrong password.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.027,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1110.xxx-Brut force/ID33205-SQL Server failed login with non existing accounts.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.064,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1110.xxx-Brut force/ID4-OpenSSH brutforce with non existing users (sshd logs).evtx",
+      "tactic": "credential-access",
+      "seconds": 0.015,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1110.xxx-Brut force/ID4-OpenSSH brutforce with valid users.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.017,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1110.xxx-Brut force/ID4625-OpenSSH brutforce with non existing users.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.084,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 15,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4625: windows_logon_failure",
+        "Event 4648: windows_event_4648",
+        "Event 4688: process_creation",
+        "Event 4776: windows_event_4776",
+        "Repeated failed logons (password guessing)"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1110.xxx-Brut force/ID4625-OpenSSH brutforce with valid users.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.06,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 9,
+      "titles": [
+        "Event 4625: windows_logon_failure",
+        "Event 4648: windows_event_4648",
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1110.xxx-Brut force/ID4768-4771-Kerberos brutforce with non existing users.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.053,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 2,
+      "titles": [
+        "Event 4771: windows_event_4771"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1110.xxx-Brut force/ID4768-4771-Kerberos user enumeration (Kerbrute).evtx",
+      "tactic": "credential-access",
+      "seconds": 0.174,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 23,
+      "titles": [
+        "Event 4771: windows_event_4771",
+        "Failed logons across many accounts (password spraying)"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1110.xxx-Brut force/ID4771-Kerberos brutforce with valid user.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.435,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 55,
+      "titles": [
+        "Event 4771: windows_event_4771",
+        "Repeated failed logons (password guessing)"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1552.004-Unsecured Credentials-Private Keys/ID70-CAPI-Private key accessed Mimikatz.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.012,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1555-Credentials from Password Stores/ID4662-Sensitve DPAPI attributes accessed.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.046,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1555-Credentials from Password Stores/ID5145-user file-credentials-browser dump via network share.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.306,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "File written over an admin share"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1557-Man in the middle/ID5145-Print spooler bug abuse.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.04,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "Remote authentication coercion over RPC (PetitPotam-style)"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1557-Man in the middle/ID515-DNS entry created with wildcard.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.013,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1558-Steal or Forge Kerberos Tickets/ID4624-Success login with Golden ticket.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.059,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1558-Steal or Forge Kerberos Tickets/ID4768-4769-Kerberos host ticket without a trailing $.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.014,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1558-Steal or Forge Kerberos Tickets/ID4768-Kerberos AS-REP Roasting.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.014,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "Kerberos TGT issued without pre-authentication"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1558-Steal or Forge Kerberos Tickets/ID4769-Golden ticket issued.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.02,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1558-Steal or Forge Kerberos Tickets/ID4769-Kerberoast ticket with low encryption.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.021,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "Kerberos service ticket requested with weak RC4 encryption"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1649- Steal or Forge Authentication Certificates/ID 39 KDC - ADCS ESC 1 auth request.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.02,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 1,
+      "titles": [
+        "System event log cleared"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1649- Steal or Forge Authentication Certificates/ID 4882 - ADCS ESC 7.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.015,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1649- Steal or Forge Authentication Certificates/ID 4886-4887 - ADCS ESC 1.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.015,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1649- Steal or Forge Authentication Certificates/ID 4886-4887 - ADCS ESC 2.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.013,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0006-Credential Access/T1649- Steal or Forge Authentication Certificates/ID 4886-4887 - ADCS ESC 3.evtx",
+      "tactic": "credential-access",
+      "seconds": 0.014,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1016-System Network Configuration Discovery/ID4688-Audit policy enumerated.evtx",
+      "tactic": "discovery",
+      "seconds": 0.018,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 2,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1016-System Network Configuration Discovery/ID4688-Firewall configuration enumerated (command).evtx",
+      "tactic": "discovery",
+      "seconds": 0.021,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 3,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1016-System Network Configuration Discovery/ID4688-Scheduled task configuration enumeration.evtx",
+      "tactic": "discovery",
+      "seconds": 0.023,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 2,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1016-System Network Configuration Discovery/ID6004-DNS-server-failed zone transfer.evtx",
+      "tactic": "discovery",
+      "seconds": 0.014,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1016-System Network Configuration Discovery/ID800-4103-4104-Firewall configuration enumerated (PowerShell).evtx",
+      "tactic": "discovery",
+      "seconds": 46.473,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 500,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1018-Remote System Discovery/ID5145-DNS hosts files access via network share.evtx",
+      "tactic": "discovery",
+      "seconds": 0.017,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1046-Network Service Scanning/ID131-RDP brutforce (no user info).evtx",
+      "tactic": "discovery",
+      "seconds": 0.088,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1046-Network Service Scanning/ID4624-Anonymous login with domain specified (DonPapi).evtx",
+      "tactic": "discovery",
+      "seconds": 0.086,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1069-Permission Groups Discovery/ID4661-Local group enumeration with RID brutforce with CME.evtx",
+      "tactic": "discovery",
+      "seconds": 0.057,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1069-Permission Groups Discovery/ID4661-SAM sensitive domain users & groups discovery.evtx",
+      "tactic": "discovery",
+      "seconds": 0.023,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1069-Permission Groups Discovery/ID4662-Domain group enumeration CME.evtx",
+      "tactic": "discovery",
+      "seconds": 0.055,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1069-Permission Groups Discovery/ID4688-Group discovery via commandline.evtx",
+      "tactic": "discovery",
+      "seconds": 0.025,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 4,
+      "titles": [
+        "Domain, account or trust discovery command",
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1069-Permission Groups Discovery/ID4799-4624-Local admin group enumerated by SharpHound.evtx",
+      "tactic": "discovery",
+      "seconds": 0.528,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "Local users or privileged groups enumerated by a command-line tool"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1069-Permission Groups Discovery/ID800-4103-4104-Domain group discovery via PowerShell.evtx",
+      "tactic": "discovery",
+      "seconds": 0.044,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 6,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1069-Permission Groups Discovery/ID800-4103-4104-Local group discovery via PowerShell.evtx.evtx",
+      "tactic": "discovery",
+      "seconds": 0.041,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 6,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1087-Account discovery/ID1-SPN discovery (SYSMON process).evtx",
+      "tactic": "discovery",
+      "seconds": 0.017,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1087-Account discovery/ID4103-4104 - SPN discovery (moder nPowerShell).evtx",
+      "tactic": "discovery",
+      "seconds": 0.113,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 20,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1087-Account discovery/ID4662-4624-Honeypot account property read.evtx",
+      "tactic": "discovery",
+      "seconds": 0.077,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1087-Account discovery/ID4688-List all Service Principal Names (SPN).evtx",
+      "tactic": "discovery",
+      "seconds": 0.023,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 2,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1087-Account discovery/ID4688-User enumeration via command.evtx",
+      "tactic": "discovery",
+      "seconds": 0.063,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 5,
+      "titles": [
+        "Domain, account or trust discovery command",
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1087-Account discovery/ID4769-Kerberos TGS host enumeration (Bloodhound).evtx",
+      "tactic": "discovery",
+      "seconds": 0.027,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1087-Account discovery/ID600-Active Directory module called by PowerShell.evtx",
+      "tactic": "discovery",
+      "seconds": 0.011,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1087-Account discovery/ID800 - SPN discovery (PowerShell).evtx",
+      "tactic": "discovery",
+      "seconds": 0.022,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1135.xxx-Network Share Discovery/ID4688-Network share discovery or connection via commandline.evtx",
+      "tactic": "discovery",
+      "seconds": 0.021,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 3,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1135.xxx-Network Share Discovery/ID5140-5145-Bloodhound-SharpHound enumeration via SMB.evtx",
+      "tactic": "discovery",
+      "seconds": 0.075,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "Remote SAM enumeration"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1135.xxx-Network Share Discovery/ID5140-Failed ADMIN$ share access.evtx",
+      "tactic": "discovery",
+      "seconds": 0.017,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1201-Password Policy Discovery/ID4661-Password policy enumeration.evtx",
+      "tactic": "discovery",
+      "seconds": 0.018,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1201-Password Policy Discovery/ID4688-Password policy discovery via commandline.evtx",
+      "tactic": "discovery",
+      "seconds": 0.024,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 4,
+      "titles": [
+        "Domain, account or trust discovery command",
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0007-Discovery/T1482-Domain Trust Discovery/ID800,4103,4104-Active Directory Forest PowerShell class.evtx",
+      "tactic": "discovery",
+      "seconds": 0.03,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 5,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0008-Lateral Movement/T1021.001-Remote Desktop Protocol/ID4688,4778,4779 RDP hijack direct.evtx",
+      "tactic": "lateral-movement",
+      "seconds": 0.069,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 12,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0008-Lateral Movement/T1021.001-Remote Desktop Protocol/ID4688-4778 RDP hijack command execution.evtx",
+      "tactic": "lateral-movement",
+      "seconds": 0.139,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 21,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0008-Lateral Movement/T1021.001-Remote Desktop Protocol/ID4825-Denied RDP connection with valid credentials.evtx",
+      "tactic": "lateral-movement",
+      "seconds": 0.016,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0008-Lateral Movement/T1021.002-SMB Windows Admin Shares/ID4688,4697,5140-5145 PSexec remote execution + admin share.evtx",
+      "tactic": "lateral-movement",
+      "seconds": 0.12,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 13,
+      "titles": [
+        "Event 4688: process_creation",
+        "File written over an admin share",
+        "Service installed that runs a shell or a file from a share/temp folder"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0008-Lateral Movement/T1021.002-SMB Windows Admin Shares/ID4688-4648 Lateral movement with net use.evtx",
+      "tactic": "lateral-movement",
+      "seconds": 0.02,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 3,
+      "titles": [
+        "Event 4648: windows_event_4648",
+        "Event 4688: process_creation",
+        "Explicit credentials used to reach another host"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0008-Lateral Movement/T1021.002-SMB Windows Admin Shares/ID4688-Network share manipulation via commandline.evtx",
+      "tactic": "lateral-movement",
+      "seconds": 0.043,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 3,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0008-Lateral Movement/T1021.002-SMB Windows Admin Shares/ID5140-ADMIN$ share connection with Golden ticket.evtx",
+      "tactic": "lateral-movement",
+      "seconds": 0.015,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0008-Lateral Movement/T1021.002-SMB Windows Admin Shares/ID5142- New file share created.evtx",
+      "tactic": "lateral-movement",
+      "seconds": 0.017,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0008-Lateral Movement/T1021.002-SMB Windows Admin Shares/ID5142-5143-Mimispool print share created and modified.evtx",
+      "tactic": "lateral-movement",
+      "seconds": 0.012,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0008-Lateral Movement/T1021.002-SMB Windows Admin Shares/ID5145-remote shell execution via SMB admin share.evtx",
+      "tactic": "lateral-movement",
+      "seconds": 0.014,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 1,
+      "titles": [
+        "File written over an admin share"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0008-Lateral Movement/T1021.003-Distributed Component Object Model (DCOM)/ID4103,4104-DCOMexec native via PowerShell.evtx",
+      "tactic": "lateral-movement",
+      "seconds": 0.023,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 5,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0008-Lateral Movement/T1021.003-Distributed Component Object Model (DCOM)/ID4688,4674-DCOMexec process spawned.evtx",
+      "tactic": "lateral-movement",
+      "seconds": 0.041,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 3,
+      "titles": [
+        "Event 4688: process_creation"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0008-Lateral Movement/T1021.004-Remote Service SSH/ID4-OpenSSH server listening.evtx",
+      "tactic": "lateral-movement",
+      "seconds": 0.016,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0008-Lateral Movement/T1021.004-Remote Service SSH/ID4103-4104-OpenSSH server activation and config.evtx",
+      "tactic": "lateral-movement",
+      "seconds": 9.073,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 240,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0008-Lateral Movement/T1021.004-Remote Service SSH/ID4103-4104-OpenSSH server install.evtx",
+      "tactic": "lateral-movement",
+      "seconds": 0.119,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 27,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0008-Lateral Movement/T1021.006-Windows Remote Management/ID4656-WS Management listener enumeration.evtx",
+      "tactic": "lateral-movement",
+      "seconds": 0.022,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0008-Lateral Movement/T1550-Use Alternate Authentication Material/ID4624-Mimikatz Pass the hash.evtx",
+      "tactic": "lateral-movement",
+      "seconds": 0.026,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 4,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation",
+        "Logon with new credentials (pass-the-hash pattern)"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0008-Lateral Movement/WSUS Remote Code Execution (CVE-2025-59287 filtered.evtx",
+      "tactic": "lateral-movement",
+      "seconds": 0.833,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0009-Collection/T1125-Video capture/ID13-RDP shadow session configuration enabled (registry).evtx",
+      "tactic": "collection",
+      "seconds": 0.012,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0011-Command and Control/T1090-Proxy/ID5600-proxy configuration changed.evtx",
+      "tactic": "command-and-control",
+      "seconds": 0.014,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0011-Command and Control/T1572-Protocol tunneling/ID4688-netsh RDP port forwarding abuse.evtx",
+      "tactic": "command-and-control",
+      "seconds": 0.031,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 5,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation",
+        "Port forwarding rule added from the command line"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0040-Impact/T1486-Data Encrypted for Impact/ID 768,775,793,796,817,840-BitLocker encryption activated.evtx",
+      "tactic": "impact",
+      "seconds": 0.026,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0040-Impact/T1490-Inhibit System Recovery/ID4688-Delete VSS backup (WMI).evtx",
+      "tactic": "impact",
+      "seconds": 0.022,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 4,
+      "titles": [
+        "Event 4688: process_creation",
+        "Shadow copies or backups deleted"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0040-Impact/T1490-Inhibit System Recovery/ID4688-Delete Window backup (webadmin).evtx",
+      "tactic": "impact",
+      "seconds": 0.024,
+      "detected": true,
+      "tactic_match": true,
+      "serious": 5,
+      "titles": [
+        "Event 1102: windows_event_1102",
+        "Event 4688: process_creation",
+        "Shadow copies or backups deleted"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0040-Impact/T1490-Inhibit System Recovery/ID800-4103-4104-Delete VSS backup (PowerShell).evtx",
+      "tactic": "impact",
+      "seconds": 0.03,
+      "detected": true,
+      "tactic_match": false,
+      "serious": 5,
+      "titles": [
+        "Event 4103: windows_event_4103",
+        "Event 4104: windows_event_4104"
+      ],
+      "agent_errors": []
+    },
+    {
+      "file": "TA0040-Impact/T1565-Data manipulation/ID11-DNS hosts files modified.evtx",
+      "tactic": "impact",
+      "seconds": 0.015,
+      "detected": false,
+      "tactic_match": false,
+      "serious": 0,
+      "titles": [],
+      "agent_errors": []
+    }
+  ]
+}

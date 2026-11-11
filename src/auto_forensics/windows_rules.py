@@ -32,8 +32,10 @@ I = re.IGNORECASE
 
 
 # ".*" between two parts of a rule makes matching quadratic or worse on long
-# attacker-controlled fields. Every unbounded gap becomes a bounded one.
-GAP = r"[^\n]{0,400}"
+# attacker-controlled fields. Every unbounded gap becomes a bounded one. With
+# fields capped at FIELD_LIMIT the cost stays small; padding beyond the gap is
+# itself reported by the "long-command-line" rule.
+GAP = r"[^\n]{0,2000}"
 
 
 def rx(pattern: str) -> re.Pattern[str]:
@@ -83,6 +85,9 @@ PARENT = "ParentImage|ParentProcessName"
 VM_READ = 0x10
 FIELD_LIMIT = 8 * 1024
 LONG_FIELDS = {"ScriptBlockText", "Payload", "Data"}
+COMMAND_FIELDS = {"CommandLine", "ProcessCommandLine", "ParentCommandLine", "ImagePath", "ServiceFileName"}
+LONG_COMMAND = 2000
+_WHITESPACE_RUN = re.compile(r"[ \t]{2,}")
 LONG_FIELD_LIMIT = 64 * 1024
 _PS_FLAGS = re.compile(r"\s-(e|en|enc|enco|encodedcommand)\s+[a-z0-9+/=]{8,}|-w(indowstyle)?\s+hid(den)?\b|"
                        r"-nop\b[^\n]{0,200}-ep?\s+bypass", re.IGNORECASE)
@@ -333,6 +338,16 @@ RULES: tuple[Rule, ...] = (
          "T1562.010", _ids(400), {"Data": rx(r"engineversion=2\.")}, provider="powershell"),
     Rule("cve-exploit-audit", "Windows logged an attempt to exploit a known vulnerability", "high", "initial-access",
          "T1190", _ids(1), {"CVEID": rx(r"cve-\d{4}-\d+")}, provider="audit-cve"),
+    Rule("cmd-obfuscation", "Obfuscated command line (carets, variable substrings, split quotes)", "high",
+         "defense-evasion", "T1027.010", PROC,
+         {CMD: rx(r"(\w\^){3,}\w|%[a-z_]{2,40}:~-?\d{1,4}(,-?\d{1,4})?%(.{0,40}%[a-z_]{2,40}:~-?\d{1,4}"
+                  r"(,-?\d{1,4})?%){2,}|(\w\"\"){3,}\w|\bset\s+\w{1,20}=[^&]{1,80}&{1,2}\s*set\s+\w{1,20}="
+                  r"[^&]{1,80}&{1,2}\s*call\s+%|cmd(\.exe)?\s+/v:on\b.{0,200}![a-z_]{1,40}:~")}),
+    Rule("long-command-line", "Unusually long command line (padding can hide content from rules)", "medium",
+         "defense-evasion", "T1027", PROC, {CMD: rx(r".")},
+         {IMAGE: rx(r"^[a-z]:\\program files( \(x86\))?\\")},
+         check=lambda m: len(_WHITESPACE_RUN.sub(" ", str(m.get("CommandLine") or m.get("ProcessCommandLine") or "")))
+         > LONG_COMMAND),
     Rule("hidden-file", "File hidden or protected with attrib", "medium", "defense-evasion", "T1564.001", PROC,
          {CMD: rx(r"attrib(\.exe)?\s+.*\+(h|s)\b")}),
     Rule("unsigned-driver", "Driver loaded that is not validly signed", "high", "defense-evasion", "T1014", _ids(6),
@@ -550,7 +565,11 @@ def _field(metadata: dict[str, Any], names: str) -> str | None:
         for key in (name, name.lower()):
             if key in metadata and metadata[key] not in (None, ""):
                 limit = LONG_FIELD_LIMIT if name in LONG_FIELDS else FIELD_LIMIT
-                return str(metadata[key])[:limit]
+                value = str(metadata[key])
+                if name in COMMAND_FIELDS:
+                    # Runs of spaces or tabs are the cheapest padding; collapse them before matching.
+                    value = _WHITESPACE_RUN.sub(" ", value)
+                return value[:limit]
     return None
 
 

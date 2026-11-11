@@ -33,7 +33,7 @@ FINAL_JSON = "final_report.json"
 FINAL_MD = "final_report.md"
 DECISIONS = {"accept", "reject"}
 MAX_NOTE = 2000
-MIN_FINGERPRINT = 12
+MIN_FINGERPRINT = 32
 SIGNING_KEY_ENV = "AUTO_FORENSICS_SIGNING_KEY"
 
 
@@ -46,6 +46,12 @@ def fingerprint(run_dir: Path) -> str:
     that visible.
     """
     return hashlib.sha256((run_dir.resolve() / MANIFEST_FILE).read_bytes()).hexdigest()
+
+
+def signature_fingerprint(run_dir: Path) -> str:
+    """The fingerprint ``sign`` printed, read back from signature.json ('' if unsigned)."""
+    path = run_dir.resolve() / SIGNATURE_FILE
+    return str(read_json(path).get("signature_fingerprint", "")) if path.is_file() else ""
 
 
 def _seal(body: dict[str, Any]) -> str | None:
@@ -202,7 +208,8 @@ def _check_evidence(run_dir: Path) -> dict[str, Any]:
     return custody
 
 
-def sign(run_dir: Path, *, actor: str, fingerprint_seen: str, statement: str = "") -> dict[str, Any]:
+def sign(run_dir: Path, *, actor: str, fingerprint_seen: str, statement: str = "",
+         accept_gaps: bool = False) -> dict[str, Any]:
     run_dir = run_dir.resolve()
     with directory_lock(run_dir):
         if (run_dir / SIGNATURE_FILE).exists():
@@ -215,6 +222,10 @@ def sign(run_dir: Path, *, actor: str, fingerprint_seen: str, statement: str = "
                                  "the draft or its manifest may have been replaced")
         actor = _clean(actor, "actor", 120)
         statement = _clean(statement, "statement", MAX_NOTE, required=False)
+        failed = [a["name"] for a in draft.get("agents", []) if a.get("status") != "ok"]
+        if failed and not accept_gaps:
+            raise AutopilotError(f"Agent(s) did not finish cleanly: {', '.join(failed)}. Part of the evidence was not "
+                                 "analysed; re-run, or sign with --accept-gaps to record that you accept the gap")
         custody = _check_evidence(run_dir)
         if canonical_sha256(custody) != manifest["custody_sha256"]:
             raise AutopilotError("The custody record was changed after the run")
@@ -238,9 +249,11 @@ def sign(run_dir: Path, *, actor: str, fingerprint_seen: str, statement: str = "
             "accepted": sum(1 for d in decided.values() if d["decision"] == "accept"),
             "rejected": sum(1 for d in decided.values() if d["decision"] == "reject"),
             "run_fingerprint": current,
+            "accepted_gaps": failed if accept_gaps else [],
         }
         seal = _seal(signature)
         signature["seal"] = {"method": "hmac-sha256", "value": seal} if seal else None
+        signature["signature_fingerprint"] = canonical_sha256(signature)
         write_json(run_dir / SIGNATURE_FILE, signature)
         return signature
 
@@ -254,11 +267,16 @@ def _check_signature(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any], dic
     if not isinstance(signature, dict):
         raise AutopilotError("signature.json is malformed")
     seal = signature.get("seal")
-    body = {key: value for key, value in signature.items() if key != "seal"}
+    body = {key: value for key, value in signature.items() if key not in {"seal", "signature_fingerprint"}}
+    if seal and not os.environ.get(SIGNING_KEY_ENV):
+        raise AutopilotError("This signature is sealed; set the signing key to export it")
     if os.environ.get(SIGNING_KEY_ENV):
         expected = _seal(body)
         if not isinstance(seal, dict) or not hmac.compare_digest(str(seal.get("value")), str(expected)):
             raise AutopilotError("The signature seal does not verify with the configured signing key")
+    unsigned = {key: value for key, value in signature.items() if key != "signature_fingerprint"}
+    if signature.get("signature_fingerprint") != canonical_sha256(unsigned):
+        raise AutopilotError("signature.json changed after signing")
     if signature.get("run_fingerprint") != fingerprint(run_dir):
         raise AutopilotError("The run manifest changed after signing")
     if signature.get("draft_sha256") != manifest["draft_sha256"]:
@@ -282,14 +300,23 @@ def _check_signature(run_dir: Path) -> tuple[dict[str, Any], dict[str, Any], dic
     return draft, manifest, signature, log_text
 
 
-def export(run_dir: Path, dest: Path) -> dict[str, Any]:
+def export(run_dir: Path, dest: Path, *, signature_seen: str) -> dict[str, Any]:
+    """Write the final report. ``signature_seen`` is the signature fingerprint printed by ``sign``.
+
+    Without a signing key the run folder cannot vouch for itself: anyone who
+    can write to it can rewrite every file consistently. The fingerprint the
+    analyst copied at signing time, kept outside the folder, is what catches that.
+    """
     run_dir = run_dir.resolve()
     with directory_lock(run_dir):
-        return _export_locked(run_dir, dest)
+        return _export_locked(run_dir, dest, signature_seen)
 
 
-def _export_locked(run_dir: Path, dest: Path) -> dict[str, Any]:
+def _export_locked(run_dir: Path, dest: Path, signature_seen: str) -> dict[str, Any]:
     draft, manifest, signature, log_text = _check_signature(run_dir)
+    seen = (signature_seen or "").strip().lower()
+    if len(seen) < MIN_FINGERPRINT or not str(signature.get("signature_fingerprint", "")).startswith(seen):
+        raise AutopilotError("The signature fingerprint does not match the one shown when the draft was signed")
     custody = read_json(run_dir / CUSTODY_FILE)
     dest = dest.resolve()
     if dest.is_relative_to(Path(custody["evidence_dir"]).resolve()):
@@ -310,7 +337,10 @@ def _export_locked(run_dir: Path, dest: Path) -> dict[str, Any]:
         entry["analyst_note"] = choice["note"]
         (accepted if choice["decision"] == "accept" else rejected).append(entry)
     final = dict(draft)
-    final["status"] = f"SIGNED by {signature['actor']} at {signature['signed_at']}"
+    sealed = "sealed with the signing key" if signature.get("seal") else "unsealed (no signing key was set)"
+    final["status"] = f"SIGNED by {signature['actor']} at {signature['signed_at']}, {sealed}"
+    if signature.get("accepted_gaps"):
+        final["status"] += f"; analyst accepted incomplete analysis by: {', '.join(signature['accepted_gaps'])}"
     final["findings"] = accepted
     final["rejected_findings"] = [
         {"finding_id": f["finding_id"], "title": f["title"], "analyst": f["analyst"], "analyst_note": f["analyst_note"]}

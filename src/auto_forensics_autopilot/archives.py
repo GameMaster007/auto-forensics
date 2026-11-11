@@ -27,6 +27,20 @@ MAX_MEMBERS = 10_000
 MAX_MEMBER_BYTES = 512 * 1024 * 1024
 MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 MAX_RATIO = 200
+MAX_RUN_BYTES = 4 * 1024 * 1024 * 1024
+
+
+class ExtractionBudget:
+    """Bytes extracted across every archive in one run."""
+
+    def __init__(self, limit: int = MAX_RUN_BYTES) -> None:
+        self.limit = limit
+        self.used = 0
+
+    def take(self, size: int) -> None:
+        if self.used + size > self.limit:
+            raise SecurityError("Archives in this run expand beyond the run-wide extraction budget")
+        self.used += size
 MAX_DEPTH = 20
 SEPARATOR = "!"
 
@@ -64,7 +78,8 @@ def safe_member_name(name: str) -> str:
     return path.as_posix()
 
 
-def extract_zip(archive_path: Path, archive_rel: str, archive_sha256: str, destination: Path) -> list[Member]:
+def extract_zip(archive_path: Path, archive_rel: str, archive_sha256: str, destination: Path,
+                budget: ExtractionBudget | None = None) -> list[Member]:
     """Check every member first, then extract. Raises SecurityError and writes nothing on refusal."""
     try:
         with zipfile.ZipFile(archive_path) as archive:
@@ -93,6 +108,11 @@ def extract_zip(archive_path: Path, archive_rel: str, archive_sha256: str, desti
                 if total > MAX_TOTAL_BYTES:
                     raise SecurityError("Archive expands beyond the total size limit")
                 plan.append((info, name))
+            packed = sum(info.compress_size for info, _ in plan)
+            if total > 1024 * 1024 and total > MAX_RATIO * max(packed, 1):
+                raise SecurityError("Archive expands suspiciously as a whole (possible zip bomb)")
+            if budget is not None:
+                budget.take(total)
             destination.mkdir(parents=True, exist_ok=False)
             members: list[Member] = []
             for info, name in plan:
