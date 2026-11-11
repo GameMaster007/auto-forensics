@@ -153,11 +153,21 @@ def _start_locked(
     core_path = out / "core" / "case_report.json"
     if core_path.is_file():
         core_report = read_json(core_path)
-    findings, dropped = merge_findings(store.findings(), evidence, inventory_map(inventory_rows))
+    inventory = inventory_map(inventory_rows)
+    locate: dict[str, Path] = {}
     hostile = []
     for result in results:
-        if result.name == "injection_sentinel":
+        if result.name in {"injection_sentinel", "archive"}:
             hostile.extend(result.notes.get("files_flagged", []))
+        if result.name == "archive":
+            members = result.notes.pop("members", [])
+            (out / "archives").mkdir(exist_ok=True)
+            write_json(out / "archives" / "archives.json", members)
+            result.notes["members_extracted"] = len(members)
+            for member in members:
+                inventory[member["cited_as"]] = member["sha256"]
+                locate[member["cited_as"]] = out / "archives" / member["folder"] / member["extracted"]
+    findings, dropped = merge_findings(store.findings(), evidence, inventory, locate)
     draft = build_draft(
         case_id=case_id,
         findings=findings,

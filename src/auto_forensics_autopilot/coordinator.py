@@ -62,8 +62,14 @@ def _evidence_value(finding: Finding, key: str) -> str | None:
     return None
 
 
-def verify_agent_finding(finding: Finding, input_dir: Path, inventory: dict[str, str]) -> str | None:
-    """Return None when the finding's citations hold, else the reason it is dropped."""
+def verify_agent_finding(
+    finding: Finding, input_dir: Path, inventory: dict[str, str], locate: dict[str, Path] | None = None,
+) -> str | None:
+    """Return None when the finding's citations hold, else the reason it is dropped.
+
+    ``locate`` maps a cited name that is not under ``input_dir`` (an archive
+    member) to the extracted copy it was hashed from.
+    """
     if not finding.citations:
         return "no citation"
     expected_line = _evidence_value(finding, "line_sha256")
@@ -76,7 +82,7 @@ def verify_agent_finding(finding: Finding, input_dir: Path, inventory: dict[str,
         if recorded != citation.sha256.lower():
             return "cited file hash does not match the inventory"
         if expected_line is not None and citation.row is not None:
-            path = input_dir / citation.source_file
+            path = (locate or {}).get(citation.source_file) or input_dir / citation.source_file
             line = next((text for number, text in iter_lines(path) if number == citation.row), None)
             if line is None:
                 return "cited row does not exist"
@@ -93,6 +99,7 @@ def merge_findings(
     findings: list[Finding],
     input_dir: Path,
     inventory: dict[str, str],
+    locate: dict[str, Path] | None = None,
 ) -> tuple[list[Finding], list[dict[str, str]]]:
     """Verify non-core findings, drop duplicates, and sort by severity."""
     kept: list[Finding] = []
@@ -101,7 +108,7 @@ def merge_findings(
     ids: set[str] = set()
     for finding in findings:
         if finding.worker != "core_pipeline":
-            reason = verify_agent_finding(finding, input_dir, inventory)
+            reason = verify_agent_finding(finding, input_dir, inventory, locate)
             if reason:
                 dropped.append({"finding_id": finding.finding_id, "worker": finding.worker, "reason": reason})
                 continue
@@ -116,8 +123,15 @@ def merge_findings(
     return kept, dropped
 
 
-def _finding_entry(finding: Finding) -> dict[str, Any]:
+HOSTILE_WARNING = "model read hostile text: a file this finding cites tries to instruct an AI; verify by hand"
+
+
+def _finding_entry(finding: Finding, hostile: frozenset[str] = frozenset()) -> dict[str, Any]:
+    warnings = []
+    if finding.origin == "llm" and any(c.source_file in hostile for c in finding.citations):
+        warnings.append(HOSTILE_WARNING)
     return {
+        "warnings": warnings,
         "finding_id": finding.finding_id,
         "title": finding.title,
         "severity": finding.severity,
@@ -179,7 +193,7 @@ def build_draft(
         "severity_counts": severity_counts,
         "tactics": tactics,
         "attack_chain": attack_chain(findings),
-        "findings": [_finding_entry(f) for f in findings],
+        "findings": [_finding_entry(f, frozenset(hostile_files)) for f in findings],
         "dropped": dropped,
         "hostile_files": sorted(set(hostile_files)),
         "agents": agent_results,
@@ -219,8 +233,9 @@ def render_markdown(draft: dict[str, Any], *, title: str = "Autopilot draft") ->
             f"{c['source_file']}" + (f" row {c['row']}" if c.get("row") else f" @{c.get('offset')}")
             for c in finding["citations"]
         )
+        flag = " **[hostile source: verify by hand]**" if finding.get("warnings") else ""
         lines.append(
-            f"| `{_cell(finding['finding_id'])}` | {_cell(finding['severity'])} | {_cell(finding['title'])} | "
+            f"| `{_cell(finding['finding_id'])}` | {_cell(finding['severity'])} | {_cell(finding['title'])}{flag} | "
             f"{_cell(finding['tactic'])} | {_cell(finding['worker'])} | {_cell(cites)} | "
             f"{_cell(finding.get('decision', 'pending'))} |"
         )

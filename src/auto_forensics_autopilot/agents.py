@@ -394,11 +394,81 @@ class MemoryAgent:
         return data if isinstance(data, list) else []
 
 
+# --------------------------------------------------------------------------
+# Archive agent
+# --------------------------------------------------------------------------
+
+
+class ArchiveAgent:
+    """Extract evidence ZIPs into the run folder and analyse their contents.
+
+    Each archive gets its own core run and line-rule scans. Their findings
+    are re-cited as ``<archive>!<member>`` and submitted under this agent's
+    name; the coordinator verifies them against the extracted copies.
+    """
+
+    name = "archive"
+
+    def run(self, ctx: AgentContext, store: CaseStore, tools: ToolRegistry) -> AgentResult:
+        from auto_forensics.case_store import MemoryCaseStore
+
+        from .archives import SEPARATOR, extract_zip
+        from .triage import profile_evidence
+
+        tools.allow("extract_zip", extract_zip)
+        members_out: list[dict[str, Any]] = []
+        hostile: list[str] = []
+        errors: list[str] = []
+        skipped: list[str] = []
+        submitted: list[Finding] = []
+        for rel in ctx.profile.kinds.get("archive", []):
+            path = ctx.input_dir / rel
+            if not (rel.lower().endswith(".zip") or path.read_bytes()[:4] == b"PK\x03\x04"):
+                skipped.append(rel)
+                continue
+            digest = sha256_file(path).lower()
+            folder = f"{Path(rel).stem[:40]}-{digest[:8]}"
+            extracted = ctx.run_dir / "archives" / folder
+            try:
+                members = tools.call("extract_zip", path, rel, digest, extracted)
+            except Exception as exc:  # noqa: BLE001 - a refused archive is reported, not fatal
+                errors.append(f"{rel}: {exc}")
+                continue
+            for member in members:
+                record = member.to_dict()
+                record["folder"] = folder
+                members_out.append(record)
+            sub_ctx = AgentContext(case_id=ctx.case_id, input_dir=extracted,
+                                   run_dir=ctx.run_dir / "archive-runs" / folder, profile=profile_evidence(extracted),
+                                   llm=ctx.llm, llama_endpoint=ctx.llama_endpoint, llama_model=ctx.llama_model,
+                                   rules_dir=ctx.rules_dir)
+            sub_store = MemoryCaseStore()
+            for agent_cls in (CorePipelineAgent, InjectionSentinelAgent, SecretsSweepAgent):
+                agent = agent_cls()
+                try:
+                    result = agent.run(sub_ctx, sub_store, ToolRegistry(worker=f"archive/{agent.name}", store=sub_store))
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"{rel} {agent.name}: {type(exc).__name__}")
+                    continue
+                if agent.name == "injection_sentinel":
+                    hostile.extend(f"{rel}{SEPARATOR}{item}" for item in result.notes.get("files_flagged", []))
+            for finding in sub_store.findings():
+                for citation in finding.citations:
+                    citation.source_file = f"{rel}{SEPARATOR}{citation.source_file}"
+                finding.finding_id = stable_id("arc", finding.finding_id, rel)
+                submitted.append(finding)
+        store.add_findings(self.name, submitted)
+        status = "error" if errors and not members_out else ("partial" if errors else "ok")
+        return AgentResult(self.name, status=status, detail="; ".join(errors)[:600], finding_count=len(submitted),
+                           notes={"members": members_out, "files_flagged": hostile, "not_zip": skipped})
+
+
 AGENTS: dict[str, Callable[[], Any]] = {
     "core_pipeline": CorePipelineAgent,
     "injection_sentinel": InjectionSentinelAgent,
     "secrets_sweep": SecretsSweepAgent,
     "memory": MemoryAgent,
+    "archive": ArchiveAgent,
 }
 
 

@@ -79,3 +79,9 @@ produce no false alarms.
 | 28 | Benign benchmark built | 70 (35 per 10k) | 87.8% / 89.2% / 60.1% |
 | 29 | Volume rules use sliding time windows per source (guessing 10 in 10 min, spraying 5 accounts in 15 min from one IP); recon needs 3 different commands in 5 min; service-host shell only when it has no arguments | 30 | 87.8% / 89.2% / 60.1% |
 | 30 | LSASS reads by installed security products excluded (by install folder, so a renamed tool elsewhere still fires); autoruns that start an installed or well-known app with no script, LOLBin or temp path are not reported; well-known per-user apps (OneDrive, Teams, Zoom...) connecting out are not reported | 0 | 87.8% / 89.2% / 60.1% |
+
+| Loop | Change | Tests / checks |
+| --- | --- | --- |
+| 31 | Memory agent tested with simulated Volatility output: suspicious command lines flagged and cited by row, one failing image does not stop the others, skipped with a reason when Volatility is missing | 2 new tests |
+| 32 | Model-drafted findings that cite a file the sentinel flags as hostile carry a "model read hostile text" warning in the draft | 1 new test |
+| 33 | Evidence ZIPs are extracted into the run folder (never the evidence folder) with zip-slip, symlink, case-collision, size, count and zip-bomb checks, then analysed by the core pipeline, sentinel and secrets sweep; findings cite `archive.zip!member` and are verified against the extracted copy | 9 new tests |

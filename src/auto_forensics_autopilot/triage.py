@@ -169,8 +169,10 @@ def plan_agents(profile: EvidenceProfile, available: dict[str, tuple[bool, str]]
             "disk images are listed but not mounted; export them with Plaso first (imaging is out of scope)",
         ))
     if profile.count("archive"):
-        plans.append(AgentPlan(
-            "archive", False,
-            "archives are hashed but not unpacked; extract them into the evidence folder to analyse their contents",
-        ))
+        zips = [p for p in profile.kinds.get("archive", []) if p.lower().endswith(".zip")]
+        others = profile.count("archive") - len(zips)
+        reason = f"{profile.count('archive')} archive(s): ZIPs are extracted into the run folder and analysed"
+        if others:
+            reason += f"; {others} non-ZIP archive(s) are hashed only (extract them by hand)"
+        plans.append(AgentPlan("archive", True, reason))
     return plans

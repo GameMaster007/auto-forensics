@@ -344,3 +344,67 @@ def test_attack_chain_is_in_kill_chain_order() -> None:
     assert [step["tactic"] for step in chain] == ["execution", "lateral-movement", "made-up"]
     assert chain[0]["findings"] == 2 and chain[0]["top_severity"] == "critical"
     assert KILL_CHAIN.index("execution") < KILL_CHAIN.index("lateral-movement")
+
+
+def test_memory_agent_flags_command_lines_and_survives_a_bad_image(tmp_path: Path) -> None:
+    from auto_forensics.case_store import MemoryCaseStore
+    from auto_forensics.tools import ToolRegistry
+    from auto_forensics_autopilot.agents import AgentContext, MemoryAgent
+    from auto_forensics_autopilot.triage import EvidenceProfile
+
+    evidence = tmp_path / "evidence"
+    evidence.mkdir()
+    (evidence / "good.raw").write_bytes(b"\0" * 64)
+    (evidence / "bad.raw").write_bytes(b"\1" * 64)
+    profile = EvidenceProfile(root=str(evidence), kinds={"memory_image": ["bad.raw", "good.raw"]})
+    ctx = AgentContext(case_id="mem", input_dir=evidence, run_dir=tmp_path / "run", profile=profile)
+    agent = MemoryAgent()
+
+    def fake_cmdline(image: Path) -> list[dict]:
+        if image.name == "bad.raw":
+            raise RuntimeError("volatility could not identify the profile")
+        return [
+            {"PID": 4, "Process": "System", "Args": ""},
+            {"PID": 812, "Process": "powershell.exe", "Args": "powershell -nop -w hidden -enc SQBFAFgA"},
+            {"PID": 900, "Process": "rundll32.exe",
+             "Args": r"rundll32 C:\Windows\System32\comsvcs.dll MiniDump 624 C:\t\l.dmp full lsass"},
+        ]
+
+    agent._cmdline = fake_cmdline  # type: ignore[method-assign]
+    store = MemoryCaseStore()
+    result = agent.run(ctx, store, ToolRegistry(worker="memory", store=store))
+    titles = {f.title for f in store.findings()}
+    assert result.status == "partial" and "bad.raw" in result.detail
+    assert any("encoded-powershell" in t for t in titles)
+    for finding in store.findings():
+        assert finding.citations[0].source_file == "good.raw" and finding.citations[0].row in {2, 3}
+        assert not any("SQBFAFgA" in item for item in finding.evidence)
+
+
+def test_memory_agent_is_skipped_with_a_reason_when_volatility_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    from auto_forensics_autopilot import agents
+    from auto_forensics_autopilot.triage import EvidenceProfile
+
+    monkeypatch.setattr(agents.shutil, "which", lambda name: None)
+    monkeypatch.setattr(agents.importlib.util, "find_spec", lambda name: None)
+    ok, why = agents.volatility_available()
+    assert not ok and "Volatility" in why
+    profile = EvidenceProfile(root="/x", kinds={"memory_image": ["m.raw"]})
+    plans = {p.name: p for p in plan_agents(profile, agents.agent_availability())}
+    assert not plans["memory"].run and "Volatility" in plans["memory"].reason
+
+
+def test_model_findings_citing_hostile_files_are_flagged() -> None:
+    from auto_forensics_autopilot.coordinator import HOSTILE_WARNING, build_draft, render_markdown
+
+    def f(fid: str, origin: str, source: str) -> Finding:
+        return Finding(finding_id=fid, title=fid, severity="high", confidence=0.7, tactic="execution",
+                       origin=origin, citations=[Citation("a", source, "b" * 64, row=1)])
+
+    draft = build_draft(case_id="c", findings=[f("m1", "llm", "memo.txt"), f("m2", "llm", "other.txt"),
+                                               f("d1", "detector", "memo.txt")],
+                        dropped=[], plan=[], agent_results=[], hostile_files=["memo.txt"], core_report=None,
+                        custody_sha256="0" * 64)
+    warned = {item["finding_id"]: item["warnings"] for item in draft["findings"]}
+    assert warned == {"m1": [HOSTILE_WARNING], "m2": [], "d1": []}
+    assert "[hostile source: verify by hand]" in render_markdown(draft)
