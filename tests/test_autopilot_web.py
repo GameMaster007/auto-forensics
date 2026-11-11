@@ -90,10 +90,12 @@ def test_full_flow_and_fingerprints_shown_once(setup):
     run_id = res.json()["run_id"]
     data = _wait(client, run_id)
     assert data["state"] == "done"
-    fp = data["shown_once"]["run_fingerprint"]
+    fp = data["fingerprints"]["run_fingerprint"]
     assert len(fp) == 64
-    again = client.get(f"/api/runs/{run_id}").json()
-    assert again["shown_once"] is None
+    # Offered again (from memory) until the analyst confirms they saved it.
+    assert client.get(f"/api/runs/{run_id}").json()["fingerprints"] == {"run_fingerprint": fp}
+    assert client.post(f"/api/runs/{run_id}/copied", json={"kind": "run_fingerprint"}).status_code == 200
+    assert client.get(f"/api/runs/{run_id}").json()["fingerprints"] == {}
     findings = data["draft"]["findings"]
     assert findings and all(f["decision"] == "pending" for f in findings)
 
@@ -104,10 +106,16 @@ def test_full_flow_and_fingerprints_shown_once(setup):
     no_note = client.post(f"/api/runs/{run_id}/decide",
                           json={"finding_ids": ids[:1], "decision": "reject", "actor": "Ana"})
     assert no_note.status_code == 400
+    assert client.post(f"/api/runs/{run_id}/decide",
+                       json={"finding_ids": ["nope"], "decision": "accept", "actor": "Ana"}).status_code == 400
     ok = client.post(f"/api/runs/{run_id}/decide", json={"finding_ids": ids, "decision": "accept", "actor": "Ana"})
     assert ok.status_code == 200 and ok.json()["decided"] == ids
     data = client.get(f"/api/runs/{run_id}").json()
     assert all(f["decision"] == "accept" and f["decided_by"] == "Ana" for f in data["draft"]["findings"])
+    # A batch that touches already-decided findings is refused before anything is written.
+    again = client.post(f"/api/runs/{run_id}/decide", json={"finding_ids": ids, "decision": "reject",
+                                                           "actor": "Bo", "note": "x"})
+    assert again.status_code == 400 and "already have a decision" in again.json()["detail"]
 
     wrong = client.post(f"/api/runs/{run_id}/sign", json={"actor": "Ana", "fingerprint": "0" * 64})
     assert wrong.status_code == 400
@@ -116,13 +124,16 @@ def test_full_flow_and_fingerprints_shown_once(setup):
     signed = client.post(f"/api/runs/{run_id}/sign", json={"actor": "Ana", "fingerprint": fp})
     assert signed.status_code == 200, signed.text
     sig = signed.json()["signature_fingerprint"]
+    assert client.get(f"/api/runs/{run_id}").json()["fingerprints"] == {"signature_fingerprint": sig}
 
     assert client.post(f"/api/runs/{run_id}/export", json={"signature": "f" * 64}).status_code == 400
     exported = client.post(f"/api/runs/{run_id}/export", json={"signature": sig})
     assert exported.status_code == 200, exported.text
     folder = Path(exported.json()["folder"])
     assert folder.parent == state.exports and (folder / "final_report.md").is_file()
-    assert client.get(f"/api/runs/{run_id}/final").json()["headline"].startswith(str(len(ids)))
+    after = client.get(f"/api/runs/{run_id}").json()
+    assert after["fingerprints"] == {} and after["final"]["folder"] == str(folder)
+    assert client.get(f"/api/runs/{run_id}/final").status_code in (404, 405)
     listing = client.get("/api/runs").json()["runs"]
     assert listing[0]["run_id"] == run_id and listing[0]["signed"] and listing[0]["exported"]
 
@@ -161,7 +172,8 @@ def test_failed_run_reports_error(setup, tmp_path, monkeypatch):
     monkeypatch.setattr(web, "start", boom)
     run_id = client.post("/api/runs", json={"input_dir": str(ev), "case_id": "c2", "actor": "A"}).json()["run_id"]
     data = _wait(client, run_id)
-    assert data["state"] == "failed" and "disk full" in data["error"]
+    assert data["state"] == "failed" and data["error"].startswith("RuntimeError")
+    assert "disk full" not in data["error"]  # detail goes to the server window, not the page
 
 
 def test_cli_has_serve():
@@ -169,3 +181,41 @@ def test_cli_has_serve():
 
     args = build_parser().parse_args(["serve", "--port", "9000", "--no-browser"])
     assert args.port == 9000 and args.no_browser
+
+
+def test_guard_runs_before_the_body_is_read(setup):
+    state, client, _ = setup
+    url = "/api/runs"
+    no_token = client.post(url, content=b"x" * 10, headers={"X-Session-Token": "", "Content-Type": "text/plain"})
+    assert no_token.status_code == 401
+    assert client.get(url, headers={"X-Session-Token": "\u00e9".encode("latin-1") * 10}).status_code == 401
+    assert client.post(url, content=b"{}", headers={"Content-Type": "text/plain"}).status_code == 415
+    big = client.post(url, content=b"{}", headers={"Content-Type": "application/json", "Content-Length": str(2 << 20)})
+    assert big.status_code == 413
+
+
+def test_quoted_windows_style_path_and_bad_log(setup):
+    state, client, ev = setup
+    res = client.post("/api/runs", json={"input_dir": f'"{ev}"', "case_id": "q1", "actor": "A"})
+    assert res.status_code == 200, res.text
+    run_id = res.json()["run_id"]
+    _wait(client, run_id)
+    (state.runs / run_id / "signoff.jsonl").write_text('{"finding_id": "x"}\n', encoding="utf-8")
+    assert client.get(f"/api/runs/{run_id}").status_code in (200, 404)
+    assert client.get("/api/runs").status_code == 200
+
+
+def test_serve_reports_busy_port(tmp_path, capsys):
+    import socket
+
+    from auto_forensics_autopilot.web import serve
+
+    holder = socket.socket()
+    holder.bind(("127.0.0.1", 0))
+    holder.listen(1)
+    try:
+        assert serve(tmp_path / "ws", port=holder.getsockname()[1], open_browser=False) == 2
+    finally:
+        holder.close()
+    out = capsys.readouterr()
+    assert "already in use" in out.err and "token=" not in out.out

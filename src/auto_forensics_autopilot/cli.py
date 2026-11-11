@@ -85,8 +85,7 @@ def main(argv: list[str] | None = None) -> int:
         except ImportError:
             print("The review page needs the server extra: pip install -e \".[server]\"", file=sys.stderr)
             return 2
-        serve(args.workspace, port=args.port, open_browser=not args.no_browser)
-        return 0
+        return serve(args.workspace, port=args.port, open_browser=not args.no_browser)
     try:
         if args.command == "start":
             draft = start(input_dir=args.input_dir, output_dir=args.output_dir, case_id=args.case_id,

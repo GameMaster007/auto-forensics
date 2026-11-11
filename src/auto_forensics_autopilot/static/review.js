@@ -58,6 +58,18 @@
     return data;
   }
 
+  // Disable a form's buttons while its request is in flight (no double submits).
+  async function busy(scope, fn) {
+    const buttons = scope.querySelectorAll("button");
+    if (scope.dataset.busy) return;
+    scope.dataset.busy = "1";
+    buttons.forEach((b) => { b.disabled = true; });
+    try { await fn(); } finally {
+      delete scope.dataset.busy;
+      buttons.forEach((b) => { b.disabled = false; });
+    }
+  }
+
   function show(view) {
     for (const name of ["home", "running", "case"]) $("view-" + name).hidden = name !== view;
     $("tape").hidden = view === "home" || view === "none";
@@ -75,6 +87,7 @@
 
   // ---------- Home ----------
   async function loadHome() {
+    clearTimeout(pollTimer);
     current = null;
     store("session", "af-run", "");
     show("home");
@@ -114,7 +127,7 @@
     const form = ev.target;
     const actor = whoIs();
     if (!actor) { $("start-error").textContent = "Add your name at the top of the page first."; $("who").focus(); return; }
-    try {
+    await busy(form, async () => { try {
       const res = await api("POST", "/api/runs", {
         input_dir: $("f-input").value.trim(),
         case_id: $("f-case").value.trim(),
@@ -124,7 +137,7 @@
       openRun(res.run_id);
     } catch (e) {
       $("start-error").textContent = e.message;
-    }
+    } });
   });
 
   $("home-link").addEventListener("click", (ev) => { ev.preventDefault(); loadHome(); });
@@ -156,24 +169,42 @@
     }
     const firstOpen = !current || current.run_id !== runId;
     current = data;
-    if (firstOpen) { picked.clear(); filter = data.status.pending.length ? "pending" : "all"; }
-    if (data.shown_once) showOnce("run", data.shown_once.run_fingerprint);
-    else if (firstOpen) $("once").hidden = true;
+    if (firstOpen) {
+      picked.clear();
+      filter = data.status.pending.length ? "pending" : "all";
+      // Nothing typed or ticked for one case may carry over to another.
+      for (const id of ["d-note", "s-fp", "s-statement", "e-sig"]) $(id).value = "";
+      for (const id of ["d-override", "s-gaps"]) $(id).checked = false;
+      for (const id of ["decide-error", "sign-error", "export-error"]) $(id).textContent = "";
+    }
+    const held = data.fingerprints || {};
+    if (held.signature_fingerprint) showOnce("signature_fingerprint", held.signature_fingerprint);
+    else if (held.run_fingerprint) showOnce("run_fingerprint", held.run_fingerprint);
+    else $("once").hidden = true;
     renderCase();
     show("case");
   }
 
   function showOnce(kind, value) {
     $("once").hidden = false;
+    $("once").dataset.kind = kind;
     $("once-value").textContent = value;
-    if (kind === "run") {
-      $("once-title").textContent = "Copy the run fingerprint now";
-      $("once-text").textContent = "You will paste it back to sign. It is shown once and not kept anywhere this page can read it from later, so a replaced draft cannot vouch for itself. Keep it outside the case folder.";
+    if (kind === "run_fingerprint") {
+      $("once-title").textContent = "Copy the run fingerprint";
+      $("once-text").textContent = "You paste it back to sign. Keep it with your case notes, outside the case folder: it proves the draft you sign is the one this run wrote. It stays here until you confirm you saved it, and the server window printed it too.";
     } else {
-      $("once-title").textContent = "Copy the signature fingerprint now";
-      $("once-text").textContent = "You will paste it back to export the final report. It is shown once. Keep it with your case notes, outside the case folder.";
+      $("once-title").textContent = "Copy the signature fingerprint";
+      $("once-text").textContent = "You paste it back to export the final report. Keep it with your case notes, outside the case folder. It stays here until you export or confirm you saved it.";
     }
   }
+
+  $("once-done").addEventListener("click", async () => {
+    const kind = $("once").dataset.kind;
+    try {
+      await api("POST", "/api/runs/" + encodeURIComponent(current.run_id) + "/copied", { kind });
+      $("once").hidden = true;
+    } catch (e) { /* the box stays; nothing lost */ }
+  });
 
   $("once-copy").addEventListener("click", async () => {
     const text = $("once-value").textContent;
@@ -205,7 +236,9 @@
     else if (status.signed) state = "Signed by " + status.signed_by;
     $("tape-state").textContent = state;
 
-    $("headline").textContent = draft.headline;
+    $("headline").textContent = status.signed
+      ? status.accepted + " finding(s) confirmed by the analyst, " + status.rejected + " rejected."
+      : draft.headline;
     const counts = $("counts");
     counts.replaceChildren();
     for (const [label, n] of [["Findings", status.total], ["Accepted", status.accepted], ["Rejected", status.rejected], ["To decide", status.pending.length]]) {
@@ -244,6 +277,8 @@
   function renderFindings() {
     const all = current.draft.findings;
     const shown = all.filter((f) => filter === "all" || f.decision === filter);
+    const visible = new Set(shown.map((f) => f.finding_id));
+    for (const id of Array.from(picked)) if (!visible.has(id)) picked.delete(id);
     for (const btn of document.querySelectorAll(".filter")) btn.setAttribute("aria-pressed", String(btn.dataset.filter === filter));
     const body = $("findings").tBodies[0];
     body.replaceChildren();
@@ -321,20 +356,25 @@
     const note = $("d-note").value.trim();
     if (!actor) { $("decide-error").textContent = "Add your name at the top of the page first."; return; }
     if (decision === "reject" && !note) { $("decide-error").textContent = "Write a reason to reject."; $("d-note").focus(); return; }
-    try {
-      await api("POST", "/api/runs/" + encodeURIComponent(current.run_id) + "/decide", {
-        finding_ids: Array.from(picked), decision, actor, note, override: $("d-override").checked,
-      });
-      picked.clear();
-      $("d-note").value = "";
-      $("d-override").checked = false;
-    } catch (e) {
-      $("decide-error").textContent = e.message;
-    }
-    await openRun(current.run_id);
+    let failed = "";
+    await busy($("decide-bar"), async () => {
+      try {
+        await api("POST", "/api/runs/" + encodeURIComponent(current.run_id) + "/decide", {
+          finding_ids: Array.from(picked), decision, actor, note, override: $("d-override").checked,
+        });
+        picked.clear();
+        $("d-note").value = "";
+        $("d-override").checked = false;
+      } catch (e) {
+        failed = e.message;
+      }
+      await openRun(current.run_id);
+    });
+    $("decide-error").textContent = failed;
   }
   $("d-accept").addEventListener("click", () => decide("accept"));
   $("d-reject").addEventListener("click", () => decide("reject"));
+  $("decide-bar").addEventListener("submit", (ev) => ev.preventDefault());
 
   function renderSteps() {
     const { status, draft } = current;
@@ -374,29 +414,31 @@
     $("sign-error").textContent = "";
     const actor = whoIs();
     if (!actor) { $("sign-error").textContent = "Add your name at the top of the page first."; return; }
-    try {
-      const res = await api("POST", "/api/runs/" + encodeURIComponent(current.run_id) + "/sign", {
-        actor, fingerprint: $("s-fp").value.trim(), statement: $("s-statement").value.trim(), accept_gaps: $("s-gaps").checked,
-      });
-      $("s-fp").value = "";
-      await openRun(current.run_id);
-      showOnce("signature", res.signature_fingerprint);
-    } catch (e) {
-      $("sign-error").textContent = e.message;
-    }
+    await busy(ev.target, async () => {
+      try {
+        await api("POST", "/api/runs/" + encodeURIComponent(current.run_id) + "/sign", {
+          actor, fingerprint: $("s-fp").value.trim(), statement: $("s-statement").value.trim(), accept_gaps: $("s-gaps").checked,
+        });
+        $("s-fp").value = "";
+        await openRun(current.run_id);
+      } catch (e) {
+        $("sign-error").textContent = e.message;
+      }
+    });
   });
 
   $("export-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     $("export-error").textContent = "";
-    try {
-      await api("POST", "/api/runs/" + encodeURIComponent(current.run_id) + "/export", { signature: $("e-sig").value.trim() });
-      $("e-sig").value = "";
-      $("once").hidden = true;
-      await openRun(current.run_id);
-    } catch (e) {
-      $("export-error").textContent = e.message;
-    }
+    await busy(ev.target, async () => {
+      try {
+        await api("POST", "/api/runs/" + encodeURIComponent(current.run_id) + "/export", { signature: $("e-sig").value.trim() });
+        $("e-sig").value = "";
+        await openRun(current.run_id);
+      } catch (e) {
+        $("export-error").textContent = e.message;
+      }
+    });
   });
 
   // ---------- Start ----------
