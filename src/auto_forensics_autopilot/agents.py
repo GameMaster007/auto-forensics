@@ -78,19 +78,45 @@ def stable_id(prefix: str, *parts: object) -> str:
     return f"{prefix}-{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:12]}"
 
 
-def iter_lines(path: Path, limit: int = MAX_SCAN_BYTES) -> Iterator[tuple[int, str]]:
-    """Yield (1-based row, line) for at most ``limit`` bytes of a file.
+def _text_encoding(head: bytes) -> str | None:
+    """UTF-16/32 from a byte-order mark, or UTF-16 from the NUL pattern of ASCII text."""
+    for bom, name in ((b"\xff\xfe\x00\x00", "utf-32-le"), (b"\x00\x00\xfe\xff", "utf-32-be"),
+                      (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be")):
+        if head.startswith(bom):
+            return name
+    sample = head[:4096]
+    if len(sample) >= 64:
+        odd_nul = sample[1::2].count(0) / max(1, len(sample) // 2)
+        even_nul = sample[0::2].count(0) / max(1, len(sample) // 2)
+        if odd_nul > 0.4 and even_nul < 0.05:
+            return "utf-16-le"
+        if even_nul > 0.4 and odd_nul < 0.05:
+            return "utf-16-be"
+    return None
 
-    Bytes that are not UTF-8 are read as Latin-1, so a binary's embedded
-    strings are still scanned. Very long lines are cut, not skipped.
+
+def iter_lines(path: Path, limit: int = MAX_SCAN_BYTES) -> Iterator[tuple[int, str]]:
+    """Yield (1-based physical line, text) for at most ``limit`` bytes of a file.
+
+    Lines split on LF only (a trailing CR is dropped), so row numbers match
+    what an editor and the core's CSV/JSONL readers show. UTF-16/32 text is
+    decoded as such; other bytes are read as UTF-8, falling back to Latin-1 so
+    a binary's embedded strings are still scanned. Long lines are cut.
     """
     with path.open("rb") as handle:
         data = handle.read(limit)
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError:
-        text = data.decode("latin-1")
-    for number, line in enumerate(text.splitlines(), start=1):
+    encoding = _text_encoding(data)
+    if encoding:
+        text = data.decode(encoding, errors="replace").lstrip("\ufeff")
+        for number, line in enumerate(text.split("\n"), start=1):
+            yield number, line.rstrip("\r")[:MAX_LINE_CHARS]
+        return
+    for number, raw in enumerate(data.split(b"\n"), start=1):
+        raw = raw.rstrip(b"\r")
+        try:
+            line = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            line = raw.decode("latin-1")
         yield number, line[:MAX_LINE_CHARS]
 
 
@@ -169,9 +195,20 @@ _INVISIBLE = dict.fromkeys(map(ord, "\u00ad\u200b\u200c\u200d\u2060\ufeff"), Non
 _BIDI = set("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
 
 
+# Cyrillic and Greek letters that look like Latin ones, used to dodge keyword filters.
+_CONFUSABLES = str.maketrans({
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x", "і": "i", "ј": "j", "ѕ": "s",
+    "һ": "h", "ԁ": "d", "ԛ": "q", "ԝ": "w", "ӏ": "l", "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M",
+    "Н": "H", "О": "O", "Р": "P", "С": "C", "Т": "T", "Х": "X", "І": "I", "Ј": "J", "Ѕ": "S",
+    "α": "a", "ο": "o", "ρ": "p", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "τ": "t", "υ": "u",
+    "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H", "Ι": "I", "Κ": "K", "Μ": "M", "Ν": "N", "Ο": "O",
+    "Ρ": "P", "Τ": "T", "Υ": "Y", "Χ": "X",
+})
+
+
 def normalise_for_rules(line: str) -> str:
-    """Fold full-width and compatibility letters and drop invisible characters."""
-    return unicodedata.normalize("NFKC", line).translate(_INVISIBLE)
+    """Fold full-width, compatibility and look-alike letters; drop invisible characters."""
+    return unicodedata.normalize("NFKC", line).translate(_INVISIBLE).translate(_CONFUSABLES)
 
 
 def hidden_text_signal(line: str) -> bool:
@@ -235,6 +272,7 @@ class LineRuleAgent:
         findings: list[Finding] = []
         flagged: list[str] = []
         files = self.files(ctx)
+        truncated = [rel for rel in files if (ctx.input_dir / rel).stat().st_size > MAX_SCAN_BYTES]
         for rel in files:
             found, _ = tools.call("scan_file", rel)
             if found:
@@ -242,7 +280,8 @@ class LineRuleAgent:
             findings.extend(found)
         store.add_findings(self.name, findings)
         return AgentResult(self.name, finding_count=len(findings),
-                           notes={"files_scanned": len(files), "files_flagged": flagged})
+                           notes={"files_scanned": len(files), "files_flagged": flagged,
+                                  "files_truncated": truncated})
 
 
 def _rx(text: str) -> re.Pattern[str]:
@@ -262,9 +301,11 @@ class InjectionSentinelAgent(LineRuleAgent):
     confidence = 0.8
     _rec = "Treat this file as hostile input. Review it in a plain viewer, not through a model."
     # Words that show a line is addressed to a model rather than a person.
-    _to_machine = _rx(r"\b(ai|a\.i\.|assistant|model|llm|chatbot|gpt|claude|llama|copilot|analy[sz](er|is tool)|"
-                      r"triage tool|language model)\b|^\W*(system|assistant)\s*:|"
-                      r"\b(benign|clean|safe|no (threats?|findings?|malware))\b")
+    _addressed = (r"\b(ai|a\.i\.|assistant|model|llm|chatbot|gpt|claude|llama|copilot|analy[sz](er|is tool)|"
+                  r"triage tool|language model|you)\b|^\W*(system|assistant)\s*:")
+    _to_machine = _rx(_addressed + r"|\b(benign|clean|safe|no (threats?|findings?|malware))\b")
+    # The verdict rule already names the verdict, so it needs the address itself.
+    _to_machine_only = _rx(_addressed)
     rules = (
         LineRule("ignore-instructions",
                  _rx(r"\b(ignore|disregard|forget)\b.{0,40}\b(previous|prior|above|all|earlier)\b.{0,40}"
@@ -272,13 +313,13 @@ class InjectionSentinelAgent(LineRuleAgent):
                  "Evidence contains a prompt-injection phrase", "high", "defense-evasion", "T1036", _rec,
                  requires=_to_machine),
         LineRule("role-override",
-                 _rx(r"\b(you are now|act as|pretend to be|new instructions?:|system prompt|assistant:)\b"),
+                 _rx(r"\b(you are now|act as|pretend to be|system prompt)\b|\b(new instructions?|assistant)\s*:"),
                  "Evidence contains text that tries to redefine an AI's role", "medium", "defense-evasion", "T1036", _rec),
         LineRule("verdict-steer",
                  _rx(r"\b(report|mark|classify|label|conclude)\b.{0,40}\b(as )?(benign|clean|safe|"
                      r"no (threats?|findings?|malware))\b"),
                  "Evidence contains text that tries to steer the verdict to clean", "high", "defense-evasion",
-                 "T1562", _rec),
+                 "T1562", _rec, requires=_to_machine_only),
         LineRule("hide-findings",
                  _rx(r"\b(do not|don't|never)\b.{0,30}\b(report|mention|flag|include)\b"),
                  "Evidence contains text asking an analyst tool to hide results", "medium", "defense-evasion",
@@ -309,7 +350,8 @@ class SecretsSweepAgent(LineRuleAgent):
                  _rx(r"(?<![a-z])(password|passwd|pass)\s*[:=]\s*['\"]?(?=[^\s'\"]{0,128}[\d!@#$%^&*_+\-])"
                      r"(?![/\\])[^\s'\",;]{6,128}"),
                  "Plaintext password found in evidence", "medium", "credential-access", "T1552.001", _rec),
-        LineRule("bearer-token", re.compile(r"\b(ghp|gho|github_pat|xox[bp]|sk-[a-zA-Z0-9]{2})_?[A-Za-z0-9_\-]{16,}"),
+        LineRule("bearer-token", re.compile(r"\b(gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,255}|"
+                                            r"xox[bpas]-[0-9A-Za-z\-]{10,255}|sk-(proj-)?[A-Za-z0-9]{20,255})\b"),
                  "API token found in evidence", "high", "credential-access", "T1552.001", _rec),
         LineRule("slack-webhook", re.compile(r"https://hooks\.slack\.com/services/T[A-Z0-9]{6,}/B[A-Z0-9]{6,}/[A-Za-z0-9]{20,}"),
                  "Chat webhook URL found in evidence", "medium", "credential-access", "T1552.001", _rec),

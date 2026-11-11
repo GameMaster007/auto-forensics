@@ -337,6 +337,10 @@ def _canonical_evtx_time(raw: str) -> str | None:
 
 
 _STRING_TAG = re.compile(r"<string>(.*?)</string>", re.DOTALL)
+_ONLY_STRING_TAGS = re.compile(r"^\s*(<string>[^<]{0,32768}</string>\s*)+$")
+# Keys the parser sets itself. An event's own payload may not overwrite them.
+_RESERVED_KEYS = {"event_id", "provider", "channel", "computer", "row", "offset", "source_file", "source_sha256",
+                  "attack_tactic", "attack_technique_id", "attack_sub_technique", "importer"}
 _ZERO_FILETIME = {"1601-01-01T00:00:00.0000000Z", "0001-01-01 00:00:00", "1601-01-01 00:00:00"}
 
 
@@ -352,7 +356,9 @@ def _canonical_value(value: str) -> str:
         return value.lower()
     if value in _ZERO_FILETIME:
         return ""
-    if "<string>" in value:
+    if _ONLY_STRING_TAGS.match(value):
+        # Only a value made entirely of python-evtx <string> wrappers is unwrapped.
+        # Text that merely contains "<string>" (an attacker can append it) is kept.
         return " | ".join(part.strip() for part in _STRING_TAG.findall(value) if part.strip())
     return value
 
@@ -447,7 +453,8 @@ def parse_evtx_xml_record(xml_text: str, source: str) -> ArtifactEvent | None:
         "attack_technique_id": mapped.get("attack_technique_id", ""),
         "attack_sub_technique": mapped.get("attack_sub_technique", ""),
     }
-    metadata.update(payload)
+    for key, value in payload.items():
+        metadata[f"data_{key}" if key in _RESERVED_KEYS else key] = value
 
     return ArtifactEvent(
         artifact_id=_gen_artifact_id("evtx", source, event_id, timestamp, description),

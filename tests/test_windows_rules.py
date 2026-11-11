@@ -90,7 +90,6 @@ HITS = [
     ("ps-downgrade", ev(400, "PowerShell", Data="Available | None | HostVersion=2.0\n\tEngineVersion=2.0")),
     ("cve-exploit-audit", ev(1, "Microsoft-Windows-Audit-CVE", CVEID="[CVE-2020-0601] cert validation")),
     ("ad-delegation-set", ev(4742, "Microsoft-Windows-Security-Auditing", AllowedToDelegateTo="cifs/dc01.corp.local")),
-    ("ad-spn-on-user", ev(4738, "Microsoft-Windows-Security-Auditing", ServicePrincipalNames="http/fake.corp.local")),
     ("ad-dcshadow-spn", ev(4742, "Microsoft-Windows-Security-Auditing", ServicePrincipalNames="GC/ws01.corp.local/corp.local")),
     ("ad-sensitive-attribute", ev(5136, "Microsoft-Windows-Security-Auditing", AttributeLDAPDisplayName="msDS-KeyCredentialLink")),
     ("ad-adminsdholder", ev(5136, "Microsoft-Windows-Security-Auditing", ObjectDN="CN=AdminSDHolder,CN=System,DC=corp,DC=local")),
@@ -286,3 +285,14 @@ def test_recon_needs_a_burst_and_service_shell_needs_no_arguments() -> None:
     bare = ev(1, ParentImage=r"C:\Windows\System32\svchost.exe", Image=r"C:\Windows\System32\cmd.exe",
               CommandLine=r"C:\Windows\system32\cmd.exe")
     assert not rule_matches(rule, task) and rule_matches(rule, bare)
+
+
+def test_registry_values_match_with_or_without_hex_padding() -> None:
+    for details in ("DWORD (0x00000001)", "0x1"):
+        assert rule_matches(RULE["office-macro-guard-off"], ev(13, TargetObject=r"HKU\S\Software\Microsoft\Office"
+                                                                r"\16.0\Excel\Security\AccessVBOM", Details=details))
+    for details in ("DWORD (0x00000000)", "0x0"):
+        assert rule_matches(RULE["ps-logging-disabled"], ev(13, TargetObject=r"HKLM\SOFTWARE\Policies\Microsoft"
+                                                             r"\Windows\PowerShell\ScriptBlockLogging"
+                                                             r"\EnableScriptBlockLogging", Details=details))
+    assert rule_matches(RULE["masquerade-renamed"], ev(1, Image=r"C:\Users\a\svc.exe", OriginalFileName="psexec.c"))

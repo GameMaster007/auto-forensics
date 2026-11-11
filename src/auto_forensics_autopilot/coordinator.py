@@ -82,14 +82,26 @@ def verify_agent_finding(
             return "cited file is not in the evidence inventory"
         if recorded != citation.sha256.lower():
             return "cited file hash does not match the inventory"
-        if expected_line is not None and citation.row is not None:
-            path = (locate or {}).get(citation.source_file) or input_dir / citation.source_file
-            line = next((text for number, text in iter_lines(path) if number == citation.row), None)
-            if line is None:
-                return "cited row does not exist"
-            if line_digest(line) != expected_line:
-                return "cited row does not match the agent's record"
+        if expected_line is None:
+            continue
+        if citation.row is None:
+            return "line digest recorded without a row"
+        path = (locate or {}).get(citation.source_file) or input_dir / citation.source_file
+        line = next((text for number, text in iter_lines(path) if number == citation.row), None)
+        if line is None:
+            return "cited row does not exist"
+        if line_digest(line) != expected_line:
+            return "cited row does not match the agent's record"
     return None
+
+
+def check_label(finding: Finding) -> str:
+    """What the coordinator could actually confirm for a non-core finding."""
+    if _evidence_value(finding, "line_sha256") is not None:
+        return "row re-read"
+    if finding.worker == "archive" and finding.verification:
+        return f"verified in archive run ({finding.verification})"
+    return "file hash only"
 
 
 def _citation_identity(finding: Finding) -> tuple[Any, ...]:
@@ -113,6 +125,7 @@ def merge_findings(
             if reason:
                 dropped.append({"finding_id": finding.finding_id, "worker": finding.worker, "reason": reason})
                 continue
+            finding.verification = check_label(finding)
         key = (finding.title, _citation_identity(finding))
         if key in seen or finding.finding_id in ids:
             dropped.append({"finding_id": finding.finding_id, "worker": finding.worker, "reason": "duplicate"})
@@ -141,7 +154,7 @@ def _finding_entry(finding: Finding, hostile: frozenset[str] = frozenset()) -> d
         "technique_id": finding.technique_id,
         "worker": finding.worker,
         "origin": finding.origin,
-        "verification": finding.verification or ("row-hash" if finding.worker != "core_pipeline" else ""),
+        "verification": finding.verification or "",
         "recommendation": finding.recommendation,
         "citations": [asdict(c) for c in finding.citations],
     }
@@ -202,6 +215,7 @@ def build_draft(
     hostile_files: list[str],
     core_report: dict[str, Any] | None,
     custody_sha256: str,
+    coverage_gaps: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     severity_counts: dict[str, int] = {}
     for finding in findings:
@@ -226,6 +240,7 @@ def build_draft(
         "agents": agent_results,
         "plan": plan,
         "timeline_highlights": _timeline_highlights(core_report),
+        "coverage_gaps": coverage_gaps or [],
         "custody_sha256": custody_sha256,
     }
 
@@ -266,8 +281,8 @@ def render_markdown(draft: dict[str, Any], *, title: str = "Autopilot draft") ->
             lines.append(f"| {_cell(step['tactic'])} | {step['findings']} | {_cell(step['top_severity'])} | "
                          f"{_cell(', '.join(step['techniques']))} | {_cell('; '.join(step['titles']))} |")
         lines.append("")
-    lines += ["## Findings", "", "| ID | Severity | Title | Tactic | Agent | Cited at | Decision |",
-              "| --- | --- | --- | --- | --- | --- | --- |"]
+    lines += ["## Findings", "", "| ID | Severity | Title | Tactic | Agent | Cited at | Checked | Decision |",
+              "| --- | --- | --- | --- | --- | --- | --- | --- |"]
     for finding in draft["findings"]:
         cites = "; ".join(
             f"{c['source_file']}" + (f" row {c['row']}" if c.get("row") else f" @{c.get('offset')}")
@@ -277,7 +292,7 @@ def render_markdown(draft: dict[str, Any], *, title: str = "Autopilot draft") ->
         lines.append(
             f"| {_code(finding['finding_id'])} | {_cell(finding['severity'])} | {_cell(finding['title'])}{flag} | "
             f"{_cell(finding['tactic'])} | {_cell(finding['worker'])} | {_cell(cites)} | "
-            f"{_cell(finding.get('decision', 'pending'))} |"
+            f"{_cell(finding.get('verification') or '-')} | {_cell(finding.get('decision', 'pending'))} |"
         )
     if draft.get("timeline_highlights"):
         lines += ["", "## Timeline highlights", "", "| Time | Event | Risk |", "| --- | --- | --- |"]
@@ -290,6 +305,9 @@ def render_markdown(draft: dict[str, Any], *, title: str = "Autopilot draft") ->
         lines.append(f"| {_cell(plan['name'])} | {'yes' if plan['run'] else 'no'} | "
                      f"{_cell(result.get('status', '-'))} | {_cell(result.get('finding_count', '-'))} | "
                      f"{_cell(result.get('detail') or plan['reason'])} |")
+    if draft.get("coverage_gaps"):
+        lines += ["", "## Coverage gaps", "", "Parts of the evidence this run did not fully analyse:", ""]
+        lines += [f"- {_code(gap['what'])}: {_cell(gap['why'])}" for gap in draft["coverage_gaps"]]
     if draft.get("dropped"):
         lines += ["", f"{len(draft['dropped'])} draft finding(s) were dropped by the coordinator "
                       "(failed citation check or duplicate). See `autopilot_draft.json`."]

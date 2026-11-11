@@ -80,8 +80,6 @@ IMAGE = "Image|NewProcessName"
 CMD = "CommandLine|ProcessCommandLine"
 PARENT = "ParentImage|ParentProcessName"
 
-# Access masks are written with or without leading zeros (0x1fffff, 0x001fffff).
-LSASS_ACCESS = r"^0x0*(1010|1410|1438|143a|147a|1fffff|1f0fff|1f1fff|1f2fff|1f3fff|40|1400|410|10)$"
 VM_READ = 0x10
 FIELD_LIMIT = 8 * 1024
 LONG_FIELDS = {"ScriptBlockText", "Payload", "Data"}
@@ -209,7 +207,7 @@ RULES: tuple[Rule, ...] = (
     Rule("bits-job", "BITS job fetched a file from a non-vendor host or ran a local program", "medium",
          "persistence", "T1197", _ids(59, 60),
          {"url|RemoteName": rx(r"^(https?://|[a-z]:\\|\\\\)")},
-         {"url|RemoteName": rx(r"^https?://([^/:]+\.)?(microsoft\.com|windowsupdate\.com|update\.microsoft\.com|"
+         {"url|RemoteName": rx(r"^https?://([^/:?#@\\]+\.)?(microsoft\.com|windowsupdate\.com|update\.microsoft\.com|"
                                r"msn\.com|msn-com\.akamaized\.net|live\.com|onenote\.net|sfx\.ms|office\.com|"
                                r"office\.net|msedge\.net|bing\.com|gvt1\.com|google\.com|gstatic\.com|"
                                r"mozilla\.net|adobe\.com|dell\.com|hp\.com|lenovo\.com)(:\d+)?/")},
@@ -283,14 +281,14 @@ RULES: tuple[Rule, ...] = (
                               r"modulelogging\\enablemodulelogging|transcription\\enabletranscripting)$|"
                               r"__pslockdownpolicy$")},
          provider=SYSMON, check=lambda m: "pslockdownpolicy" in str(m.get("TargetObject", "")).lower()
-         or str(m.get("Details", "")).lower().rstrip(")").endswith("0x00000000")),
+         or bool(re.search(r"0x0+\)?$", str(m.get("Details", "")).lower()))),
     Rule("ps-execution-policy", "PowerShell execution policy set to allow any script", "medium", "defense-evasion",
          "T1059.001", _ids(12, 13, 14), {"TargetObject": rx(r"\\shellids\\microsoft\.powershell\\executionpolicy$"),
                                 "Details": rx(r"^(unrestricted|bypass)$")}, provider=SYSMON),
     Rule("office-macro-guard-off", "Office macro or VBA project protection switched off", "medium", "defense-evasion",
          "T1562.001", _ids(12, 13, 14),
          {"TargetObject": rx(r"\\office\\[\d.]+\\\w+\\security\\(accessvbom|vbawarnings)$"),
-          "Details": rx(r"0x0+1\)?$")}, provider=SYSMON),
+          "Details": rx(r"0x0*1\)?$")}, provider=SYSMON),
     Rule("event-channel-disabled", "Event log channel disabled", "medium", "defense-evasion", "T1562.002", _ids(12, 13, 14),
          {"TargetObject": rx(r"\\winevt\\channels\\[^\\]+\\enabled$"), "Details": rx(r"0x0+\)?$")},
          provider=SYSMON),
@@ -323,7 +321,7 @@ RULES: tuple[Rule, ...] = (
     Rule("masquerade-renamed", "Renamed system tool (file name does not match the original name)", "high",
          "defense-evasion", "T1036.003", _ids(1),
          {"OriginalFileName": rx(r"^(cmd|powershell|psexec|psexesvc|procdump|rundll32|regsvr32|mshta|"
-                                 r"certutil|wmic|net1?|whoami|nltest)\.exe(\.mui)?$")},
+                                 r"certutil|wmic|net1?|whoami|nltest)\.exe(\.mui)?$|^psexec\.c$")},
          provider=SYSMON, check=lambda m: _renamed(m)),
     Rule("compile-after-delivery", "Code compiled on the host into a program in a user folder", "medium",
          "defense-evasion", "T1027.004", PROC,
@@ -412,9 +410,6 @@ RULES: tuple[Rule, ...] = (
     # ---------------- Active Directory changes (Security log on a DC) ----------------
     Rule("ad-delegation-set", "Kerberos delegation configured on an account", "high", "privilege-escalation",
          "T1098", _ids(4738, 4742), {"AllowedToDelegateTo": rx(r"^(?!-$).+")}, provider="security-auditing"),
-    Rule("ad-spn-on-user", "Service principal name added to a user account (targeted kerberoasting)", "medium",
-         "credential-access", "T1558.003", _ids(4738), {"ServicePrincipalNames": rx(r"^(?!-$).+")},
-         provider="security-auditing"),
     Rule("ad-dcshadow-spn", "Global catalog SPN added to a computer account (DCShadow)", "high", "defense-evasion",
          "T1207", _ids(4742), {"ServicePrincipalNames": rx(r"\bGC/|E3514235-4B06-11D1-AB04-00C04FC2DCD2")},
          provider="security-auditing"),

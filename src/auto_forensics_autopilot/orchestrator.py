@@ -29,7 +29,7 @@ from auto_forensics.tools import ToolRegistry
 from auto_forensics.version import __version__ as CORE_VERSION
 
 from . import AUTOPILOT_VERSION
-from .agents import AGENTS, AgentContext, AgentResult, agent_availability
+from .agents import AGENTS, MAX_SCAN_BYTES, AgentContext, AgentResult, agent_availability
 from .coordinator import build_draft, canonical_sha256, merge_findings, render_markdown
 from .triage import plan_agents, profile_evidence
 
@@ -114,8 +114,12 @@ def start(
     if llm not in {"off", "mock", "ollama"}:
         raise AutopilotError("llm must be off, mock, or ollama")
     evidence, out = _check_paths(input_dir, output_dir)
-    out.mkdir(parents=True, exist_ok=True)
     with directory_lock(out):
+        # Checked again under the lock: another start may have used this folder
+        # between the first check and taking the lock.
+        if out.exists() and any(out.iterdir()):
+            raise AutopilotError("The output directory is not empty; use a new directory for each run")
+        out.mkdir(parents=True, exist_ok=True)
         return _start_locked(evidence, out, case_id, actor, llm, llama_endpoint, llama_model, rules_dir, only_agents)
 
 
@@ -185,7 +189,18 @@ def _start_locked(
                 inventory[member["cited_as"]] = member["sha256"]
                 locate[member["cited_as"]] = out / "archives" / member["folder"] / member["extracted"]
     findings, dropped = merge_findings(store.findings(), evidence, inventory, locate)
+    gaps: list[dict[str, str]] = []
+    for result in results:
+        for rel in result.notes.get("files_truncated", []):
+            gaps.append({"what": rel, "why": f"{result.name} scanned only the first {MAX_SCAN_BYTES // (1024 * 1024)} MB"})
+        if result.status != "ok":
+            gaps.append({"what": f"agent {result.name}", "why": f"agent status {result.status}"})
+        for rel in result.notes.get("not_zip", []):
+            gaps.append({"what": rel, "why": "archive is not a ZIP and was not opened"})
+    for rel in profile.kinds.get("disk_image", []):
+        gaps.append({"what": rel, "why": "disk image is not mounted; export it with Plaso first"})
     draft = build_draft(
+        coverage_gaps=gaps,
         case_id=case_id,
         findings=findings,
         dropped=dropped,

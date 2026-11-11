@@ -1,0 +1,605 @@
+{
+ "files": 37,
+ "detection_rate": 0.8919,
+ "tactic_match_rate": 0.5,
+ "median_serious": 2,
+ "by_tactic": {
+  "persistence": "1/2 det, 1 tac",
+  "unlabelled": "32/35 det, 0 tac"
+ },
+ "top_rules": [
+  [
+   "Event 1102: windows_event_1102",
+   14
+  ],
+  [
+   "Event 4688: process_creation",
+   6
+  ],
+  [
+   "Event 4104: windows_event_4104",
+   4
+  ],
+  [
+   "Suspicious PowerShell script block",
+   3
+  ],
+  [
+   "System event log cleared",
+   3
+  ],
+  [
+   "Service command writes to a named pipe (getsystem)",
+   3
+  ],
+  [
+   "PowerShell with an encoded or hidden command",
+   3
+  ],
+  [
+   "Service installed that runs a shell or a file from a share/temp folder",
+   3
+  ],
+  [
+   "Event 7045: service_install",
+   3
+  ],
+  [
+   "System binary used to fetch or proxy-execute code",
+   3
+  ],
+  [
+   "Obfuscated PowerShell (split strings, backticks, char codes)",
+   2
+  ],
+  [
+   "Event 4625: windows_logon_failure",
+   2
+  ],
+  [
+   "Event 4732: windows_event_4732",
+   2
+  ],
+  [
+   "Explicit credentials used to reach another host",
+   2
+  ],
+  [
+   "Event 4720: windows_event_4720",
+   2
+  ]
+ ],
+ "rows": [
+  {
+   "file": "DeepBlueCLI/Powershell-Invoke-Obfuscation-encoding-menu.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 66,
+   "serious": 68,
+   "ids": [
+    "4104"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/Powershell-Invoke-Obfuscation-many.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 302,
+   "serious": 304,
+   "ids": [
+    "4104"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/Powershell-Invoke-Obfuscation-string-menu.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 5,
+   "ids": [
+    "4104"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/disablestop-eventlog.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 13,
+   "serious": 1,
+   "ids": [
+    "1",
+    "10005",
+    "104",
+    "7001",
+    "7040"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/eventlog-dac.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 19,
+   "serious": 1,
+   "ids": [
+    "1102",
+    "4673",
+    "4674",
+    "4798"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/many-events-application.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 2216,
+   "serious": 49,
+   "ids": [
+    "0",
+    "1",
+    "10",
+    "100",
+    "1000",
+    "10000",
+    "10001",
+    "10002",
+    "10005",
+    "1001",
+    "10010",
+    "1002"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/many-events-security.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 13223,
+   "serious": 43,
+   "ids": [
+    "1100",
+    "1107",
+    "4608",
+    "4616",
+    "4624",
+    "4634",
+    "4647",
+    "4648",
+    "4672",
+    "4688",
+    "4719",
+    "4720"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/many-events-system.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 8414,
+   "serious": 63,
+   "ids": [
+    "0",
+    "1",
+    "10",
+    "10010",
+    "1014",
+    "1056",
+    "1073",
+    "1074",
+    "109",
+    "12",
+    "13",
+    "14204"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/metasploit-psexec-native-target-security.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 5,
+   "ids": [
+    "1102",
+    "4688"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/metasploit-psexec-native-target-system.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 7,
+   "serious": 4,
+   "ids": [
+    "104",
+    "7009",
+    "7036",
+    "7045"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/metasploit-psexec-powershell-target-security.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 8,
+   "serious": 10,
+   "ids": [
+    "1102",
+    "4688"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/metasploit-psexec-powershell-target-system.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 5,
+   "serious": 4,
+   "ids": [
+    "104",
+    "7009",
+    "7045"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/metasploit-psexec-pwshpayload.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 5,
+   "serious": 1,
+   "ids": [
+    "1102",
+    "4624",
+    "4634",
+    "4672",
+    "4798"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/mimikatz-privesc-hashdump.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 13,
+   "serious": 1,
+   "ids": [
+    "1102",
+    "4673",
+    "4798"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/mimikatz-privilegedebug-tokenelevate-hashdump.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 6,
+   "serious": 1,
+   "ids": [
+    "1102",
+    "4624",
+    "4672",
+    "4798"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/new-user-security.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 4,
+   "ids": [
+    "4720",
+    "4728",
+    "4732"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/password-spray.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 295,
+   "serious": 296,
+   "ids": [
+    "1102",
+    "4648"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/powersploit-security.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 27,
+   "serious": 28,
+   "ids": [
+    "1102",
+    "4688"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/powersploit-system.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 6,
+   "ids": [
+    "1102",
+    "4688"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/psattack-security.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 24,
+   "serious": 24,
+   "ids": [
+    "1102",
+    "4688"
+   ]
+  },
+  {
+   "file": "DeepBlueCLI/smb-password-guessing-security.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 3561,
+   "serious": 501,
+   "ids": [
+    "4625"
+   ]
+  },
+  {
+   "file": "YamatoSecurity/CredentialAccess/T1558.003_StealOrForgeKerberosTicketsKerberoasting_Security.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 6,
+   "serious": 3,
+   "ids": [
+    "1102",
+    "4624",
+    "4634",
+    "4768",
+    "4769",
+    "4776"
+   ]
+  },
+  {
+   "file": "YamatoSecurity/CredentialAccess/T1558.004_StealOrForgeKerberosTicketsAS-REP-Roasting_Security.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 43,
+   "serious": 2,
+   "ids": [
+    "1102",
+    "4624",
+    "4634",
+    "4672",
+    "4768",
+    "4769"
+   ]
+  },
+  {
+   "file": "YamatoSecurity/DefenseEvasion/T1027.004_ObfuscatedFilesOrInformationCompileAfterDelivery_Sysmon.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 9,
+   "serious": 1,
+   "ids": [
+    "1",
+    "11",
+    "13",
+    "23"
+   ]
+  },
+  {
+   "file": "YamatoSecurity/DefenseEvasion/T1218.004_SignedBinaryProxyExecutionInstallUtil_Sysmon.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 7,
+   "serious": 1,
+   "ids": [
+    "1",
+    "11",
+    "12",
+    "23",
+    "7"
+   ]
+  },
+  {
+   "file": "YamatoSecurity/ImpairDefenses/T1562.010_DowngradeAttack_PowerShell.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 26,
+   "serious": 1,
+   "ids": [
+    "400",
+    "403",
+    "600",
+    "800"
+   ]
+  },
+  {
+   "file": "YamatoSecurity/IntialAccess/ValidAccounts/ID21-25 RDP Logon Logoff Reconnect.evtx",
+   "tactic": "unlabelled",
+   "detected": false,
+   "tactic_match": false,
+   "events": 76,
+   "serious": 0,
+   "ids": [
+    "21",
+    "22",
+    "23",
+    "24",
+    "25",
+    "32",
+    "34",
+    "40",
+    "41",
+    "42",
+    "54"
+   ]
+  },
+  {
+   "file": "YamatoSecurity/IntialAccess/ValidAccounts/ID302 RDS Gateway Logon Logoff.evtx",
+   "tactic": "unlabelled",
+   "detected": false,
+   "tactic_match": false,
+   "events": 16,
+   "serious": 0,
+   "ids": [
+    "200",
+    "300",
+    "302",
+    "303",
+    "312"
+   ]
+  },
+  {
+   "file": "YamatoSecurity/LateralMovement/T1210_Zerologon_Sysmon.evtx",
+   "tactic": "unlabelled",
+   "detected": false,
+   "tactic_match": false,
+   "events": 22,
+   "serious": 0,
+   "ids": [
+    "1",
+    "16",
+    "4",
+    "5"
+   ]
+  },
+  {
+   "file": "YamatoSecurity/LateralMovement/T1210_Zerologon_WindowsDefaultLogging.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 35,
+   "serious": 1,
+   "ids": [
+    "1102",
+    "4624",
+    "4634",
+    "4672",
+    "4742",
+    "4769"
+   ]
+  },
+  {
+   "file": "YamatoSecurity/LateralMovement/T1210_Zerologon_WindowsExtraLogging.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 14,
+   "serious": 1,
+   "ids": [
+    "1102",
+    "4624",
+    "4627",
+    "4634",
+    "4672",
+    "4742"
+   ]
+  },
+  {
+   "file": "YamatoSecurity/LateralMovement/T1563.002_RDP-Hijacking_Security.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 2,
+   "ids": [
+    "4688",
+    "4697",
+    "4778"
+   ]
+  },
+  {
+   "file": "YamatoSecurity/Persistence/SharpEventPersistHiddenShellcode.evtx",
+   "tactic": "persistence",
+   "detected": false,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 0,
+   "ids": [
+    "1337"
+   ]
+  },
+  {
+   "file": "YamatoSecurity/Persistence/T1197_BitsClient.evtx",
+   "tactic": "persistence",
+   "detected": true,
+   "tactic_match": true,
+   "events": 7,
+   "serious": 1,
+   "ids": [
+    "3",
+    "306",
+    "308",
+    "310",
+    "4",
+    "59",
+    "60"
+   ]
+  },
+  {
+   "file": "YamatoSecurity/Sysmon/Sysmon-27-BlockExeWrite_AbusingCertutil.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 7,
+   "serious": 3,
+   "ids": [
+    "1",
+    "10",
+    "11",
+    "27"
+   ]
+  },
+  {
+   "file": "YamatoSecurity/Sysmon/Sysmon-27-BlockExeWrite_AbusingSvchost.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 5,
+   "serious": 2,
+   "ids": [
+    "1",
+    "10",
+    "11",
+    "2",
+    "27"
+   ]
+  },
+  {
+   "file": "YamatoSecurity/Vulnerabilities/App_1_CVE-Detected.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "1"
+   ]
+  }
+ ]
+}
