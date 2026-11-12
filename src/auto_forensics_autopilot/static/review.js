@@ -74,11 +74,20 @@
     return d.toISOString().slice(0, 19).replace("T", " ") + " UTC";
   }
   // Tool-written titles carry machine times; show them the way the rest of the page does.
+  // Only for text the tool wrote (titles, advice), never for values taken from evidence.
+  // Input is cut first and every pattern is bounded, so hostile text cannot stall the page.
   function nice(s) {
-    return String(s || "")
-      .replace(/(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}):\d{2}(?:\.\d+)?Z/g, "$1 $2 UTC")
-      .replace(/(\d+) time\(s\)/g, (m, n) => (n === "1" ? "once" : n + " times"))
-      .replace(/\s*Details: \S*disk_summary\.json, key \S+/g, "");
+    let t = String(s || "").slice(0, 2000);
+    const at = t.lastIndexOf(" Details: ");
+    if (at >= 0 && t.indexOf("disk_summary.json", at) > 0) t = t.slice(0, at);
+    return t
+      .replace(/(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}):\d{2}(?:\.\d{1,9})?Z/g, "$1 $2 UTC")
+      .replace(/\b(\d{1,9}) time\(s\)/g, (m, n) => (n === "1" ? "once" : n + " times"));
+  }
+  // Values from the evidence: shown as they are, except a whole ISO time, which gets the page's time format.
+  function cell(v) {
+    const t = String(v === null || v === undefined ? "" : v);
+    return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/.test(t) ? fmtTime(t) : t;
   }
   function runStarted(run) {
     if (run.started_at) return fmtTime(run.started_at);
@@ -838,11 +847,11 @@
     const tables = (got && got.tables) || [];
     $("d-details-head").hidden = !(facts.length || tables.length);
     const out = [];
-    if (facts.length) out.push(el("dl", "facts", facts.flatMap(([k, v]) => [el("dt", "", k), el("dd", "", nice(v))])));
+    if (facts.length) out.push(el("dl", "facts", facts.flatMap(([k, v]) => [el("dt", "", k), el("dd", "", cell(v))])));
     for (const t of tables) {
       const table = el("table", "dtable");
       table.append(el("thead", "", [el("tr", "", t.columns.map((c) => { const th = el("th", "", c); th.scope = "col"; return th; }))]));
-      table.append(el("tbody", "", t.rows.map((r) => el("tr", "", r.map((c) => el("td", "", nice(c)))))));
+      table.append(el("tbody", "", t.rows.map((r) => el("tr", "", r.map((c) => el("td", "", cell(c)))))));
       out.push(el("h4", "", t.title), el("div", "dscroll", [table]));
       if (t.more) out.push(el("p", "hint", "And " + t.more + " more, listed in the run folder."));
     }
@@ -897,6 +906,7 @@
     });
   }
 
+  let lastDecisionAt = 0;
   async function decideOpen(decision) {
     const f = current.draft.findings.find((x) => x.finding_id === ui.open);
     if (!f || current.status.signed) return;
@@ -916,6 +926,7 @@
       try {
         await sendDecision([f.finding_id], decision, note, f.decision !== "pending");
         toast(decision === "accept" ? "Accepted." : "Rejected.");
+        lastDecisionAt = Date.now();
         $("d-reason").value = "";
         await openRun(current.run_id, true);
         const still = visibleFindings().some((x) => x.finding_id === f.finding_id);
@@ -1154,6 +1165,8 @@
   document.addEventListener("keydown", (ev) => {
     if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
     if (document.querySelector("dialog[open]")) return;
+    // A held-down key must never decide finding after finding without the analyst looking at each one.
+    if (ev.repeat) return;
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((ev.target && ev.target.tagName) || "");
     if (ev.key === "Escape" && ui.open && !$("view-case").hidden) { closeDetail(); return; }
     if (typing || $("view-case").hidden || ui.tab !== "findings") return;
@@ -1162,7 +1175,12 @@
     else if (key === "k" || ev.key === "ArrowUp") { ev.preventDefault(); step(-1); }
     else if (key === "/") { ev.preventDefault(); $("q").focus(); }
     else if (!ui.open || current.status.signed) return;
-    else if (key === "a") { ev.preventDefault(); decideOpen("accept"); }
+    else if (key === "a") {
+      ev.preventDefault();
+      // The next finding opens after a decision; give the analyst a moment to see it before another A counts.
+      if (Date.now() - lastDecisionAt < 700) return;
+      decideOpen("accept");
+    }
     else if (key === "r") { ev.preventDefault(); $("d-reason").focus(); }
     else if (key === "x") {
       ev.preventDefault();
