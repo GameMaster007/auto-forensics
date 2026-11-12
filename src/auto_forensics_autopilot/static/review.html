@@ -9,62 +9,96 @@
 <script src="/static/review.js" defer></script>
 </head>
 <body>
+<a class="skip" href="#main">Skip to the case</a>
 <header class="masthead">
   <a class="brand" href="#" id="home-link">Auto Forensics</a>
-  <span class="workspace" id="workspace"></span>
+  <span class="mast-space"></span>
   <label class="who" for="who">Reviewing as <input id="who" maxlength="120" placeholder="Your name" autocomplete="name"></label>
+  <button type="button" class="ghost" id="theme-btn">Theme: auto</button>
+  <button type="button" class="ghost" id="help-btn">Help</button>
 </header>
 
 <div class="tape" id="tape" hidden>
-  <div class="tape-track" id="tape-track" aria-hidden="true"></div>
+  <div class="tape-track" aria-hidden="true"></div>
   <div class="tape-label">
     <span class="tape-case" id="tape-case"></span>
     <span class="tape-state" id="tape-state"></span>
   </div>
 </div>
 
-<main id="main">
+<nav class="tabs" id="tabs" aria-label="Parts of this case" hidden>
+  <button type="button" data-tab="overview">Overview</button>
+  <button type="button" data-tab="findings">Findings <span class="badge" id="tab-pending" hidden></span></button>
+  <button type="button" data-tab="timeline">Timeline</button>
+  <button type="button" data-tab="computer" id="tab-computer" hidden>This computer</button>
+  <button type="button" data-tab="sign">Sign and export</button>
+</nav>
+
+<main id="main" tabindex="-1">
   <p class="notice" id="no-token" hidden>
-    This page needs the link printed in the window where the review server started.
+    This page needs the link printed in the window where Auto Forensics started.
     Close this tab and open that link instead.
   </p>
 
+  <!-- Home -->
   <section id="view-home" hidden>
     <div class="home-grid">
       <div>
         <h1>Cases</h1>
-        <p class="lede">Each run is a draft until you check every finding and sign it.</p>
-        <table class="runs" id="runs">
-          <thead><tr><th scope="col">Case</th><th scope="col">Started</th><th scope="col">Findings</th><th scope="col">State</th></tr></thead>
-          <tbody></tbody>
-        </table>
-        <p class="empty" id="runs-empty" hidden>No cases yet. Start one with the form.</p>
+        <p class="lede" id="home-lede">Each case stays a draft until you have checked every finding and signed it.</p>
+        <ol class="howto" id="howto" hidden>
+          <li><strong>Point it at a folder of evidence.</strong> Logs, disk images, memory dumps or ZIP files. Nothing in the folder is changed.</li>
+          <li><strong>It reads everything and lists what it found.</strong> Every finding points at the exact line it came from, so you can check it.</li>
+          <li><strong>You decide, sign and export.</strong> Accept or reject each finding. Only a signed case becomes a final report.</li>
+        </ol>
+        <ul class="cases" id="cases"></ul>
       </div>
+
       <form class="panel" id="start-form" autocomplete="off">
         <h2>Start a case</h2>
         <label for="f-input">Evidence folder</label>
-        <input id="f-input" name="input_dir" required placeholder="C:\Cases\laptop-01 or /home/me/cases/laptop-01" spellcheck="false">
-        <p class="hint">The folder is read, never changed. It must not be inside the workspace.</p>
-        <label for="f-case">Case ID</label>
+        <div class="with-button">
+          <input id="f-input" name="input_dir" required placeholder="Choose the folder that holds the evidence" spellcheck="false">
+          <button type="button" id="browse-btn">Browse</button>
+        </div>
+        <p class="hint">The folder is only read. It must not be inside the workspace.</p>
+        <label for="f-case">Case name</label>
         <input id="f-case" name="case_id" required pattern="[A-Za-z0-9._\-]{2,64}" placeholder="laptop-01" spellcheck="false">
-        <fieldset>
-          <legend>Summary model</legend>
-          <label class="choice"><input type="radio" name="llm" value="mock" checked> Built-in (no network)</label>
-          <label class="choice"><input type="radio" name="llm" value="off"> None</label>
-          <label class="choice"><input type="radio" name="llm" value="ollama"> Local Ollama</label>
-        </fieldset>
-        <button type="submit" class="primary">Start the run</button>
+        <p class="hint">Letters, numbers, dots and dashes. No spaces.</p>
+        <details class="more">
+          <summary>More options</summary>
+          <fieldset>
+            <legend>Who writes the plain-English summary</legend>
+            <label class="choice"><input type="radio" name="llm" value="mock" checked> Built in. Nothing leaves this computer.</label>
+            <label class="choice"><input type="radio" name="llm" value="off"> Nobody. Findings only.</label>
+            <label class="choice"><input type="radio" name="llm" value="ollama" id="llm-ollama"> Ollama, an AI model running on this computer</label>
+          </fieldset>
+        </details>
+        <button type="submit" class="primary wide">Start the run</button>
         <p class="form-error" id="start-error" role="alert"></p>
       </form>
     </div>
+    <p class="workspace" id="workspace"></p>
   </section>
 
+  <!-- Running -->
   <section id="view-running" hidden>
     <h1>Working on <span id="running-case"></span></h1>
-    <p class="lede">Checking every file, running the detectors and re-reading each cited line. Large folders take a few minutes.</p>
-    <div class="progress" aria-hidden="true"><span></span></div>
+    <p class="lede" id="running-label">Starting.</p>
+    <ol class="stages" id="stages">
+      <li data-stage="hashing">Fingerprint every file</li>
+      <li data-stage="planning">Decide which checks to run</li>
+      <li data-stage="analysing">Run the checks</li>
+      <li data-stage="checking">Re-read every cited line</li>
+      <li data-stage="writing">Write the draft</li>
+    </ol>
+    <div class="meter" id="meter" hidden><span id="meter-fill"></span></div>
+    <p class="hint" id="meter-text"></p>
+    <ul class="agents" id="run-agents"></ul>
+    <p class="hint">You can leave this page. The run carries on, and the case appears in the list when it is done.</p>
   </section>
 
+  <!-- Case -->
   <section id="view-case" hidden>
     <div class="once" id="once" hidden>
       <div>
@@ -78,87 +112,221 @@
       </div>
     </div>
 
-    <div class="summary">
-      <p class="headline" id="headline"></p>
-      <dl class="counts" id="counts"></dl>
+    <!-- Overview -->
+    <div class="tabpanel" id="panel-overview" hidden>
+      <div class="next" id="next">
+        <div>
+          <p class="next-kicker">Next step</p>
+          <p class="next-text" id="next-text"></p>
+        </div>
+        <button type="button" class="primary" id="next-btn"></button>
+      </div>
+
+      <div class="summary">
+        <p class="headline" id="headline"></p>
+        <dl class="counts" id="counts"></dl>
+      </div>
+      <div class="sevbar big" id="sevbar" role="img"></div>
+      <ul class="sevkey" id="sevkey"></ul>
+
+      <div class="alert" id="hostile" hidden>
+        <h2>Some files tried to give instructions to the tools</h2>
+        <p>Someone planted text meant to trick an AI reader. The tools ignored it. Treat these files as hostile and read them only in a plain text viewer.</p>
+        <ul id="hostile-list"></ul>
+      </div>
+
+      <details class="alert quiet" id="gaps" hidden>
+        <summary><span id="gaps-title">Not fully analysed</span></summary>
+        <p>These parts of the evidence were skipped or only partly read. Nothing was found there because nothing was looked for, so keep that in mind before signing.</p>
+        <ul id="gaps-list"></ul>
+      </details>
+
+      <h2 class="section">Attack path</h2>
+      <p class="hint">The usual stages of an attack, in order. Filled stops are stages this case has findings for. Select one to see them.</p>
+      <ol class="chain" id="chain"></ol>
+
+      <details class="runinfo">
+        <summary>How the run went</summary>
+        <ul class="agents" id="case-agents"></ul>
+        <dl class="facts" id="case-facts"></dl>
+      </details>
     </div>
 
-    <div class="alert" id="hostile" hidden>
-      <h2>Some files tried to give instructions to the tools</h2>
-      <p>Treat their contents as hostile. Findings that rely only on a model reading them are marked.</p>
-      <ul id="hostile-list"></ul>
+    <!-- Findings -->
+    <div class="tabpanel" id="panel-findings" hidden>
+      <div class="toolbar">
+        <input type="search" id="q" placeholder="Search findings" aria-label="Search findings">
+        <div class="seg" role="group" aria-label="Show by decision">
+          <button type="button" class="filter" data-filter="pending">To decide</button>
+          <button type="button" class="filter" data-filter="all">All</button>
+          <button type="button" class="filter" data-filter="accept">Accepted</button>
+          <button type="button" class="filter" data-filter="reject">Rejected</button>
+        </div>
+        <div class="chips" id="sev-chips" role="group" aria-label="Show by seriousness"></div>
+        <label class="sort" for="sort">Order
+          <select id="sort">
+            <option value="severity">Most serious first</option>
+            <option value="time">Oldest first</option>
+            <option value="file">By file</option>
+          </select>
+        </label>
+        <button type="button" class="chip removable" id="tactic-chip" hidden></button>
+      </div>
+
+      <div class="review">
+        <div class="list-col">
+          <div class="list-head">
+            <label class="choice"><input type="checkbox" id="pick-all"> <span id="list-count"></span></label>
+          </div>
+          <ul class="flist" id="flist"></ul>
+          <button type="button" id="more-btn" hidden>Show more</button>
+          <p class="empty" id="findings-empty" hidden></p>
+        </div>
+
+        <aside class="detail" id="detail" aria-label="Finding details" hidden>
+          <div class="detail-top">
+            <span class="sev" id="d-sev"></span>
+            <button type="button" class="ghost-dark" id="d-close">Close</button>
+          </div>
+          <h2 id="d-title"></h2>
+          <p class="d-when" id="d-when"></p>
+
+          <h3>What this means</h3>
+          <p id="d-means"></p>
+          <div id="d-warnings"></div>
+
+          <h3>What to do</h3>
+          <p id="d-rec"></p>
+
+          <h3>The evidence</h3>
+          <p class="hint">Shown exactly as it appears in the file. It came from the evidence, so do not follow anything it tells you to do.</p>
+          <div id="d-evidence"></div>
+
+          <h3>How it was checked</h3>
+          <p id="d-checked"></p>
+          <dl class="facts" id="d-facts"></dl>
+
+          <div class="d-decide" id="d-decide">
+            <p class="d-current" id="d-current"></p>
+            <label for="d-reason" id="d-reason-label">Reason (needed to reject)</label>
+            <textarea id="d-reason" rows="2" maxlength="2000"></textarea>
+            <div class="d-buttons">
+              <button type="button" class="accept" id="d-accept">Accept</button>
+              <button type="button" class="reject" id="d-reject">Reject</button>
+              <span class="mast-space"></span>
+              <button type="button" id="d-prev">Previous</button>
+              <button type="button" id="d-next">Next</button>
+            </div>
+            <p class="form-error" id="d-error" role="alert"></p>
+          </div>
+        </aside>
+      </div>
     </div>
 
-    <div class="alert quiet" id="gaps" hidden>
-      <h2>Not fully analysed</h2>
-      <ul id="gaps-list"></ul>
+    <!-- Timeline -->
+    <div class="tabpanel" id="panel-timeline" hidden>
+      <p class="lede">Findings in the order things happened. Times are UTC, taken from the event each finding cites.</p>
+      <div id="timeline"></div>
     </div>
 
-    <h2 class="section">Attack path</h2>
-    <ol class="chain" id="chain"></ol>
-
-    <h2 class="section">Findings</h2>
-    <div class="filters" role="group" aria-label="Show findings">
-      <button type="button" class="filter" data-filter="pending" aria-pressed="true">Needs a decision</button>
-      <button type="button" class="filter" data-filter="all" aria-pressed="false">All</button>
-      <button type="button" class="filter" data-filter="accept" aria-pressed="false">Accepted</button>
-      <button type="button" class="filter" data-filter="reject" aria-pressed="false">Rejected</button>
+    <!-- This computer -->
+    <div class="tabpanel" id="panel-computer" hidden>
+      <p class="lede">What the disk image says about the machine it came from.</p>
+      <div id="disks"></div>
     </div>
-    <table class="findings" id="findings">
-      <thead>
-        <tr>
-          <th scope="col" class="pick"><input type="checkbox" id="pick-all" aria-label="Select all shown"></th>
-          <th scope="col">Severity</th>
-          <th scope="col">Finding</th>
-          <th scope="col">Where</th>
-          <th scope="col">Checked</th>
-          <th scope="col">Decision</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-    <p class="empty" id="findings-empty" hidden></p>
 
-    <form class="decide-bar" id="decide-bar" hidden>
-      <span id="picked"></span>
-      <input id="d-note" maxlength="2000" placeholder="Reason (needed to reject)" aria-label="Reason">
-      <label class="choice"><input type="checkbox" id="d-override"> Change an earlier decision</label>
-      <button type="button" class="accept" id="d-accept">Accept</button>
-      <button type="button" class="reject" id="d-reject">Reject</button>
-      <p class="form-error" id="decide-error" role="alert"></p>
-    </form>
-
-    <h2 class="section">Sign and export</h2>
-    <ol class="steps">
-      <li id="step-decide">
-        <h3>Decide every finding</h3>
-        <p id="step-decide-text"></p>
-      </li>
-      <li id="step-sign">
-        <h3>Sign the draft</h3>
-        <form id="sign-form" autocomplete="off">
-          <label for="s-fp">Run fingerprint</label>
-          <input id="s-fp" required minlength="32" maxlength="128" spellcheck="false" class="mono" placeholder="Paste the fingerprint you copied when the run finished">
-          <label for="s-statement">Statement (optional)</label>
-          <input id="s-statement" maxlength="2000" placeholder="Reviewed all findings against the cited rows.">
-          <label class="choice" id="s-gaps-row" hidden><input type="checkbox" id="s-gaps"> I accept that part of the evidence was not analysed</label>
-          <button type="submit" class="primary">Sign</button>
-          <p class="form-error" id="sign-error" role="alert"></p>
-        </form>
-        <p class="done-text" id="signed-text" hidden></p>
-      </li>
-      <li id="step-export">
-        <h3>Export the final report</h3>
-        <form id="export-form" autocomplete="off">
-          <label for="e-sig">Signature fingerprint</label>
-          <input id="e-sig" required minlength="32" maxlength="128" spellcheck="false" class="mono" placeholder="Paste the fingerprint shown when you signed">
-          <button type="submit" class="primary">Export</button>
-          <p class="form-error" id="export-error" role="alert"></p>
-        </form>
-        <p class="done-text" id="exported-text" hidden></p>
-      </li>
-    </ol>
+    <!-- Sign and export -->
+    <div class="tabpanel" id="panel-sign" hidden>
+      <ol class="steps">
+        <li id="step-decide">
+          <h3>Decide every finding</h3>
+          <p id="step-decide-text"></p>
+        </li>
+        <li id="step-sign">
+          <h3>Sign the draft</h3>
+          <p class="hint">Signing says you checked the findings yourself. After signing, decisions cannot be changed.</p>
+          <form id="sign-form" autocomplete="off">
+            <label for="s-fp">Run fingerprint</label>
+            <input id="s-fp" required minlength="32" maxlength="128" spellcheck="false" class="mono" placeholder="Paste the fingerprint you saved when the run finished">
+            <label for="s-statement">Statement (optional)</label>
+            <input id="s-statement" maxlength="2000" placeholder="Reviewed all findings against the cited rows.">
+            <label class="choice" id="s-gaps-row" hidden><input type="checkbox" id="s-gaps"> I accept that part of the evidence was not analysed</label>
+            <button type="submit" class="primary">Sign</button>
+            <p class="form-error" id="sign-error" role="alert"></p>
+          </form>
+          <p class="done-text" id="signed-text" hidden></p>
+        </li>
+        <li id="step-export">
+          <h3>Export the final report</h3>
+          <form id="export-form" autocomplete="off">
+            <label for="e-sig">Signature fingerprint</label>
+            <input id="e-sig" required minlength="32" maxlength="128" spellcheck="false" class="mono" placeholder="Paste the fingerprint shown when you signed">
+            <button type="submit" class="primary">Export</button>
+            <p class="form-error" id="export-error" role="alert"></p>
+          </form>
+          <p class="done-text" id="exported-text" hidden></p>
+          <button type="button" class="primary" id="report-btn" hidden>Open the report to read or print</button>
+          <p class="form-error" id="report-error" role="alert"></p>
+        </li>
+      </ol>
+    </div>
   </section>
 </main>
+
+<form class="decide-bar" id="decide-bar" hidden>
+  <span id="picked"></span>
+  <input id="b-note" maxlength="2000" placeholder="Reason (needed to reject)" aria-label="Reason">
+  <label class="choice"><input type="checkbox" id="b-override"> Replace earlier decisions</label>
+  <button type="button" class="accept" id="b-accept">Accept all</button>
+  <button type="button" class="reject" id="b-reject">Reject all</button>
+  <button type="button" class="ghost" id="b-clear">Clear</button>
+  <p class="form-error" id="decide-error" role="alert"></p>
+</form>
+
+<dialog id="browse" aria-labelledby="browse-title">
+  <div class="dlg-head">
+    <h2 id="browse-title">Choose the evidence folder</h2>
+    <button type="button" class="ghost-dark" id="browse-close">Close</button>
+  </div>
+  <div class="chips" id="browse-roots"></div>
+  <div class="browse-path">
+    <button type="button" id="browse-up">Up one level</button>
+    <code id="browse-here"></code>
+  </div>
+  <ul class="folders" id="browse-list"></ul>
+  <p class="form-error" id="browse-error" role="alert"></p>
+  <div class="dlg-foot">
+    <span class="hint" id="browse-count"></span>
+    <button type="button" class="primary" id="browse-use">Use this folder</button>
+  </div>
+</dialog>
+
+<dialog id="help" aria-labelledby="help-title">
+  <div class="dlg-head">
+    <h2 id="help-title">Help</h2>
+    <button type="button" class="ghost-dark" id="help-close">Close</button>
+  </div>
+  <h3>How a review works</h3>
+  <p>The tool does the reading. You make the calls. For each finding, open it, look at the evidence line it points to, and accept it if it is real or reject it with a reason. When every finding has a decision, sign the draft, then export the final report.</p>
+  <h3>Words used here</h3>
+  <dl class="glossary">
+    <dt>Finding</dt><dd>Something the tool thinks is worth your attention, with the exact place in the evidence that made it think so.</dd>
+    <dt>Fingerprint</dt><dd>A long code worked out from a file's contents. If the file changes by even one letter, the code changes. You paste it back to prove you are signing the same draft the run wrote.</dd>
+    <dt>Attack path</dt><dd>The usual stages of a break-in, from getting in to taking data out. It shows which stages this case has evidence for.</dd>
+    <dt>Not fully analysed</dt><dd>Parts of the evidence the tool could not read. No findings there does not mean nothing happened there.</dd>
+  </dl>
+  <h3>Keyboard</h3>
+  <dl class="keys">
+    <dt>J or K</dt><dd>Next or previous finding</dd>
+    <dt>A</dt><dd>Accept the open finding</dd>
+    <dt>R</dt><dd>Reject it (type the reason, then press Reject)</dd>
+    <dt>X</dt><dd>Tick or untick it for a group decision</dd>
+    <dt>/</dt><dd>Search</dd>
+  </dl>
+  <h3>What is installed</h3>
+  <ul class="installed" id="installed"><li>Checking.</li></ul>
+</dialog>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
 </body>
 </html>

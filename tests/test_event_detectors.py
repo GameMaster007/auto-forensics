@@ -38,10 +38,10 @@ def test_one_finding_per_event_id_per_file():
     findings = findings_from_artifact_events(events)
     by_id = {(f.title, f.citations[0].source_file): f for f in findings}
     assert len(findings) == 3
-    assert "499 more event(s)" in by_id[("Event 4688: process_creation", "security.evtx")].recommendation
+    assert "499 more event(s)" in by_id[("Process creation (Windows event 4688)", "security.evtx")].recommendation
 
 
 def test_telemetry_ids_are_low_context_not_alerts():
-    severities = {f.title.split(":")[0]: f.severity for f in findings_from_artifact_events(
+    severities = {"Event " + f.title.split("Windows event ")[1].rstrip(")"): f.severity for f in findings_from_artifact_events(
         [_event(1, 4688), _event(2, 4104), _event(3, 4103), _event(4, 1102)])}
     assert severities == {"Event 4688": "low", "Event 4104": "low", "Event 4103": "low", "Event 1102": "critical"}

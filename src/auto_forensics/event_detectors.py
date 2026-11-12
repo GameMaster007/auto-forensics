@@ -68,6 +68,12 @@ def _coerce_event_id(raw: object) -> int | None:
     return None
 
 
+def _plain_title(event_id: int | str, event_type: str) -> str:
+    """'audit_log_cleared' -> 'Audit log cleared (Windows event 1102)'."""
+    words = " ".join(str(event_type or "").replace("_", " ").split())[:80]
+    return f"{words[:1].upper()}{words[1:]} (Windows event {event_id})" if words else f"Windows event {event_id}"
+
+
 def findings_from_artifact_events(artifacts: list[ArtifactEvent], limit: int = 500) -> list[Finding]:
     """One finding per event ID per source file, citing the first event.
 
@@ -97,7 +103,7 @@ def findings_from_artifact_events(artifacts: list[ArtifactEvent], limit: int = 5
             continue
         finding = Finding(
             finding_id=stable_id("evt", event_id, item.artifact_id, description),
-            title=f"Event {event_id}: {item.event_type}",
+            title=_plain_title(event_id, item.event_type),
             severity=severity,
             confidence=0.7,
             tactic=tactic_final,
