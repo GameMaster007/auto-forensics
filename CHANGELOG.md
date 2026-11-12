@@ -4,6 +4,20 @@
 
 ### Autopilot plugin and detection
 
+- Review page backend: live progress for a run (stage, each check, bytes
+  fingerprinted); a folder browser so no path has to be typed; the cited
+  row of a finding re-read from the evidence after its SHA-256 is checked;
+  the time of the event each core finding cites; disk image summaries;
+  what this install can do (`/api/info`); and removal of failed or
+  unfinished runs, which moves the folder to `removed/` and deletes nothing.
+- Export also writes `final_report.html`, a single print-friendly page with
+  no scripts and no external requests. The review page opens it through a
+  random link that expires after five minutes.
+- Deciding many findings at once verifies the evidence once per batch
+  instead of once per core finding (`signoff.decide_many`). The decision
+  log is unchanged: one line per finding.
+- The run list no longer re-reads and re-hashes every draft each time it
+  is shown.
 - Disk images: with the new `disk` extra (dissect.target), the autopilot
   opens raw/DD, split raw, EnCase E01 and VMDK images read-only, copies event
   logs, registry hives, Prefetch, LNK/Jump Lists, browser history, PowerShell

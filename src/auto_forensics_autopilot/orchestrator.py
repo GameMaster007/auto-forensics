@@ -16,14 +16,20 @@ import platform
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from auto_forensics.artifacts import evtx_reader_name
 from auto_forensics.case_store import MemoryCaseStore
 from auto_forensics.file_ops import atomic_write_text, directory_lock
 from auto_forensics.manifest import hash_input_tree
 from auto_forensics.models import utc_now_iso
-from auto_forensics.security import IntegrityError, SecurityError, validate_case_id
+from auto_forensics.security import (
+    IntegrityError,
+    SecurityError,
+    bounded_tree_paths,
+    stays_in_tree,
+    validate_case_id,
+)
 from auto_forensics.tools import ToolRegistry
 from auto_forensics.version import __version__ as CORE_VERSION
 
@@ -38,6 +44,18 @@ DRAFT_JSON = "autopilot_draft.json"
 DRAFT_MD = "autopilot_draft.md"
 MANIFEST_FILE = "autopilot_manifest.json"
 MAX_PARALLEL_AGENTS = 4
+MAX_EVIDENCE_FILES = 10_000
+PROGRESS_SECONDS = 0.25
+
+# The five stages a run goes through, with the sentence shown to the person waiting.
+STAGES: tuple[tuple[str, str], ...] = (
+    ("hashing", "Fingerprinting every evidence file, so any later change can be detected."),
+    ("planning", "Sorting the files by type and choosing which checks to run."),
+    ("analysing", "Running the checks on the evidence."),
+    ("checking", "Fingerprinting the evidence again to confirm nothing changed during the run."),
+    ("writing", "Checking each finding against its source and writing the draft report."),
+)
+ProgressCallback = Callable[[dict[str, Any]], None]
 
 
 class AutopilotError(SecurityError):
@@ -54,6 +72,100 @@ def write_json(path: Path, data: Any) -> None:
 
 def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+class _Progress:
+    """Sends progress events to an optional listener. A listener that fails is ignored.
+
+    Events are plain dicts with an ``event`` key:
+
+    * ``stage``: ``stage``, ``stage_number``, ``stage_total``, ``stage_label``, and for
+      the two hashing stages ``files_total`` and ``bytes_total``;
+    * ``hash``: ``stage``, ``bytes_done``, ``bytes_total`` (a few times a second);
+    * ``plan``: ``agents`` (``name`` and ``status`` ``waiting`` or ``skipped``), ``files_total``;
+    * ``agent``: ``name`` and ``status`` (``running``, ``ok`` or ``failed``).
+    """
+
+    def __init__(self, callback: ProgressCallback | None) -> None:
+        self.callback = callback
+        self._last_hash = 0.0
+
+    @property
+    def active(self) -> bool:
+        return self.callback is not None
+
+    def emit(self, event: str, **fields: Any) -> None:
+        if self.callback is None:
+            return
+        try:
+            self.callback({"event": event, **fields})
+        except Exception:  # noqa: BLE001, S110 - progress is a courtesy; it must never stop a run
+            pass
+
+    def stage(self, name: str, **fields: Any) -> None:
+        number = next(index for index, (stage, _) in enumerate(STAGES, start=1) if stage == name)
+        self.emit("stage", stage=name, stage_number=number, stage_total=len(STAGES),
+                  stage_label=STAGES[number - 1][1], **fields)
+
+    def hashed(self, stage: str, done: int, total: int, *, force: bool = False) -> None:
+        if self.callback is None:
+            return
+        now = time.monotonic()
+        if force or now - self._last_hash >= PROGRESS_SECONDS:
+            self._last_hash = now
+            self.emit("hash", stage=stage, bytes_done=done, bytes_total=max(total, done))
+
+
+def _tree_size(root: Path) -> tuple[int, int]:
+    """(files, bytes) under ``root`` from directory entries only; used for the progress bar."""
+    files = size = 0
+    try:
+        for path in bounded_tree_paths(root):
+            if stays_in_tree(path, root):
+                files += 1
+                size += path.stat().st_size
+    except (OSError, SecurityError):
+        pass  # the hashing pass that follows reports the real problem
+    return files, size
+
+
+def _hash_tree(evidence: Path, progress: _Progress, stage: str) -> list[dict[str, Any]]:
+    """The evidence inventory. Without a listener this is the core's ``hash_input_tree``.
+
+    With a listener it is the same walk, the same checks and the same rows,
+    hashed here one megabyte at a time so the bytes done can be reported.
+    ``tests/test_autopilot_web_api.py`` holds the two to identical output.
+    """
+    if not progress.active:
+        return hash_input_tree(evidence)
+    root = evidence.resolve()
+    if not root.is_dir():
+        raise SecurityError(f"Evidence directory does not exist: {evidence}")
+    files, total = _tree_size(root)
+    progress.stage(stage, files_total=files, bytes_total=total)
+    rows: list[dict[str, Any]] = []
+    done = 0
+    for path in bounded_tree_paths(root):
+        if not stays_in_tree(path, root):
+            continue
+        if len(rows) >= MAX_EVIDENCE_FILES:
+            raise SecurityError(f"Evidence exceeds the manifest file limit ({MAX_EVIDENCE_FILES})")
+        before = path.stat()
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+                done += len(chunk)
+                progress.hashed(stage, done, total)
+        after = path.stat()
+        if not stays_in_tree(path, root) or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+        ):
+            raise IntegrityError(f"Evidence changed while hashing: {path.relative_to(root)}")
+        rows.append({"path": str(path.relative_to(root)), "sha256": digest.hexdigest().lower(),
+                     "size_bytes": after.st_size})
+    progress.hashed(stage, done, done, force=True)
+    return sorted(rows, key=lambda row: row["path"])
 
 
 def _check_paths(input_dir: Path, output_dir: Path) -> tuple[Path, Path]:
@@ -102,8 +214,14 @@ def start(
     llama_model: str = "llama3.1:8b",
     rules_dir: Path | None = None,
     only_agents: list[str] | None = None,
+    progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
-    """Run the whole autopilot and return the draft. Raises AutopilotError on refusal."""
+    """Run the whole autopilot and return the draft. Raises AutopilotError on refusal.
+
+    ``progress`` is called with a dict at each stage change, a few times a
+    second while hashing, and when each agent starts and ends (see
+    ``_Progress``). It runs on the worker threads; an exception it raises is ignored.
+    """
     validate_case_id(case_id)
     if llm not in {"off", "mock", "ollama"}:
         raise AutopilotError("llm must be off, mock, or ollama")
@@ -114,15 +232,17 @@ def start(
         if out.exists() and any(out.iterdir()):
             raise AutopilotError("The output directory is not empty; use a new directory for each run")
         out.mkdir(parents=True, exist_ok=True)
-        return _start_locked(evidence, out, case_id, actor, llm, llama_endpoint, llama_model, rules_dir, only_agents)
+        return _start_locked(evidence, out, case_id, actor, llm, llama_endpoint, llama_model, rules_dir,
+                             only_agents, _Progress(progress))
 
 
 def _start_locked(
     evidence: Path, out: Path, case_id: str, actor: str | None, llm: str,
     llama_endpoint: str, llama_model: str, rules_dir: Path | None, only_agents: list[str] | None,
+    progress: _Progress,
 ) -> dict[str, Any]:
     # Stage 1: custody record before anything reads content.
-    inventory_rows = hash_input_tree(evidence)
+    inventory_rows = _hash_tree(evidence, progress, "hashing")
     custody = {
         "case_id": case_id,
         "actor": (actor or _default_actor()).strip()[:120],
@@ -138,6 +258,7 @@ def _start_locked(
     custody_sha256 = canonical_sha256(custody)
 
     # Stage 2: triage.
+    progress.stage("planning", files_total=len(inventory_rows))
     profile = profile_evidence(evidence)
     plans = plan_agents(profile, agent_availability())
     if only_agents:
@@ -156,15 +277,30 @@ def _start_locked(
                        llama_endpoint=llama_endpoint, llama_model=llama_model, rules_dir=rules_dir,
                        inventory=inventory_map(inventory_rows))
     to_run = [p.name for p in plans if p.run and p.name in AGENTS]
+    progress.emit("plan", files_total=len(inventory_rows),
+                  agents=[{"name": p.name, "status": "waiting" if p.name in to_run else "skipped"} for p in plans])
+    progress.stage("analysing")
+
+    def run_one(name: str) -> AgentResult:
+        progress.emit("agent", name=name, status="running")
+        try:
+            result = _run_agent(name, ctx, store)
+        except BaseException:
+            progress.emit("agent", name=name, status="failed")
+            raise
+        progress.emit("agent", name=name, status="ok" if result.status == "ok" else "failed")
+        return result
+
     with ThreadPoolExecutor(max_workers=MAX_PARALLEL_AGENTS, thread_name_prefix="af-agent") as pool:
-        results = list(pool.map(lambda name: _run_agent(name, ctx, store), to_run))
+        results = list(pool.map(run_one, to_run))
 
     # Stage 4: evidence must be unchanged before anything is published.
-    after_rows = hash_input_tree(evidence)
+    after_rows = _hash_tree(evidence, progress, "checking")
     if after_rows != inventory_rows:
         raise AutopilotError("Evidence changed during the run; no draft was published")
 
     # Stage 5: coordinate.
+    progress.stage("writing")
     core_report = None
     core_path = out / "core" / "case_report.json"
     if core_path.is_file():

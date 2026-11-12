@@ -114,6 +114,65 @@ changed?" check. For a 7 GB E01 on a laptop SSD expect a few minutes for
 each pass (longer from a USB disk). Copying the artefacts reads only those
 files. Leave a few GB free on the run folder's disk.
 
+## Review page
+
+```
+auto-forensics-autopilot serve            # opens http://127.0.0.1:8765 in your browser
+```
+
+The page does everything the commands above do, without typing paths or
+fingerprints from memory. It runs on this computer only (127.0.0.1), and
+every request needs the session token in the link printed when it starts.
+
+**Choosing the evidence.** A folder browser lists folders (never file
+names) and says how many files and bytes a folder holds, so you can check
+you picked the right one. Hidden and system folders are left out.
+
+**While a run is going.** The page shows which of the five stages the run
+is in (fingerprinting, planning, analysing, re-checking, writing), which
+checks are waiting, running, done or failed, and how far the fingerprinting
+has got in bytes. Fingerprinting a large disk image takes minutes; the
+counter keeps moving.
+
+**Checking a finding by eye.** Opening a finding shows the row it cites,
+read again from the evidence at that moment: the line of a text file, the
+record of a CSV, JSON or event log, or 256 bytes around the offset for a
+binary file. The file's SHA-256 is compared with the custody record first.
+If the file has changed, moved or gone, the page says so and shows nothing
+from it. Excerpts are capped at 4,000 characters, have control characters
+replaced, and are never written to a report or a log. A file is hashed
+once and remembered until its size or modified time changes, so ten
+findings on one 2 GB image do not hash it ten times. Each core finding
+also shows the time of the event it cites, taken from the run's own
+timeline (never guessed from text).
+
+**Deciding in batches.** Accepting or rejecting many findings at once
+checks the evidence once for the whole batch, then writes one log line per
+finding, exactly as single decisions do.
+
+**The signed report.** Export also writes `final_report.html`: one file
+with no scripts that loads nothing from the internet, laid out to print.
+The page opens it in a new tab through a random link that stops working
+after five minutes. Like `final_report.md`, it names who signed and when
+but does not print the signature fingerprint; that is in
+`final_report.json`.
+
+**Runs that did not finish.** A run that failed, or was cut off when the
+window was closed, is listed as failed or incomplete and can be removed
+from the list. Removing it moves its folder to `removed/` inside the
+workspace (nothing is deleted) and clears the lock it left behind. A run
+with a finished draft cannot be removed from the page.
+
+**Disk images.** For a run that read a disk image, the page lists what
+`disk_summary.json` recorded: operating system, host name, time zone,
+users, USB devices, volumes, and anything that could not be read.
+
+For anyone changing the page, the API under `/api/` is: `info`, `browse`,
+`runs` (list and start), `runs/{id}` (progress or the draft; `DELETE`
+removes a broken run), `runs/{id}/findings/{finding_id}/evidence`,
+`runs/{id}/disks`, `runs/{id}/decide`, `sign`, `export`, `copied` and
+`report-link`. `tests/test_autopilot_web_api.py` pins the response shapes.
+
 ## Reading the draft
 
 `autopilot_draft.md` has, in order: a warning listing any hostile files;
@@ -150,7 +209,8 @@ Measured results, including false alarms on ordinary activity, are in
   the custody record, or the evidence changed.
 - `export` refuses without a valid signature, or if the decision log or
   evidence changed after signing. Only accepted findings reach
-  `final_report.md`; rejected ones are listed with the analyst's reason.
+  `final_report.md` and `final_report.html`; rejected ones are listed with
+  the analyst's reason.
 
 ## Testing it
 

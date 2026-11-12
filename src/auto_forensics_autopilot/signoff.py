@@ -8,7 +8,8 @@ core run's own custody log, so the core report shows it too.
 ``sign`` refuses while any finding is pending, or when the draft, the
 decision log, or the evidence no longer match what was recorded.
 ``export`` refuses without a valid signature. Only accepted findings
-reach the final report.
+reach the final report, which is written as JSON, Markdown and one
+self-contained HTML page for printing.
 """
 
 from __future__ import annotations
@@ -17,20 +18,24 @@ import hashlib
 import hmac
 import json
 import os
+from contextlib import ExitStack
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from auto_forensics.file_ops import atomic_write_text, directory_lock
 from auto_forensics.manifest import hash_input_tree
 from auto_forensics.models import utc_now_iso
+from auto_forensics.security import SecurityError
 
 from .coordinator import canonical_sha256, render_markdown
 from .orchestrator import CUSTODY_FILE, DRAFT_JSON, MANIFEST_FILE, AutopilotError, read_json, write_json
+from .report_html import render_html
 
 SIGNOFF_LOG = "signoff.jsonl"
 SIGNATURE_FILE = "signature.json"
 FINAL_JSON = "final_report.json"
 FINAL_MD = "final_report.md"
+FINAL_HTML = "final_report.html"
 DECISIONS = {"accept", "reject"}
 MAX_NOTE = 2000
 MIN_FINGERPRINT = 32
@@ -156,8 +161,25 @@ def status(run_dir: Path) -> dict[str, Any]:
 def decide(
     run_dir: Path, *, finding_id: str, decision: str, actor: str, note: str = "", override: bool = False,
 ) -> dict[str, Any]:
+    return decide_many(run_dir, finding_ids=[finding_id], decision=decision, actor=actor, note=note,
+                       override=override)[0]
+
+
+def decide_many(
+    run_dir: Path, *, finding_ids: list[str], decision: str, actor: str, note: str = "", override: bool = False,
+) -> list[dict[str, Any]]:
+    """Record the same decision on several findings: one log line each, in the order given.
+
+    Everything that can be checked up front is checked before the first line
+    is written. The core run and the evidence are verified once for the whole
+    batch (under the run lock and the core run's own lock), not once per
+    finding: hashing a large evidence folder for every finding made a batch
+    of core findings take minutes. If a later finding is still refused, the
+    lines already written stay, and the exception carries their ids in
+    ``decided``.
+    """
     run_dir = run_dir.resolve()
-    with directory_lock(run_dir):
+    with directory_lock(run_dir), ExitStack() as stack:
         if (run_dir / SIGNATURE_FILE).exists():
             raise AutopilotError("This draft is already signed; decisions are closed")
         draft, manifest = _load(run_dir)
@@ -166,38 +188,88 @@ def decide(
             raise AutopilotError("decision must be accept or reject")
         actor = _clean(actor, "actor", 120)
         note = _clean(note, "note", MAX_NOTE, required=decision == "reject")
-        finding = next((f for f in draft["findings"] if f["finding_id"] == finding_id), None)
-        if finding is None:
-            raise AutopilotError(f"No finding with id {finding_id!r} in this draft")
-        entries = read_log(run_dir)
-        prior = latest_decisions(entries).get(finding_id)
-        if prior and not override:
-            raise AutopilotError(f"{prior['actor']} already set this finding to {prior['decision']} at {prior['at']}")
-        if finding["worker"] == "core_pipeline":
-            _record_core(run_dir, finding_id, decision, actor, note, override=bool(prior))
-        entry = {
-            "finding_id": finding_id,
-            "decision": decision,
-            "actor": actor,
-            "note": note,
-            "at": utc_now_iso(),
-            "override": bool(prior),
-            "draft_sha256": manifest["draft_sha256"],
-        }
-        previous = (run_dir / SIGNOFF_LOG).read_text(encoding="utf-8") if (run_dir / SIGNOFF_LOG).is_file() else ""
-        atomic_write_text(run_dir / SIGNOFF_LOG, previous + json.dumps(entry, sort_keys=True) + "\n")
-        return entry
+        by_id = {f["finding_id"]: f for f in draft["findings"]}
+        ids = list(dict.fromkeys(finding_ids))
+        if not ids:
+            raise AutopilotError("Select at least one finding")
+        for finding_id in ids:
+            if finding_id not in by_id:
+                raise AutopilotError(f"No finding with id {finding_id!r} in this draft")
+        latest = latest_decisions(read_log(run_dir))
+        if not override:
+            for finding_id in ids:
+                prior = latest.get(finding_id)
+                if prior:
+                    raise AutopilotError(
+                        f"{prior['actor']} already set this finding to {prior['decision']} at {prior['at']}")
+        core_dir = (run_dir / "core").resolve()
+        log_path = run_dir / SIGNOFF_LOG
+        log_text = log_path.read_text(encoding="utf-8") if log_path.is_file() else ""
+        written: list[dict[str, Any]] = []
+        try:
+            if any(by_id[finding_id]["worker"] == "core_pipeline" for finding_id in ids):
+                evidence = Path(read_json(run_dir / CUSTODY_FILE)["evidence_dir"])
+                _core(lambda: stack.enter_context(directory_lock(core_dir)))
+                _core(lambda: _verify_core_once(core_dir, evidence))
+            for finding_id in ids:
+                prior = latest.get(finding_id)
+                if by_id[finding_id]["worker"] == "core_pipeline":
+                    _core(lambda fid=finding_id, again=bool(prior): _record_core(
+                        core_dir, fid, decision, actor, note, override=again))
+                entry = {
+                    "finding_id": finding_id,
+                    "decision": decision,
+                    "actor": actor,
+                    "note": note,
+                    "at": utc_now_iso(),
+                    "override": bool(prior),
+                    "draft_sha256": manifest["draft_sha256"],
+                }
+                # One atomic append per decision, so a crash loses at most the decision in flight.
+                log_text += json.dumps(entry, sort_keys=True) + "\n"
+                atomic_write_text(log_path, log_text)
+                latest[finding_id] = entry
+                written.append(entry)
+        except Exception as exc:
+            exc.decided = [entry["finding_id"] for entry in written]  # type: ignore[attr-defined]
+            raise
+        return written
 
 
-def _record_core(run_dir: Path, finding_id: str, decision: str, actor: str, note: str, *, override: bool) -> None:
-    from auto_forensics.reviews import ReviewError, record_review
+def _core(action: Callable[[], Any]) -> Any:
+    """Run one step against the core run; its refusals become ours, as ``record_review`` reports them."""
+    from auto_forensics.reviews import ReviewError
 
-    custody = read_json(run_dir / CUSTODY_FILE)
     try:
-        record_review(run_dir / "core", finding_id=finding_id, decision=decision, actor=actor, note=note,
-                      override=override, input_dir=Path(custody["evidence_dir"]))
-    except ReviewError as exc:
+        return action()
+    except (ReviewError, SecurityError) as exc:
         raise AutopilotError(f"The core run refused the decision: {exc}") from exc
+
+
+def _verify_core_once(core_dir: Path, evidence: Path) -> None:
+    """The check ``reviews.record_review`` makes before every decision, made once for a batch."""
+    from auto_forensics.integrity import verify_run
+    from auto_forensics.manifest import read_run_manifest
+    from auto_forensics.reviews import ReviewError
+    from auto_forensics.version import __version__ as core_version
+
+    if read_run_manifest(core_dir / "run_manifest.json").get("tool_version") != core_version:
+        raise ReviewError("Review requires the tool version recorded in the manifest; no decision was recorded")
+    if not verify_run(core_dir / "run_manifest.json", input_dir=evidence)["match"]:
+        raise ReviewError("Run integrity check failed before review; no decision was recorded")
+
+
+def _record_core(core_dir: Path, finding_id: str, decision: str, actor: str, note: str, *, override: bool) -> None:
+    """Append one decision to the core run's own review log and republish its report.
+
+    The caller holds the core run's lock and has verified the run and the
+    evidence (``_verify_core_once``). ``_record_review`` is the core's own
+    writer: the step ``record_review`` runs after that same verification.
+    """
+    from auto_forensics import reviews
+
+    reviews._record_review(core_dir, finding_id=finding_id, decision=decision, actor=actor, note=note,
+                           override=override, at=None)
 
 
 def _check_evidence(run_dir: Path) -> dict[str, Any]:
@@ -323,7 +395,7 @@ def _export_locked(run_dir: Path, dest: Path, signature_seen: str) -> dict[str, 
         raise AutopilotError("Export destination must be outside the evidence directory")
     if dest == run_dir or dest.is_relative_to(run_dir):
         raise AutopilotError("Export destination must be outside the run folder")
-    if (dest / FINAL_JSON).exists() or (dest / FINAL_MD).exists():
+    if any((dest / name).exists() for name in (FINAL_JSON, FINAL_MD, FINAL_HTML)):
         raise AutopilotError("The export folder already holds a final report; choose a new folder")
     dest.mkdir(parents=True, exist_ok=True)
     decided = latest_decisions([json.loads(line) for line in log_text.splitlines() if line.strip()])
@@ -348,6 +420,10 @@ def _export_locked(run_dir: Path, dest: Path, signature_seen: str) -> dict[str, 
     ]
     final["headline"] = f"{len(accepted)} finding(s) accepted by the analyst; {len(rejected)} rejected."
     final["signature"] = signature
+    # Render everything before writing anything, so a failure leaves no half-made export.
+    markdown = render_markdown(final, title="Signed report")
+    page = render_html(final, manifest)
     write_json(dest / FINAL_JSON, final)
-    atomic_write_text(dest / FINAL_MD, render_markdown(final, title="Signed report"))
+    atomic_write_text(dest / FINAL_MD, markdown)
+    atomic_write_text(dest / FINAL_HTML, page)
     return final
