@@ -6,6 +6,8 @@ import json
 import re
 import shutil
 import socket
+import subprocess
+import sys
 import threading
 import time
 import zipfile
@@ -342,27 +344,30 @@ def test_evidence_excerpt_refuses_a_changed_draft_or_custody_record(setup):
     assert client.get(url).status_code == 400
 
 
-def test_evidence_excerpt_hashes_each_file_once(setup, monkeypatch):
+def test_evidence_excerpt_hashes_each_large_file_once(setup, monkeypatch):
     state, client, ev = setup
     run_id, data = _start(client, ev)
-    hashed: list[str] = []
-    real = web.sha256_file
+    hashed: list[int] = []
+    real = web._sha256_fd
 
-    def counting(path):
-        hashed.append(Path(path).name)
-        return real(path)
+    def counting(descriptor, size):
+        hashed.append(size)
+        return real(descriptor, size)
 
-    monkeypatch.setattr(web, "sha256_file", counting)
+    # Every file counts as too large to read whole, so the remembered hash is used.
+    monkeypatch.setattr(web, "MAX_ROW_FILE_BYTES", 4)
+    monkeypatch.setattr(web, "_sha256_fd", counting)
     on_notes = [f for f in data["draft"]["findings"] if f["citations"][0]["source_file"] == "notes.txt"]
     assert len(on_notes) == 2
     for _ in range(5):
         for finding in on_notes:
-            assert _evidence_of(client, run_id, finding)["file_ok"]
-    assert hashed == ["notes.txt"]
-    # A changed file is hashed again: the cache is keyed by path, size and modified time.
+            shown = _evidence_of(client, run_id, finding)
+            assert shown["file_ok"] and shown["excerpt"]
+    assert len(hashed) == 1
+    # A changed file is hashed again: the cache is keyed by the file's identity, including its changed time.
     (ev / "notes.txt").write_text("different\n", encoding="utf-8")
     assert _evidence_of(client, run_id, on_notes[0])["file_ok"] is False
-    assert hashed == ["notes.txt", "notes.txt"]
+    assert len(hashed) == 2
 
 
 def test_evidence_excerpt_replaces_control_characters_and_is_capped(tmp_path: Path):
@@ -458,13 +463,20 @@ def test_parsed_records_are_read_by_row_and_parsed_once(tmp_path: Path, monkeypa
 
     monkeypatch.setattr(ArtifactParserRegistry, "parse", parse)
     finding = {"worker": "core_pipeline"}
-    text, note = state._cited_text(finding, {"artifact_id": "evtx-1", "row": 7}, log)
+
+    def cited(finding, citation):
+        with state._pinned(log) as source:
+            return state._cited_text(finding, citation, source)
+
+    text, note = cited(finding, {"artifact_id": "evtx-1", "row": 7})
     assert text == "An account logged on\nuser=alice" and note.startswith("Record 7 of this file")
-    assert state._cited_text(finding, {"artifact_id": "evtx-2", "row": 2}, log)[0] == "The audit log was cleared"
-    missing, why = state._cited_text(finding, {"artifact_id": "evtx-3", "row": 99}, log)
+    assert cited(finding, {"artifact_id": "evtx-2", "row": 2})[0] == "The audit log was cleared"
+    missing, why = cited(finding, {"artifact_id": "evtx-3", "row": 99})
     assert missing is None and why == "Row 99 could not be found in this file."
     assert len(parses) == 1  # ten findings on one event log parse it once
-    memory = state._cited_text({"worker": "memory"}, {"artifact_id": "file-x", "row": 3}, log)
+    # It was parsed from a private copy of the bytes just fingerprinted, not from the evidence path.
+    assert parses[0] != log and parses[0].name == log.name and not parses[0].exists()
+    memory = cited({"worker": "memory"}, {"artifact_id": "file-x", "row": 3})
     assert memory[0] is None and "memory image" in memory[1]
 
 
@@ -915,7 +927,9 @@ def test_leftover_run_from_an_earlier_session_is_incomplete_and_removable(tmp_pa
     (crashed / "custody.json").write_text(json.dumps({"started_at": "2026-01-01T00:00:00Z",
                                                      "evidence_dir": "/cases/nine\x1b[31m"}), encoding="utf-8")
     lock = workspace / "runs" / f".af-{run_id}.lock"
-    lock.write_text("pid=99999\n", encoding="ascii")
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()
+    lock.write_text(f"pid={child.pid}\n", encoding="ascii")  # left by a run that was killed
 
     state = ReviewState(workspace)  # a new server start: no jobs in memory
     client = TestClient(create_app(state), base_url="http://127.0.0.1:8765")

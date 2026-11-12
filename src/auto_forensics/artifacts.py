@@ -21,6 +21,7 @@ from .models import ArtifactEvent
 from .security import (
     SecurityError,
     bounded_tree_paths,
+    has_undecodable_name,
     read_limited_text,
     sha256_file,
     stays_in_tree,
@@ -1285,6 +1286,8 @@ def discover_artifacts(
     input_dir: Path,
     max_text_bytes: int = 4 * 1024 * 1024,
     parser_registry: "ArtifactParserRegistry | None" = None,
+    *,
+    skip_undecodable_names: bool = False,
 ) -> tuple[list[ArtifactEvent], list[Path]]:
     events: list[ArtifactEvent] = []
     binaries: list[Path] = []
@@ -1298,6 +1301,8 @@ def discover_artifacts(
     root = input_dir.resolve()
     for path in sorted(bounded_tree_paths(root)):
         if not stays_in_tree(path, root):
+            continue
+        if skip_undecodable_names and has_undecodable_name(str(path.relative_to(root))):
             continue
         suffix = path.suffix.lower()
         if suffix in binary_suffixes:

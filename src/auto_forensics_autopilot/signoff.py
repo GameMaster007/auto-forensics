@@ -25,7 +25,7 @@ from typing import Any, Callable
 from auto_forensics.file_ops import atomic_write_text, directory_lock
 from auto_forensics.manifest import hash_input_tree
 from auto_forensics.models import utc_now_iso
-from auto_forensics.security import SecurityError
+from auto_forensics.security import SecurityError, display_name
 
 from .coordinator import canonical_sha256, render_markdown
 from .orchestrator import CUSTODY_FILE, DRAFT_JSON, MANIFEST_FILE, AutopilotError, read_json, write_json
@@ -397,7 +397,6 @@ def _export_locked(run_dir: Path, dest: Path, signature_seen: str) -> dict[str, 
         raise AutopilotError("Export destination must be outside the run folder")
     if any((dest / name).exists() for name in (FINAL_JSON, FINAL_MD, FINAL_HTML)):
         raise AutopilotError("The export folder already holds a final report; choose a new folder")
-    dest.mkdir(parents=True, exist_ok=True)
     decided = latest_decisions([json.loads(line) for line in log_text.splitlines() if line.strip()])
     accepted = []
     rejected = []
@@ -420,10 +419,29 @@ def _export_locked(run_dir: Path, dest: Path, signature_seen: str) -> dict[str, 
     ]
     final["headline"] = f"{len(accepted)} finding(s) accepted by the analyst; {len(rejected)} rejected."
     final["signature"] = signature
-    # Render everything before writing anything, so a failure leaves no half-made export.
-    markdown = render_markdown(final, title="Signed report")
-    page = render_html(final, manifest)
-    write_json(dest / FINAL_JSON, final)
-    atomic_write_text(dest / FINAL_MD, markdown)
-    atomic_write_text(dest / FINAL_HTML, page)
+    # Render and encode everything before writing anything, so a failure leaves no half-made export.
+    # Lone surrogates (from a file name that is not valid text) cannot be written as UTF-8; the two
+    # views show them as U+FFFD, and the JSON keeps them as \u escapes.
+    markdown = display_name(render_markdown(final, title="Signed report"))
+    page = display_name(render_html(final, manifest))
+    data = json.dumps(final, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+    for text in (markdown, page, data):
+        text.encode("utf-8")
+    created = not dest.exists()
+    dest.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    try:
+        # The final JSON goes last: an export folder counts as an export only once it holds that file.
+        for name, text in ((FINAL_MD, markdown), (FINAL_HTML, page), (FINAL_JSON, data)):
+            atomic_write_text(dest / name, text)
+            written.append(dest / name)
+    except BaseException:
+        for path in reversed(written):
+            path.unlink(missing_ok=True)
+        if created:
+            try:
+                dest.rmdir()
+            except OSError:
+                pass
+        raise
     return final

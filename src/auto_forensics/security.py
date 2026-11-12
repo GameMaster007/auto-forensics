@@ -13,6 +13,22 @@ CASE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$")
 _JSON_SURROGATE_PATTERN = re.compile(r"[\ud800-\udfff]")
 
 
+def has_undecodable_name(path_text: str) -> bool:
+    """True when a path, as Python reports it, holds bytes that are not valid text.
+
+    On Linux a file name that is not valid UTF-8 comes back with lone
+    surrogates in it (``bad\\udcff.log``); Windows can report unpaired UTF-16
+    surrogates the same way. Such a name cannot be written to JSON or encoded
+    as UTF-8, so a report that names it cannot be published.
+    """
+    return bool(_JSON_SURROGATE_PATTERN.search(path_text))
+
+
+def display_name(path_text: str) -> str:
+    """A path with every lone surrogate replaced by U+FFFD, safe to show and to write to JSON."""
+    return _JSON_SURROGATE_PATTERN.sub("�", path_text)
+
+
 class SecurityError(ValueError):
     pass
 

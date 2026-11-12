@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -27,7 +28,9 @@ def directory_lock(directory: Path) -> Iterator[None]:
         raise SecurityError(f"Directory is busy or has a stale lock: {directory}") from exc
     owned = os.fstat(descriptor)
     try:
-        os.write(descriptor, f"pid={os.getpid()}\n".encode("ascii"))
+        # Who holds the lock, so a tool can tell a live holder from one that died (see the review page's remove).
+        host = socket.gethostname().encode("ascii", errors="replace")[:255].replace(b"\n", b"?")
+        os.write(descriptor, f"pid={os.getpid()}\n".encode("ascii") + b"host=" + host + b"\n")
         yield
     finally:
         os.close(descriptor)

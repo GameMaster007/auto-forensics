@@ -28,7 +28,8 @@ CSP = "default-src 'none'; style-src 'unsafe-inline'"
 SEVERITIES = ("critical", "high", "medium", "low", "info")
 MAX_ROWS = 5000
 
-_UNSAFE = re.compile(r"[\x00-\x1f\x7f-\x9f​-‏  ‪-‮⁦-⁩﻿]")
+# Control characters, invisible characters, text-direction overrides and lone surrogates.
+_UNSAFE = re.compile(r"[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff\ud800-\udfff]")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 _STYLE = """

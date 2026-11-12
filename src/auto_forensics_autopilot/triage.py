@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from auto_forensics.security import stays_in_tree
+from auto_forensics.security import display_name, has_undecodable_name, stays_in_tree
 
 HEAD_BYTES = 4096
 MAX_TRIAGE_FILES = 10_000
@@ -42,6 +42,9 @@ class EvidenceProfile:
     truncated: bool = False
     kinds: dict[str, list[str]] = field(default_factory=dict)
     skipped_links: int = 0
+    # Files whose name is not valid text, shown with U+FFFD in place of the bad bytes. No agent reads
+    # them (a finding that names one could not be published); the custody record still covers them.
+    undecodable_names: list[str] = field(default_factory=list)
 
     def add(self, kind: str, rel: str) -> None:
         self.kinds.setdefault(kind, []).append(rel)
@@ -149,6 +152,10 @@ def profile_evidence(input_dir: Path, *, max_files: int = MAX_TRIAGE_FILES) -> E
             continue
         rel = path.relative_to(root)
         if len(rel.parts) > MAX_DEPTH:
+            continue
+        if has_undecodable_name(str(rel)):
+            if len(profile.undecodable_names) < max_files:
+                profile.undecodable_names.append(display_name(rel.as_posix()))
             continue
         if profile.total_files >= max_files:
             profile.truncated = True

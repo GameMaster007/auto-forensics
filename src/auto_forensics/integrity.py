@@ -32,7 +32,8 @@ def compare_inventory(recorded: list[dict[str, Any]], current: list[dict[str, An
 
 def check_inputs(manifest: dict[str, Any], input_dir: Path) -> tuple[bool, dict[str, list[str]], str]:
     try:
-        changes = compare_inventory(manifest["input_files"], hash_input_tree(input_dir))
+        skip = manifest.get("config", {}).get("skip_undecodable_names") is True
+        changes = compare_inventory(manifest["input_files"], hash_input_tree(input_dir, skip_undecodable_names=skip))
     except (OSError, SecurityError) as exc:
         return False, {"added": [], "missing": [], "modified": []}, str(exc)
     return not any(changes.values()), changes, ""

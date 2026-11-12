@@ -27,6 +27,7 @@ from auto_forensics.security import (
     IntegrityError,
     SecurityError,
     bounded_tree_paths,
+    display_name,
     stays_in_tree,
     validate_case_id,
 )
@@ -340,6 +341,9 @@ def _start_locked(
         for rel in result.notes.get("not_zip", []):
             gaps.append({"what": rel, "why": "archive is not a ZIP and was not opened"})
         gaps.extend(result.notes.pop("gaps", []))
+    for name in profile.undecodable_names:
+        gaps.append({"what": name, "why": "the file name is not valid text, so no check could read the file; "
+                                          "it is fingerprinted in the custody record. Rename a copy and run again"})
     for name in collisions:
         gaps.append({"what": name, "why": "archive member has the same name as an evidence file; member not cited"})
     disk_plan = next((p for p in plans if p.name == "disk_image"), None)
@@ -359,7 +363,7 @@ def _start_locked(
         custody_sha256=custody_sha256,
     )
     write_json(out / DRAFT_JSON, draft)
-    atomic_write_text(out / DRAFT_MD, render_markdown(draft))
+    atomic_write_text(out / DRAFT_MD, display_name(render_markdown(draft)))
     manifest = {
         "case_id": case_id,
         "finished_at": utc_now_iso(),

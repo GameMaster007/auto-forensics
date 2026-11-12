@@ -142,6 +142,11 @@ def iter_lines(path: Path, limit: int = MAX_SCAN_BYTES, decoding: str = "auto") 
     """
     with path.open("rb") as handle:
         data = handle.read(limit)
+    yield from lines_of(data, decoding)
+
+
+def lines_of(data: bytes, decoding: str = "auto") -> Iterator[tuple[int, str]]:
+    """``iter_lines`` for bytes already read (the caller bounds them)."""
     if decoding.startswith(GUESSED):
         decoding = decoding[len(GUESSED):]
     encoding = _text_encoding(data) if decoding == "auto" else (None if decoding == "bytes" else decoding)
@@ -186,6 +191,8 @@ class CorePipelineAgent:
             llama_model=ctx.llama_model,
             llm_provider=provider or "off",
             rules_dir=ctx.rules_dir,
+            # Triage keeps such files from every agent and lists them as coverage gaps.
+            skip_undecodable_names=True,
         )
         tools.allow("run_case", run_case)
         report = tools.call("run_case", config)

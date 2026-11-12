@@ -4,7 +4,9 @@
 
 Runs on 127.0.0.1 only. Every API call needs the session token printed when
 the server starts (the page reads it from the URL fragment, which browsers
-never send to a server or in a Referer). Other websites in the same browser
+never send to a server or in a Referer). The browser is started on a private
+launcher file that forwards to that link, so the token never appears on a
+command line other users of the computer can read. Other websites in the same browser
 cannot call the API: there is no CORS, the Host header must be the loopback
 address, and requests without the token are refused.
 
@@ -28,6 +30,8 @@ requests and sandboxes the document away from this server's origin.
 from __future__ import annotations
 
 import csv
+import hashlib
+import html
 import importlib.util
 import io
 import json
@@ -37,24 +41,27 @@ import secrets
 import socket
 import stat
 import sys
+import tempfile
 import threading
 import time
 import webbrowser
 from collections import OrderedDict
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PurePath, PurePosixPath
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from pydantic import BaseModel, Field
 
 from auto_forensics.artifacts import evtx_reader_name
+from auto_forensics.file_ops import directory_lock
 from auto_forensics.models import utc_now_iso
-from auto_forensics.security import SecurityError, sha256_file, stays_in_tree
+from auto_forensics.security import SecurityError, stays_in_tree
 from auto_forensics.timeline import timeline_sort_key
 from auto_forensics.version import __version__ as CORE_VERSION
 
 from . import AUTOPILOT_VERSION, signoff
-from .agents import iter_lines
+from .agents import MAX_SCAN_BYTES, lines_of
 from .coordinator import _safe_time, canonical_sha256
 from .disk_images import disk_support
 from .orchestrator import CUSTODY_FILE, DRAFT_JSON, MANIFEST_FILE, STAGES, read_json, start
@@ -62,6 +69,7 @@ from .report_html import render_html
 
 STATIC = Path(__file__).with_name("static")
 RUN_ID = re.compile(r"^[A-Za-z0-9._-]{2,64}-\d{8}T\d{6}Z$")
+EXPORT_STAMP = re.compile(r"^\d{8}T\d{6}Z$")
 CASE_ID = re.compile(r"^[A-Za-z0-9._-]{2,64}$")
 NONCE = re.compile(r"^[A-Za-z0-9_-]{43,128}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -80,16 +88,26 @@ MAX_JSON_BYTES = 64 * 1024 * 1024
 MAX_CITATIONS = 20
 MAX_EXCERPT_CHARS = 4000
 HEX_WINDOW = 256
+# A cited file up to this size is read once into memory: hashed, checked and excerpted from the same bytes.
 MAX_ROW_FILE_BYTES = 64 * 1024 * 1024
 MAX_CACHED_RECORD_CHARS = 40_000_000
+MAX_CACHED_HASHES = 256
+MAX_CACHED_RECORD_FILES = 2
+MAX_CACHED_ARTIFACT_RUNS = 8
+CACHE_STRIPES = 16
+MAX_TITLE_CHARS = 300
+MAX_RECOMMENDATION_CHARS = 1000
 
 MAX_BROWSE_FOLDERS = 500
+MAX_BROWSE_ENTRIES = 5000
 BROWSE_COUNT_ENTRIES = 20_000
 BROWSE_COUNT_SECONDS = 0.4
 MAX_PATH_CHARS = 4096
 
 MAX_DISK_ITEMS = 200
 MAX_DISK_TEXT = 300
+
+LAUNCHER_SECONDS = 60.0
 
 OLLAMA_PORT = 11434
 OLLAMA_TIMEOUT = 0.3
@@ -126,7 +144,16 @@ def _say(message: str) -> None:
 
 def _text(value: Any, limit: int = 300) -> str:
     """Text taken from a case or the file system, made safe to hand to the page: one line, bounded."""
-    return _UNSAFE.sub(" ", "" if value is None else str(value))[:limit]
+    # Cut first: the substitution is one character for one, so the result is the same, without scanning
+    # a long value whole.
+    return _UNSAFE.sub(" ", ("" if value is None else str(value))[:limit])
+
+
+def _capped(value: Any, limit: int) -> Any:
+    """A string cut to ``limit`` characters with an ellipsis; anything else unchanged."""
+    if isinstance(value, str) and len(value) > limit:
+        return value[:limit - 1] + "\u2026"
+    return value
 
 
 def _excerpt(text: str) -> tuple[str, bool]:
@@ -148,14 +175,15 @@ def _hex_dump(data: bytes, start: int) -> str:
     return "\n".join(lines)
 
 
-def _csv_fields(file: Path, row: int) -> str | None:
+def _csv_fields(data: bytes, row: int) -> str | None:
     """One CSV record as ``column: value`` lines.
 
     ``row`` is counted the way the core's CSV parser and verifier count it:
     the physical line on which the record ends (``csv`` reader ``line_num``).
+    The bytes are decoded as the core reads the file: UTF-8 with replacement,
+    no newline translation, a leading byte-order mark dropped.
     """
-    with file.open("r", encoding="utf-8", errors="replace", newline="") as handle:
-        text = handle.read().removeprefix("﻿")
+    text = data.decode("utf-8", errors="replace").removeprefix("\ufeff")
     reader = csv.DictReader(io.StringIO(text, newline=""))
     _ = reader.fieldnames
     for record in reader:
@@ -310,14 +338,21 @@ def browse(raw: str, *, home: Path | None = None) -> dict[str, Any]:
     result.update(path=str(target), parent=parent_of(str(target)))
     folders: list[dict[str, str]] = []
     below: list[str] = []
+    truncated = False
     files = size = 0
     unreadable = False
+    scanned = 0
     try:
         if not target.is_dir():
             result["error"] = "This folder does not exist. It may have been moved, or its drive is not connected."
             return result
         with os.scandir(target) as entries:
             for entry in entries:
+                scanned += 1
+                if scanned > MAX_BROWSE_ENTRIES:
+                    # A folder this big is not read to the end: the list and the count are partial.
+                    truncated = unreadable = True
+                    break
                 try:
                     if entry.is_symlink():
                         continue
@@ -341,9 +376,11 @@ def browse(raw: str, *, home: Path | None = None) -> dict[str, Any]:
         result["error"] = f"This folder cannot be opened ({type(exc).__name__})."
         return result
     folders.sort(key=lambda item: (item["name"].casefold(), item["name"]))
+    if truncated:
+        below = []  # the folder alone already exceeds the counting budget
     files, size, complete = _count_files(below, files, size, time.monotonic() + BROWSE_COUNT_SECONDS)
     complete = complete and not unreadable
-    result.update(folders=folders[:MAX_BROWSE_FOLDERS], truncated=len(folders) > MAX_BROWSE_FOLDERS,
+    result.update(folders=folders[:MAX_BROWSE_FOLDERS], truncated=truncated or len(folders) > MAX_BROWSE_FOLDERS,
                   file_count=files, total_bytes=size if complete else None, count_complete=complete)
     return result
 
@@ -592,6 +629,231 @@ def artifact_time(detail: Any) -> str | None:
 
 
 # --------------------------------------------------------------------------
+# Reading cited evidence
+# --------------------------------------------------------------------------
+
+
+class _Changed(Exception):
+    """The cited file changed, moved or was replaced while it was being read."""
+
+
+def _identity(status: os.stat_result) -> tuple[int, int, int, int, int]:
+    """Device, inode, size, modified time and changed time of a file.
+
+    Setting a file's modified time back with ``utime`` still moves its
+    changed time (``st_ctime``), which no ordinary program can set, so on
+    Linux and macOS content swapped in place cannot keep this identity. On
+    Windows ``st_ctime`` is the creation time and adds no such guarantee.
+    """
+    return status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns
+
+
+def _open_regular(file: Path) -> tuple[int, os.stat_result]:
+    """A read-only descriptor on a regular file (never through a final link), and its status."""
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    descriptor = os.open(file, flags)
+    try:
+        status = os.fstat(descriptor)
+        if not stat.S_ISREG(status.st_mode):
+            raise OSError("not a regular file")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor, status
+
+
+def _read_at(descriptor: int, start: int, length: int) -> bytes:
+    """Up to ``length`` bytes from ``start``; fewer at the end of the file."""
+    os.lseek(descriptor, start, os.SEEK_SET)
+    parts: list[bytes] = []
+    left = length
+    while left > 0:
+        chunk = os.read(descriptor, min(left, 1024 * 1024))
+        if not chunk:
+            break
+        parts.append(chunk)
+        left -= len(chunk)
+    return b"".join(parts)
+
+
+def _sha256_fd(descriptor: int, size: int) -> str:
+    """SHA-256 of exactly ``size`` bytes through an open descriptor; a file that grew or shrank is refused."""
+    digest = hashlib.sha256()
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    left = size
+    while left > 0:
+        chunk = os.read(descriptor, min(left, 1024 * 1024))
+        if not chunk:
+            raise _Changed("the file got shorter")
+        digest.update(chunk)
+        left -= len(chunk)
+    if os.read(descriptor, 1):
+        raise _Changed("the file got longer")
+    return digest.hexdigest()
+
+
+def _still_same(file: Path, descriptor: int, status: os.stat_result) -> None:
+    """Raise ``_Changed`` unless the open file and the file at the path both still have ``status``'s identity."""
+    try:
+        now_open = os.fstat(descriptor)
+        now_named = os.stat(file, follow_symlinks=False)
+    except OSError as exc:
+        raise _Changed("the file is gone") from exc
+    if _identity(now_open) != _identity(status) or _identity(now_named) != _identity(status):
+        raise _Changed("the file changed")
+
+
+@contextmanager
+def _snapshot(name: str, data: bytes) -> Iterator[Path]:
+    """The given bytes as a private file named ``name``, for readers that take a path. Removed afterwards."""
+    with tempfile.TemporaryDirectory(prefix="af-excerpt-") as folder:
+        path = Path(folder) / name
+        with path.open("xb") as handle:
+            handle.write(data)
+        yield path
+
+
+class _Source:
+    """One cited file, held open while it is checked and read.
+
+    A file up to ``MAX_ROW_FILE_BYTES`` is read once: ``data`` holds its bytes,
+    ``digest`` is their SHA-256, and every excerpt is cut from those bytes.
+    A larger file is hashed and read through the same descriptor, and
+    ``check`` refuses it if it changed in between.
+    """
+
+    def __init__(self, file: Path, descriptor: int, status: os.stat_result, data: bytes | None, digest: str) -> None:
+        self.file, self.descriptor, self.status, self.data, self.digest = file, descriptor, status, data, digest
+
+    def read(self, start: int, length: int) -> bytes:
+        if self.data is not None:
+            return self.data[start:start + length]
+        return _read_at(self.descriptor, start, length)
+
+    def check(self) -> None:
+        _still_same(self.file, self.descriptor, self.status)
+
+
+# --------------------------------------------------------------------------
+# Run folder locks
+# --------------------------------------------------------------------------
+
+
+def pid_alive(pid: int) -> bool:
+    """True when a process with this id runs on this computer (or cannot be ruled out)."""
+    if pid <= 0:
+        return False
+    if pid == os.getpid():
+        return True
+    if sys.platform == "win32":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return kernel32.GetLastError() == 5  # access denied: it exists
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True
+            return code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True  # it exists but belongs to someone else
+    return True
+
+
+_LOCK_PID = re.compile(r"^pid=(\d{1,10})$", re.MULTILINE)
+_LOCK_HOST = re.compile(r"^host=(.{1,255})$", re.MULTILINE)
+
+
+def clear_stale_lock(lock_file: Path) -> bool:
+    """Remove a run folder lock whose recorded owner is no longer running. True when no lock is left.
+
+    The lock records ``pid=`` (and, from this version, ``host=``). A lock with no
+    readable owner, an owner on another computer, or an owner still running is kept.
+    """
+    try:
+        before = lock_file.lstat()
+        if not stat.S_ISREG(before.st_mode):
+            return False
+        with lock_file.open("rb") as handle:
+            text = handle.read(512).decode("ascii", errors="replace")
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    pid = _LOCK_PID.search(text)
+    host = _LOCK_HOST.search(text)
+    this_host = socket.gethostname().encode("ascii", errors="replace")[:255].replace(b"\n", b"?").decode("ascii")
+    if pid is None or (host is not None and host.group(1) != this_host):
+        return False
+    if pid_alive(int(pid.group(1))):
+        return False
+    try:
+        current = lock_file.lstat()
+        if (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
+            return False  # replaced since it was read: someone else holds it now
+        lock_file.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return False
+    return True
+
+
+# --------------------------------------------------------------------------
+# Opening the page
+# --------------------------------------------------------------------------
+
+
+def write_launcher(url: str) -> Path:
+    """A one-line page, readable only by this user, that sends the browser to ``url``.
+
+    Opening ``url`` itself would put the session token on the command line of
+    the browser launcher, where any user of this computer can read it. The
+    browser is given this file's path instead.
+    """
+    folder = Path(tempfile.mkdtemp(prefix="af-open-"))  # created readable by this user only
+    page = folder / "open.html"
+    target = html.escape(url, quote=True)
+    text = ("<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"referrer\" content=\"no-referrer\">"
+            f"<meta http-equiv=\"refresh\" content=\"0;url={target}\"><title>Auto Forensics</title></head>"
+            f"<body><p><a href=\"{target}\">Open the Auto Forensics review page</a></p></body></html>\n")
+    descriptor = os.open(page, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    return page
+
+
+def remove_launcher(page: Path) -> None:
+    try:
+        page.unlink(missing_ok=True)
+        page.parent.rmdir()
+    except OSError:
+        pass
+
+
+def open_in_browser(url: str, *, delay: float = LAUNCHER_SECONDS,
+                    opener: Callable[[str], Any] = webbrowser.open) -> tuple[Path, threading.Timer]:
+    """Open ``url`` through a launcher file, removed after ``delay`` seconds; returns it and its timer."""
+    page = write_launcher(url)
+    timer = threading.Timer(delay, remove_launcher, args=(page,))
+    timer.daemon = True
+    timer.start()
+    try:
+        opener(page.as_uri())
+    except Exception:  # noqa: BLE001 - no browser: the link is printed in the server window
+        pass
+    return page, timer
+
+
+# --------------------------------------------------------------------------
 # State
 # --------------------------------------------------------------------------
 
@@ -615,7 +877,7 @@ class ReviewState:
         self.token = secrets.token_urlsafe(32)
         self.lock = threading.Lock()
         self.jobs: dict[str, dict[str, Any]] = {}
-        self._artifact_cache: dict[str, tuple[Any, dict[str, Any]]] = {}
+        self._artifact_cache: OrderedDict[str, tuple[Any, dict[str, Any]]] = OrderedDict()
         # Fingerprints still waiting for the analyst to confirm they copied them.
         self.shown: dict[str, dict[str, str]] = {}
         # One-time links to exported HTML reports: nonce -> (run id, export folder, expiry on self.clock).
@@ -625,9 +887,13 @@ class ReviewState:
         self._cache_lock = threading.Lock()
         self._summaries: dict[str, tuple[Any, dict[str, Any]]] = {}
         self._timelines: OrderedDict[str, tuple[Any, dict[str, list[tuple[str, str, int | None]]]]] = OrderedDict()
-        self._hash_lock = threading.Lock()
-        self._hashes: OrderedDict[tuple[str, int, int], str] = OrderedDict()
-        self._records: OrderedDict[tuple[str, int, int], dict[int, str]] = OrderedDict()
+        # Slow work on one file runs under one of these, picked by the file: two requests for the same
+        # file share the work, and requests for unrelated files rarely wait for each other.
+        self._stripes = [threading.Lock() for _ in range(CACHE_STRIPES)]
+        # Hashes of files too large to read whole, keyed by path and identity (see _identity).
+        self._hashes: OrderedDict[tuple[Any, ...], str] = OrderedDict()
+        # Parsed records by (file name, SHA-256 of the bytes they were parsed from).
+        self._records: OrderedDict[tuple[str, str], dict[int, str]] = OrderedDict()
         self._ollama: tuple[float, bool] | None = None
 
     # ---- runs --------------------------------------------------------------
@@ -641,21 +907,30 @@ class ReviewState:
         return path
 
     def exported_to(self, run_id: str) -> Path | None:
-        """Latest export folder of this run that holds a final report, or None."""
-        found = sorted(p.parent for p in self.exports.glob(f"{run_id}-export-*/{signoff.FINAL_JSON}"))
+        """Latest export folder of this run that holds a final report, or None.
+
+        Only ``<run id>-export-<stamp>`` counts: a pattern match would also take
+        the exports of another case whose id starts with ``<run id>-export-``.
+        """
+        found = sorted(path for owner, path in self._exports() if owner == run_id)
         return found[-1] if found else None
+
+    def _exports(self) -> list[tuple[str, Path]]:
+        """(run id, folder) for every export folder that holds a final report."""
+        out = []
+        try:
+            for path in self.exports.iterdir():
+                run_id, marker, stamp = path.name.rpartition("-export-")
+                if (marker and RUN_ID.fullmatch(run_id) and EXPORT_STAMP.fullmatch(stamp)
+                        and (path / signoff.FINAL_JSON).is_file()):
+                    out.append((run_id, path))
+        except OSError:
+            pass
+        return out
 
     def _exported_runs(self) -> set[str]:
         """Run ids that have an export, from one pass over the exports folder."""
-        done = set()
-        try:
-            for path in self.exports.iterdir():
-                run_id, marker, _ = path.name.rpartition("-export-")
-                if marker and RUN_ID.fullmatch(run_id) and (path / signoff.FINAL_JSON).is_file():
-                    done.add(run_id)
-        except OSError:
-            pass
-        return done
+        return {run_id for run_id, _ in self._exports()}
 
     def _custody_facts(self, path: Path) -> tuple[str | None, str | None]:
         """(started_at, evidence_folder) from the custody record, or Nones while it does not exist yet."""
@@ -861,27 +1136,43 @@ class ReviewState:
             if path.is_symlink() or not path.is_dir() or path.resolve().parent != self.runs:
                 if job.get("state") != "failed":
                     raise SecurityError("Unknown run")
-                # The run failed before it made a folder: there is only the list entry to clear.
+                # The run failed before it made a folder: there is only the list entry to clear,
+                # and its lock if whoever left it is no longer running.
+                clear_stale_lock(lock_file)
                 self.jobs.pop(run_id, None)
-                lock_file.unlink(missing_ok=True)
                 return None
             if not self.can_remove(run_id):
                 raise SecurityError("Only a run that failed or did not finish can be removed. "
                                     "This run has a finished draft, so it is kept.")
-            self.removed.mkdir(exist_ok=True)
-            moved = self.removed / f"{run_id}-{_stamp()}"
-            attempt = 1
-            while moved.exists():
-                attempt += 1
-                moved = self.removed / f"{run_id}-{_stamp()}-{attempt}"
-            try:
-                path.rename(moved)
-            except OSError as exc:
-                _say(f"Remove of {run_id} failed: {type(exc).__name__}: {exc}")
-                raise SecurityError(f"The run folder could not be moved ({type(exc).__name__}). "
-                                    "Close anything that has it open and try again.") from exc
-            # A run that was killed leaves its lock behind; with the folder gone it guards nothing.
-            lock_file.unlink(missing_ok=True)
+            with ExitStack() as held:
+                # The lock every writer of a run folder takes (a run, a decision, a signature), so a run
+                # that another window or the command line is still writing is never moved.
+                for attempt in (1, 2):
+                    try:
+                        held.enter_context(directory_lock(path))
+                        break
+                    except SecurityError as exc:
+                        # A lock left by a program that is no longer running is cleared once, then retried.
+                        if attempt == 2 or not clear_stale_lock(lock_file):
+                            raise SecurityError(
+                                "This run is still being written by another program (another review window or "
+                                "the command line). Wait for it to finish, then try again.") from exc
+                if not self.can_remove(run_id):
+                    raise SecurityError("Only a run that failed or did not finish can be removed. "
+                                        "This run has a finished draft, so it is kept.")
+                self.removed.mkdir(exist_ok=True)
+                moved = self.removed / f"{run_id}-{_stamp()}"
+                attempt = 1
+                while moved.exists():
+                    attempt += 1
+                    moved = self.removed / f"{run_id}-{_stamp()}-{attempt}"
+                try:
+                    path.rename(moved)
+                except OSError as exc:
+                    _say(f"Remove of {run_id} failed: {type(exc).__name__}: {exc}")
+                    raise SecurityError(f"The run folder could not be moved ({type(exc).__name__}). "
+                                        "Close anything that has it open and try again.") from exc
+            # Leaving the block released the lock this removal took.
             self.jobs.pop(run_id, None)
             self.shown.pop(run_id, None)
         with self._cache_lock:
@@ -980,8 +1271,9 @@ class ReviewState:
         key = tuple((str(f), f.stat().st_size, f.stat().st_mtime_ns) for f in files)
         with self.lock:
             cached = self._artifact_cache.get(str(path))
-        if cached and cached[0] == key:
-            return cached[1]
+            if cached and cached[0] == key:
+                self._artifact_cache.move_to_end(str(path))
+                return cached[1]
         out: dict[str, Any] = {}
         for file in files:
             if file.is_symlink() or not stays_in_tree(file, base):
@@ -995,6 +1287,9 @@ class ReviewState:
                 out.update({str(k): v for k, v in found.items() if isinstance(v, dict)})
         with self.lock:
             self._artifact_cache[str(path)] = (key, out)
+            self._artifact_cache.move_to_end(str(path))
+            while len(self._artifact_cache) > MAX_CACHED_ARTIFACT_RUNS:
+                self._artifact_cache.popitem(last=False)
         return out
 
     def details_for(self, run_id: str, finding_id: str) -> dict[str, Any]:
@@ -1002,81 +1297,131 @@ class ReviewState:
 
     # ---- evidence excerpts -------------------------------------------------
 
-    def _file_hash(self, file: Path) -> str:
-        """SHA-256 of a file, remembered until its size or modified time changes.
+    def _stripe(self, key: Any) -> threading.Lock:
+        return self._stripes[hash(key) % CACHE_STRIPES]
 
-        Opening ten findings that cite one 2 GB image hashes it once. One
-        hash runs at a time, so two requests for the same file share the work.
+    def _hash_large(self, file: Path, descriptor: int, status: os.stat_result) -> str:
+        """SHA-256 of a file too large to read whole, through its open descriptor.
+
+        Remembered by path and identity (device, inode, size, modified and
+        changed time), so opening ten findings that cite one 2 GB image hashes
+        it once, and a file rewritten with its modified time set back is
+        hashed again. Two requests for the same file share the work.
         """
-        status = file.stat()
-        key = (str(file), status.st_size, status.st_mtime_ns)
-        with self._hash_lock:
-            if key in self._hashes:
-                self._hashes.move_to_end(key)
-                return self._hashes[key]
-            digest = sha256_file(file).lower()
-            after = file.stat()
-            if (after.st_size, after.st_mtime_ns) == key[1:]:
+        key = (str(file), *_identity(status))
+        with self._stripe(key):
+            with self._cache_lock:
+                if key in self._hashes:
+                    self._hashes.move_to_end(key)
+                    return self._hashes[key]
+            digest = _sha256_fd(descriptor, status.st_size)
+            _still_same(file, descriptor, status)
+            with self._cache_lock:
                 self._hashes[key] = digest
-                while len(self._hashes) > 256:
+                while len(self._hashes) > MAX_CACHED_HASHES:
                     self._hashes.popitem(last=False)
             return digest
 
-    def _parsed_records(self, file: Path) -> dict[int, str]:
-        """row -> record text for a file the core parses into records (an event log, a registry hive).
+    @contextmanager
+    def _pinned(self, file: Path) -> Iterator[_Source]:
+        """Open a cited file and fingerprint it; the excerpt is read while it is held (see ``_Source``)."""
+        descriptor, status = _open_regular(file)
+        try:
+            if status.st_size <= MAX_ROW_FILE_BYTES:
+                data = _read_at(descriptor, 0, status.st_size)
+                if len(data) != status.st_size or _read_at(descriptor, status.st_size, 1):
+                    raise _Changed("the size changed")
+                _still_same(file, descriptor, status)
+                source = _Source(file, descriptor, status, data, hashlib.sha256(data).hexdigest())
+            else:
+                source = _Source(file, descriptor, status, None, self._hash_large(file, descriptor, status))
+            yield source
+        finally:
+            os.close(descriptor)
 
-        Parsing a large event log takes a while, so the last two files are kept.
+    def _record_text(self, source: _Source, row: int) -> str | None:
+        """The text of record ``row`` of a file the core parses into records (an event log, a registry hive).
+
+        Records are parsed from the checked bytes (a private copy of them) and
+        kept for the last two files, unless there is too much text to keep;
+        then parsing stops at the cited record.
         """
         from auto_forensics import verifier
         from auto_forensics.plugins import ArtifactParserRegistry
 
-        status = file.stat()
-        key = (str(file), status.st_size, status.st_mtime_ns)
-        with self._hash_lock:
-            if key in self._records:
-                self._records.move_to_end(key)
-                return self._records[key]
+        key = (source.file.name, source.digest)
+        with self._stripe(key):
+            with self._cache_lock:
+                held = self._records.get(key)
+                if held is not None:
+                    self._records.move_to_end(key)
+            if held is not None:
+                return held.get(row)
             registry = ArtifactParserRegistry()
             registry.register_defaults()
+            if source.data is not None:
+                with _snapshot(source.file.name, source.data) as copy:
+                    events = registry.parse(copy)
+            else:
+                # Too large to copy: parsed where it is, and refused if it changed meanwhile.
+                events = registry.parse(source.file)
+                source.check()
             rows: dict[int, str] = {}
+            found: str | None = None
             size = 0
-            for index, event in enumerate(registry.parse(file), start=1):
+            keep = True
+            for index, event in enumerate(events, start=1):
                 recorded = event.metadata.get("row")
-                row = recorded if isinstance(recorded, int) and recorded >= 1 else index
-                if row not in rows:
-                    rows[row] = verifier._event_text(event)[:MAX_EXCERPT_CHARS + 1]
-                    size += len(rows[row])
-            if size <= MAX_CACHED_RECORD_CHARS:
-                self._records[key] = rows
-                while len(self._records) > 2:
-                    self._records.popitem(last=False)
-            return rows
+                number = recorded if isinstance(recorded, int) and recorded >= 1 else index
+                if keep:
+                    if number in rows:
+                        continue
+                    rows[number] = verifier._event_text(event)[:MAX_EXCERPT_CHARS + 1]
+                    size += len(rows[number])
+                    if number == row:
+                        found = rows[number]
+                    if size > MAX_CACHED_RECORD_CHARS:
+                        keep, rows = False, {}
+                        if found is not None:
+                            break
+                elif number == row:
+                    found = verifier._event_text(event)[:MAX_EXCERPT_CHARS + 1]
+                    break
+            if keep:
+                with self._cache_lock:
+                    self._records[key] = rows
+                    while len(self._records) > MAX_CACHED_RECORD_FILES:
+                        self._records.popitem(last=False)
+            return found
 
-    def _cited_text(self, finding: dict[str, Any], citation: dict[str, Any], file: Path) -> tuple[str | None, str]:
+    def _cited_text(self, finding: dict[str, Any], citation: dict[str, Any], source: _Source) -> tuple[str | None, str]:
         """(text, what it is) for one citation of a file whose fingerprint was just confirmed."""
         from auto_forensics import verifier
 
+        file = source.file
         row, offset = citation.get("row"), citation.get("offset")
         if type(row) is int and row >= 1:
             if finding.get("worker") == "memory":
                 return None, ("This finding points to a process found in a memory image. "
                               "There is no line of text to show for it.")
             if str(citation.get("artifact_id") or "").startswith("file-"):
-                # A text-scanning agent: the row is a physical line of the file.
-                text = next((line for number, line in iter_lines(file) if number == row), None)
+                # A text-scanning agent: the row is a physical line of the part of the file it scanned.
+                text = next((line for number, line in lines_of(source.read(0, MAX_SCAN_BYTES)) if number == row), None)
                 what = f"Line {row} of this file"
             elif verifier._is_structured_artifact(file):
-                text = self._parsed_records(file).get(row)
+                text = self._record_text(source, row)
                 what = f"Record {row} of this file, as the tool reads it"
-            elif file.stat().st_size > MAX_ROW_FILE_BYTES:
+            elif source.data is None:
                 return None, (f"This file is too large to show a row from here. "
                               f"Open it in a viewer and go to row {row}.")
             elif file.suffix.lower() == ".csv":
-                text = _csv_fields(file, row)
+                text = _csv_fields(source.data, row)
                 what = f"Row {row} of this file, with the column names from its first line"
             else:
-                # The core's own row reader, so the row shown is the row its verifier checked.
-                text = verifier._read_row(file, row)
+                # The core's own row reader, so the row shown is the row its verifier checked,
+                # run on a private copy of the bytes that were just fingerprinted.
+                with _snapshot(file.name, source.data) as copy:
+                    text = verifier._read_row(copy, row)
                 if text is not None:
                     text = _json_record(text)
                 what = f"Row {row} of this file"
@@ -1085,9 +1430,7 @@ class ReviewState:
             return text, f"{what}, read again just now."
         start = offset if type(offset) is int and offset >= 0 else 0
         start -= start % 16
-        with file.open("rb") as handle:
-            handle.seek(start)
-            data = handle.read(HEX_WINDOW)
+        data = source.read(start, HEX_WINDOW)
         if not data:
             return None, "This file is shorter than the position the finding points to."
         return _hex_dump(data, start), (f"{len(data)} bytes starting at byte {start}, shown as hexadecimal "
@@ -1135,20 +1478,23 @@ class ReviewState:
             return stop("This file could not be found where the run read it. It may have been moved or renamed, "
                         "or its drive is not connected.")
         try:
-            before = _sig(file)
-            current = self._file_hash(file)
+            with self._pinned(file) as source:
+                if source.digest != expected:
+                    return stop("This file has changed since the run started: its fingerprint no longer matches. "
+                                "Its contents are not shown.")
+                view["file_ok"] = True
+                try:
+                    text, note = self._cited_text(finding, citation, source)
+                except _Changed:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - only the type; a library message can quote the file
+                    text, note = None, ("The file is unchanged, but this part of it could not be read "
+                                        f"({type(exc).__name__}).")
+                source.check()
+        except _Changed:
+            return stop("This file changed while it was being read, so its contents are not shown.")
         except OSError as exc:
             return stop(f"This file could not be read ({type(exc).__name__}).")
-        if current != expected:
-            return stop("This file has changed since the run started: its fingerprint no longer matches. "
-                        "Its contents are not shown.")
-        view["file_ok"] = True
-        try:
-            text, note = self._cited_text(finding, citation, file)
-        except Exception as exc:  # noqa: BLE001 - only the type; a library message can quote the file
-            text, note = None, f"The file is unchanged, but this part of it could not be read ({type(exc).__name__})."
-        if _sig(file) != before:
-            return stop("This file changed while it was being read, so its contents are not shown.")
         if text is not None:
             view["excerpt"], cut = _excerpt(text)
             note += " The file still matches the fingerprint recorded when the run started."
@@ -1397,6 +1743,9 @@ def create_app(state: ReviewState) -> Any:
             times = state.event_times(path, draft)
             artifact_details = state.artifact_details(path)
             for finding in draft["findings"]:
+                # Importers copy evidence text into titles; the page needs only enough to recognise one.
+                finding["title"] = _capped(finding.get("title"), MAX_TITLE_CHARS)
+                finding["recommendation"] = _capped(finding.get("recommendation"), MAX_RECOMMENDATION_CHARS)
                 choice = decisions.get(finding["finding_id"]) or {}
                 finding["decision"] = choice.get("decision") if choice.get("decision") in signoff.DECISIONS else "pending"
                 finding["decided_by"] = str(choice.get("actor", ""))
@@ -1532,8 +1881,19 @@ def serve(workspace: Path, port: int = 8765, open_browser: bool = True) -> int:
     print(f"  Open:      {url}")
     print("  Keep this window open while you work. Press Ctrl+C to stop.")
     print("  Fingerprints are printed here as well; keep them with your case notes.", flush=True)
+    launched: list[tuple[Path, threading.Timer]] = []
     if open_browser:
-        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+        # The browser gets a private file that forwards to the page, never the token on its command line.
+        opener = threading.Timer(1.0, lambda: launched.append(open_in_browser(url)))
+        opener.daemon = True
+        opener.start()
     server = uvicorn.Server(uvicorn.Config(create_app(state), log_level="warning"))
-    server.run(sockets=[sock])
+    try:
+        server.run(sockets=[sock])
+    finally:
+        if open_browser:
+            opener.cancel()
+        for page, timer in launched:
+            timer.cancel()
+            remove_launcher(page)
     return 0

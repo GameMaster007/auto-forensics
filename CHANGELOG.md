@@ -4,6 +4,21 @@
 
 ### Autopilot plugin and detection
 
+- Review page hardening (second security review): the browser is opened
+  through a private launcher file, so the session token is no longer on a
+  command line; an evidence excerpt is hashed and cut from the same bytes
+  (large files through one descriptor, checked by inode and changed time),
+  so content forged with its old modified time is refused; removing a run
+  takes the run folder lock and clears it only when its recorded owner is
+  no longer running (locks now record the host too); an export folder of
+  another case is never taken for this run's; parsing, caches, folder
+  listing and finding titles are bounded. A file whose name is not valid
+  UTF-8 is now listed as a coverage gap (with U+FFFD for the bad bytes) and
+  kept in the custody record, instead of making every agent fail; the core
+  pipeline skips such names only when asked (`skip_undecodable_names`, recorded
+  in its manifest so its own checks skip the same files). Export renders
+  and encodes everything first and writes `final_report.json` last, so a
+  failure leaves no half-made export.
 - Review page backend: live progress for a run (stage, each check, bytes
   fingerprinted); a folder browser so no path has to be typed; the cited
   row of a finding re-read from the evidence after its SHA-256 is checked;
