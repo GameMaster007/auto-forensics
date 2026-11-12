@@ -5,6 +5,9 @@ findings, the evidence inventory, and the core report. Before a finding
 from a non-core agent is kept, its citation is checked against the
 inventory and its cited row is re-read and compared by SHA-256 with the
 digest the agent recorded. The row's words are not copied into the draft.
+Disk-artefact findings cite a registry cell, a byte range or a database
+row inside a copied file; for those the copy is hashed again and the cited
+record is re-read from its location (see ``verify_artifact_finding``).
 """
 
 from __future__ import annotations
@@ -19,6 +22,9 @@ from typing import Any
 from auto_forensics.models import Finding
 
 from .agents import iter_lines, line_digest
+from .disk_parsers import Rereader, locator_position
+
+ARTIFACT_WORKER = "disk_artifacts"
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 KILL_CHAIN = (
@@ -63,8 +69,53 @@ def _evidence_value(finding: Finding, key: str) -> str | None:
     return None
 
 
+def _artifact_checks(finding: Finding) -> dict[int, tuple[str, str]]:
+    """{citation index: (locator, sha256)} from the ``cite[n]=locator|sha256`` evidence entries."""
+    checks: dict[int, tuple[str, str]] = {}
+    for item in finding.evidence:
+        found = re.fullmatch(r"cite\[(\d{1,3})\]=([a-z]+(?::[A-Za-z0-9_]+){0,2})\|([0-9a-f]{64})", str(item))
+        if found:
+            checks[int(found[1])] = (found[2], found[3])
+    return checks
+
+
+def verify_artifact_finding(finding: Finding, locate: dict[str, Path], rereader: Rereader) -> str | None:
+    """Re-check a disk-artefact finding against the copies in the run folder.
+
+    For every citation: the copy is hashed again and must still have the
+    SHA-256 recorded when it was copied out of the image, and the cited
+    record (a registry cell, a byte range, a database row) is read again
+    from the cited place and must have the SHA-256 the agent recorded. A
+    citation whose locator is ``file`` has no smaller place to re-read; for
+    it the whole-copy hash is the check.
+    """
+    checks = _artifact_checks(finding)
+    for index, citation in enumerate(finding.citations):
+        path = locate.get(citation.source_file)
+        if path is None:
+            return "cited copy is not in the run folder"
+        if rereader.file_sha256(path) != citation.sha256.lower():
+            return "copied file no longer matches its recorded hash"
+        if index not in checks:
+            return "citation has no re-check record"
+        locator, expected = checks[index]
+        try:
+            position = locator_position(locator)
+        except ValueError:
+            return "citation has a malformed re-check record"
+        if position != (citation.row, citation.offset):
+            return "citation does not point where its re-check record does"
+        actual = rereader.digest(path, locator)
+        if actual is None:
+            return "cited record can no longer be read"
+        if actual != expected:
+            return "cited record does not match the agent's record"
+    return None
+
+
 def verify_agent_finding(
     finding: Finding, input_dir: Path, inventory: dict[str, str], locate: dict[str, Path] | None = None,
+    rereader: Rereader | None = None,
 ) -> str | None:
     """Return None when the finding's citations hold, else the reason it is dropped.
 
@@ -73,6 +124,16 @@ def verify_agent_finding(
     """
     if not finding.citations:
         return "no citation"
+    if finding.worker == ARTIFACT_WORKER:
+        for citation in finding.citations:
+            if not citation.is_complete():
+                return "incomplete citation"
+            if inventory.get(citation.source_file) != citation.sha256.lower():
+                return "cited file is not in the evidence inventory with that hash"
+        if rereader is not None:
+            return verify_artifact_finding(finding, locate or {}, rereader)
+        with Rereader() as own:
+            return verify_artifact_finding(finding, locate or {}, own)
     expected_line = _evidence_value(finding, "line_sha256")
     for citation in finding.citations:
         if not citation.is_complete():
@@ -105,6 +166,14 @@ def check_label(finding: Finding) -> str:
         return "member hash; row checked by the archive's core run"
     if finding.worker == "disk_image":
         return "copied file hash; row checked by the image's core run"
+    if finding.worker == ARTIFACT_WORKER:
+        checks = _artifact_checks(finding)
+        located = sum(1 for locator, _ in checks.values() if locator != "file")
+        if located == len(finding.citations):
+            return "record re-read; copy re-hashed"
+        if located == 0:
+            return "file-level: copy re-hashed, no smaller location"
+        return f"record re-read for {located} of {len(finding.citations)}; rest file-level; copy re-hashed"
     return "file hash only"
 
 
@@ -123,20 +192,21 @@ def merge_findings(
     dropped: list[dict[str, str]] = []
     seen: set[tuple[Any, ...]] = set()
     ids: set[str] = set()
-    for finding in findings:
-        if finding.worker != "core_pipeline":
-            reason = verify_agent_finding(finding, input_dir, inventory, locate)
-            if reason:
-                dropped.append({"finding_id": finding.finding_id, "worker": finding.worker, "reason": reason})
+    with Rereader() as rereader:  # keeps whole-copy hashes and open databases for this merge only
+        for finding in findings:
+            if finding.worker != "core_pipeline":
+                reason = verify_agent_finding(finding, input_dir, inventory, locate, rereader)
+                if reason:
+                    dropped.append({"finding_id": finding.finding_id, "worker": finding.worker, "reason": reason})
+                    continue
+                finding.verification = check_label(finding)
+            key = (finding.title, _citation_identity(finding))
+            if key in seen or finding.finding_id in ids:
+                dropped.append({"finding_id": finding.finding_id, "worker": finding.worker, "reason": "duplicate"})
                 continue
-            finding.verification = check_label(finding)
-        key = (finding.title, _citation_identity(finding))
-        if key in seen or finding.finding_id in ids:
-            dropped.append({"finding_id": finding.finding_id, "worker": finding.worker, "reason": "duplicate"})
-            continue
-        seen.add(key)
-        ids.add(finding.finding_id)
-        kept.append(finding)
+            seen.add(key)
+            ids.add(finding.finding_id)
+            kept.append(finding)
     kept.sort(key=lambda f: (SEVERITY_ORDER.get(f.severity, 9), -float(f.confidence or 0), f.finding_id))
     return kept, dropped
 

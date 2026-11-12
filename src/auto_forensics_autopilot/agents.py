@@ -21,6 +21,7 @@ import json
 import re
 import shutil
 import subprocess
+import threading
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,6 +52,9 @@ class AgentContext:
     rules_dir: Path | None = None
     # Custody hashes by evidence path, so large files (disk images) are not read again.
     inventory: dict[str, str] = field(default_factory=dict)
+    # Work one agent does for another in the same run (the files copied out of disk images), and its lock.
+    shared: dict[str, Any] = field(default_factory=dict)
+    lock: Any = field(default_factory=threading.Lock)
 
 
 @dataclass(slots=True)
@@ -590,6 +594,94 @@ def disk_available() -> tuple[bool, str]:
     return disk_support()
 
 
+@dataclass(slots=True)
+class ExtractedImage:
+    """One disk image whose artefacts were copied into the run folder."""
+
+    image: str
+    folder: str
+    image_dir: Path
+    members: list[Any]
+
+    @property
+    def summary_rel(self) -> str:
+        return f"disk/{self.folder}/disk_summary.json"
+
+
+@dataclass(slots=True)
+class DiskExtraction:
+    images: list[ExtractedImage] = field(default_factory=list)
+    gaps: list[dict[str, str]] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    bytes_copied: int = 0
+    gaps_reported: bool = False
+    members_reported: bool = False
+
+    def claim_members(self) -> dict[str, Any]:
+        """``{"members": [...]}`` for the first agent that asks, ``{}`` after: the copies are listed once."""
+        if self.members_reported:
+            return {}
+        self.members_reported = True
+        return {"members": self.members_out()}
+
+    def members_out(self) -> list[dict[str, Any]]:
+        out = []
+        for image in self.images:
+            for member in image.members:
+                record = member.to_dict()
+                record["folder"] = image.folder
+                out.append(record)
+        return out
+
+    def take_gaps(self) -> list[dict[str, str]]:
+        """The extraction's coverage gaps, handed to the first agent that asks so they are listed once."""
+        if self.gaps_reported:
+            return []
+        self.gaps_reported = True
+        return list(self.gaps)
+
+
+def extract_disk_images(ctx: AgentContext, tools: ToolRegistry) -> DiskExtraction:
+    """Copy artefacts out of every disk image, once per run.
+
+    The disk-image agent and the disk-artefacts agent both need the copies.
+    Whichever runs first does the work under the run's lock; the other waits
+    and gets the same result.
+    """
+    from .disk_images import DiskBudget, group_images, read_image
+
+    with ctx.lock:
+        done = ctx.shared.get("disk_extraction")
+        if done is not None:
+            return done
+        tools.allow("read_disk_image", read_image)
+        budget = DiskBudget()
+        groups, orphans = group_images(ctx.profile.kinds.get("disk_image", []))
+        extraction = DiskExtraction(gaps=[
+            {"what": rel, "why": "disk image segment without its first segment; it was not opened"} for rel in orphans
+        ])
+        for rel, segment_list in groups.items():
+            path = ctx.input_dir / rel
+            digest = ctx.inventory.get(rel) or sha256_file(path).lower()
+            segments = [{"path": seg, "sha256": ctx.inventory.get(seg, ""),
+                         "size_bytes": (ctx.input_dir / seg).stat().st_size} for seg in segment_list]
+            folder = f"{Path(rel).stem[:24]}-{digest[:8]}-{hashlib.sha256(rel.encode()).hexdigest()[:8]}"
+            image_dir = ctx.run_dir / "disk" / folder
+            try:
+                result = tools.call("read_disk_image", path, rel, digest, image_dir, budget, segments=segments)
+            except Exception as exc:  # noqa: BLE001 - an unreadable image is reported, not fatal
+                extraction.errors.append(f"{rel}: {exc}")
+                extraction.gaps.append({"what": rel, "why": f"disk image could not be opened: {exc}"[:300]})
+                continue
+            extraction.gaps.extend(result.gaps)
+            (image_dir / "disk_summary.json").write_text(
+                json.dumps(result.summary, indent=2, sort_keys=True, ensure_ascii=True) + "\n", encoding="utf-8")
+            extraction.images.append(ExtractedImage(rel, folder, image_dir, list(result.members)))
+        extraction.bytes_copied = budget.used_bytes
+        ctx.shared["disk_extraction"] = extraction
+        return extraction
+
+
 class DiskImageAgent:
     """Open disk images read-only, copy key artefacts into the run folder, and analyse them.
 
@@ -602,46 +694,21 @@ class DiskImageAgent:
     name = "disk_image"
 
     def run(self, ctx: AgentContext, store: CaseStore, tools: ToolRegistry) -> AgentResult:
-        from .disk_images import SEPARATOR, DiskBudget, group_images, read_image
+        from .disk_images import SEPARATOR
 
-        tools.allow("read_disk_image", read_image)
-        budget = DiskBudget()
-        groups, orphans = group_images(ctx.profile.kinds.get("disk_image", []))
-        members_out: list[dict[str, Any]] = []
-        gaps: list[dict[str, str]] = [
-            {"what": rel, "why": "disk image segment without its first segment; it was not opened"} for rel in orphans
-        ]
+        extraction = extract_disk_images(ctx, tools)
+        errors = list(extraction.errors)
         hostile: list[str] = []
-        errors: list[str] = []
         submitted: list[Finding] = []
         images: list[dict[str, Any]] = []
-        for rel, segment_list in groups.items():
-            path = ctx.input_dir / rel
-            digest = ctx.inventory.get(rel) or sha256_file(path).lower()
-            segments = [{"path": seg, "sha256": ctx.inventory.get(seg, ""),
-                         "size_bytes": (ctx.input_dir / seg).stat().st_size} for seg in segment_list]
-            folder = f"{Path(rel).stem[:24]}-{digest[:8]}-{hashlib.sha256(rel.encode()).hexdigest()[:8]}"
-            image_dir = ctx.run_dir / "disk" / folder
-            try:
-                result = tools.call("read_disk_image", path, rel, digest, image_dir, budget, segments=segments)
-            except Exception as exc:  # noqa: BLE001 - an unreadable image is reported, not fatal
-                errors.append(f"{rel}: {exc}")
-                gaps.append({"what": rel, "why": f"disk image could not be opened: {exc}"[:300]})
+        for image in extraction.images:
+            rel, folder = image.image, image.folder
+            images.append({"image": rel, "folder": folder, "summary": image.summary_rel,
+                           "files_copied": len(image.members)})
+            by_copy = {member.extracted: member.member for member in image.members}
+            if not image.members:
                 continue
-            gaps.extend(result.gaps)
-            summary_path = image_dir / "disk_summary.json"
-            summary_path.write_text(json.dumps(result.summary, indent=2, sort_keys=True, ensure_ascii=True) + "\n",
-                                    encoding="utf-8")
-            images.append({"image": rel, "folder": folder, "summary": f"disk/{folder}/disk_summary.json",
-                           "files_copied": len(result.members)})
-            by_copy = {member.extracted: member.member for member in result.members}
-            for member in result.members:
-                record = member.to_dict()
-                record["folder"] = folder
-                members_out.append(record)
-            if not result.members:
-                continue
-            found, flagged = _analyse_extracted(ctx, image_dir / "files", ctx.run_dir / "disk-runs" / folder,
+            found, flagged = _analyse_extracted(ctx, image.image_dir / "files", ctx.run_dir / "disk-runs" / folder,
                                                 "disk_image", errors, rel)
             hostile.extend(f"{rel}{SEPARATOR}{by_copy[item]}" for item in flagged if item in by_copy)
             for finding in found:
@@ -654,10 +721,53 @@ class DiskImageAgent:
                 finding.finding_id = stable_id("disk", finding.finding_id, rel)
                 submitted.append(finding)
         store.add_findings(self.name, submitted)
-        status = "error" if errors and not members_out else ("partial" if errors else "ok")
+        status = "error" if errors and not extraction.members_out() else ("partial" if errors else "ok")
         return AgentResult(self.name, status=status, detail="; ".join(errors)[:600], finding_count=len(submitted),
-                           notes={"members": members_out, "files_flagged": hostile, "gaps": gaps, "images": images,
-                                  "bytes_copied": budget.used_bytes})
+                           notes={**extraction.claim_members(), "files_flagged": hostile,
+                                  "gaps": extraction.take_gaps(), "images": images,
+                                  "bytes_copied": extraction.bytes_copied})
+
+
+class DiskArtifactsAgent:
+    """Read the registry, shortcut, browser, Prefetch and Recycle Bin copies for signs of data theft.
+
+    The parsing and the detections are in ``disk_artifacts``. Each finding
+    cites the copies it rests on as ``<image>!/<drive>/<path in image>`` with
+    a byte offset or row; the coordinator re-reads each cited record and
+    re-hashes each cited copy before it keeps the finding.
+    """
+
+    name = "disk_artifacts"
+
+    def run(self, ctx: AgentContext, store: CaseStore, tools: ToolRegistry) -> AgentResult:
+        from .disk_artifacts import add_to_summary, analyse_image
+
+        extraction = extract_disk_images(ctx, tools)
+        tools.allow("analyse_disk_artifacts", analyse_image)
+        gaps = extraction.take_gaps()
+        errors: list[str] = []
+        submitted: list[Finding] = []
+        images: list[dict[str, Any]] = []
+        for image in extraction.images:
+            if not image.members:
+                continue
+            try:
+                outcome = tools.call("analyse_disk_artifacts", image.image, image.image_dir, image.members,
+                                     summary_rel=image.summary_rel)
+                add_to_summary(image.image_dir / "disk_summary.json", outcome.summary)
+            except Exception as exc:  # noqa: BLE001 - one image failing must not lose the others
+                errors.append(f"{image.image}: {type(exc).__name__}")
+                gaps.append({"what": image.image, "why": f"artefact analysis failed ({type(exc).__name__})"})
+                continue
+            gaps.extend(outcome.gaps)
+            submitted.extend(outcome.findings)
+            images.append({"image": image.image, "folder": image.folder, "files_parsed": outcome.files_parsed,
+                           "timeline": f"disk/{image.folder}/artifact_timeline.jsonl",
+                           "timeline_rows": outcome.timeline_rows, "findings": len(outcome.findings)})
+        store.add_findings(self.name, submitted)
+        status = "error" if errors and not images else ("partial" if errors else "ok")
+        return AgentResult(self.name, status=status, detail="; ".join(errors)[:600], finding_count=len(submitted),
+                           notes={**extraction.claim_members(), "gaps": gaps, "images": images})
 
 
 AGENTS: dict[str, Callable[[], Any]] = {
@@ -667,8 +777,10 @@ AGENTS: dict[str, Callable[[], Any]] = {
     "memory": MemoryAgent,
     "archive": ArchiveAgent,
     "disk_image": DiskImageAgent,
+    "disk_artifacts": DiskArtifactsAgent,
 }
 
 
 def agent_availability() -> dict[str, tuple[bool, str]]:
-    return {"memory": volatility_available(), "disk_image": disk_available()}
+    disk = disk_available()
+    return {"memory": volatility_available(), "disk_image": disk, "disk_artifacts": disk}

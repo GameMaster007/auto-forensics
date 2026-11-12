@@ -18,6 +18,20 @@
   log is unchanged: one line per finding.
 - The run list no longer re-reads and re-hashes every draft each time it
   is shown.
+- Disk artefacts: a new `disk_artifacts` agent reads the registry hives,
+  shortcuts, Jump Lists, browser history (Chrome, Edge, Firefox, Internet
+  Explorer), Prefetch, Recycle Bin index files, `setupapi.dev.log` and
+  Google Drive sync databases copied out of a disk image, and drafts cited
+  findings for insider data theft: USB sticks with serial numbers, files
+  opened from removable media, CDs or network shares, CD burning, cloud
+  sync clients, webmail and upload sites, wiping tools, cleared history,
+  mass deletions, confidential-looking file names and tell-tale searches.
+  The coordinator re-hashes each cited copy and re-reads each cited record
+  (registry cell, byte range or database row) before keeping a finding.
+  Details go to `artifact_timeline.jsonl` and a new `artifacts` key in
+  `disk_summary.json`, never into the draft. `lab/cfreds_score.py` scores a
+  run of the NIST CFReDS data-leakage case. See "What it reads from a disk
+  image" in `docs/AUTOPILOT.md`.
 - Disk images: with the new `disk` extra (dissect.target), the autopilot
   opens raw/DD, split raw, EnCase E01 and VMDK images read-only, copies event
   logs, registry hives, Prefetch, LNK/Jump Lists, browser history, PowerShell

@@ -313,10 +313,11 @@ def _start_locked(
         "archive": (out / "archives", "archives.json", lambda m: Path(m["folder"]) / m["extracted"]),
         "disk_image": (out / "disk", "disk_images.json", lambda m: Path(m["folder"]) / "files" / m["extracted"]),
     }
+    extracted_dirs["disk_artifacts"] = extracted_dirs["disk_image"]  # whichever of the two ran first lists the copies
     for result in results:
         if result.name in {"injection_sentinel", "archive", "disk_image"}:
             hostile.extend(result.notes.get("files_flagged", []))
-        if result.name in extracted_dirs:
+        if result.name in extracted_dirs and "members" in result.notes:
             base, listing, where = extracted_dirs[result.name]
             members = result.notes.pop("members", [])
             base.mkdir(exist_ok=True)

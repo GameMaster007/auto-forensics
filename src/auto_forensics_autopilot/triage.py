@@ -189,6 +189,11 @@ def plan_agents(profile: EvidenceProfile, available: dict[str, tuple[bool, str]]
             f"{profile.count('disk_image')} disk image file(s): key artefacts are copied into the run folder "
             "and analysed", "",
         ))
+        plans.append(gated(
+            "disk_artifacts", True,
+            "disk image(s): registry hives, shortcuts, Jump Lists, browser history, Prefetch and Recycle Bin copies "
+            "are read for removable-media, cloud, e-mail and clean-up activity", "",
+        ))
     if profile.count("archive"):
         zips = [p for p in profile.kinds.get("archive", []) if p.lower().endswith(".zip")]
         others = profile.count("archive") - len(zips)

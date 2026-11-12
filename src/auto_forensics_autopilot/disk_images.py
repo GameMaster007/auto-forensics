@@ -4,8 +4,9 @@ The image in the evidence folder is opened read-only with dissect.target
 (the optional ``disk`` extra) and is never changed. A bounded set of
 high-value files is copied into ``<run>/disk/<name>-<hash8>/files/``:
 event logs, registry hives, Prefetch, LNK files and Jump Lists, browser
-history, PowerShell history, scheduled tasks, USB setup logs, and Recycle
-Bin index files. Each copy is hashed while it is written and recorded in
+history, PowerShell history, scheduled tasks, USB setup logs, Recycle
+Bin index files, and the Google Drive sync client's databases and log. Each
+copy is hashed while it is written and recorded in
 ``disk_images.json``. Findings about a copied file cite it as
 ``<image path>!/<drive>/<path in image>``, for example
 ``pc.E01!/C:/Windows/System32/winevt/Logs/Security.evtx``.
@@ -86,6 +87,9 @@ ARTEFACTS: tuple[tuple[str, str], ...] = (
     ("usb", "Windows/inf/setupapi.dev.log"),
     ("usb", "Windows/setupapi.log"),
     ("recycle_bin", "$Recycle.Bin/*/$I*"),
+    ("cloud", "Users/*/AppData/Local/Google/Drive/*/snapshot.db"),
+    ("cloud", "Users/*/AppData/Local/Google/Drive/*/sync_config.db"),
+    ("cloud", "Users/*/AppData/Local/Google/Drive/*/sync_log.log"),
 )
 MFT = ("mft", "$MFT")
 
