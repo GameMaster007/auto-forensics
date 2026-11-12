@@ -154,6 +154,7 @@ def config_from_manifest(manifest: dict[str, Any], input_dir: Path, output_dir: 
         openai_api_key=api_key,
         llm_provider=provider,
         max_text_bytes=manifest.get("config", {}).get("max_text_bytes", 4 * 1024 * 1024),
+        skip_undecodable_names=manifest.get("config", {}).get("skip_undecodable_names") is True,
         seed=int(seed) if isinstance(seed, int) else 0,
         expected_input_files=manifest.get("input_files"),
         verifier_judge=_judge_mode(str(manifest.get("limits", {}).get("verifier") or "")),

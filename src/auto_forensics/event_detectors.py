@@ -15,7 +15,10 @@ _EVENT_MAP: dict[int, tuple[str, str, str, str, str]] = {
     4698: ("high",     "persistence",          "T1053.005", "Scheduled task created",             "Review task action, trigger, and creator account."),
     4702: ("medium",   "persistence",          "T1053.005", "Scheduled task updated",             "Compare old and new task definitions for payload changes."),
     # Process execution
-    4688: ("medium",   "execution",            "T1059",     "New process created",                "Validate process lineage and command line for suspicious patterns."),
+    # Process creation and PowerShell logging are telemetry: present on every
+    # audited host. They are kept as low context findings; the content rules in
+    # windows_rules.py raise the suspicious ones (encoded commands, Mimikatz...).
+    4688: ("low",      "execution",            "T1059",     "New process created",                "Validate process lineage and command line for suspicious patterns."),
     # Credential access
     4625: ("medium",   "credential-access",    "T1110",     "Account logon failure",              "Check for brute-force patterns; correlate with 4771/4776."),
     4648: ("high",     "lateral-movement",     "T1550.002", "Logon using explicit credentials",   "Investigate credential use outside of expected service accounts."),
@@ -37,8 +40,8 @@ _EVENT_MAP: dict[int, tuple[str, str, str, str, str]] = {
     1102: ("critical", "defense-evasion",      "T1070.001", "Security audit log cleared",         "Investigate who cleared logs and correlate with other events."),
     4719: ("high",     "defense-evasion",      "T1562.002", "System audit policy changed",        "Review policy change; disabling audit logging is a red flag."),
     # PowerShell / script block
-    4103: ("medium",   "execution",            "T1059.001", "PowerShell pipeline execution",      "Review PowerShell command and module details."),
-    4104: ("high",     "execution",            "T1059.001", "PowerShell script block logged",     "Inspect script block for obfuscation or download cradles."),
+    4103: ("low",      "execution",            "T1059.001", "PowerShell pipeline execution",      "Review PowerShell command and module details."),
+    4104: ("low",      "execution",            "T1059.001", "PowerShell script block logged",     "Inspect script block for obfuscation or download cradles."),
     # WMI
     5857: ("medium",   "execution",            "T1047",     "WMI activity detected",              "Review WMI namespace, query, and calling process."),
     5858: ("medium",   "execution",            "T1047",     "WMI error",                          "WMI errors may indicate failed lateral movement or persistence."),
@@ -65,8 +68,21 @@ def _coerce_event_id(raw: object) -> int | None:
     return None
 
 
+def _plain_title(event_id: int | str, event_type: str) -> str:
+    """'audit_log_cleared' -> 'Audit log cleared (Windows event 1102)'."""
+    words = " ".join(str(event_type or "").replace("_", " ").split())[:80]
+    return f"{words[:1].upper()}{words[1:]} (Windows event {event_id})" if words else f"Windows event {event_id}"
+
+
 def findings_from_artifact_events(artifacts: list[ArtifactEvent], limit: int = 500) -> list[Finding]:
+    """One finding per event ID per source file, citing the first event.
+
+    A busy log holds thousands of events with the same ID; one finding per
+    event would bury the analyst. The count is added to the recommendation.
+    """
     findings: list[Finding] = []
+    first: dict[tuple[int, str], Finding] = {}
+    counts: dict[tuple[int, str], int] = {}
     for item in artifacts:
         raw_id = item.metadata.get("event_id")
         event_id = _coerce_event_id(raw_id)
@@ -81,9 +97,13 @@ def findings_from_artifact_events(artifacts: list[ArtifactEvent], limit: int = 5
         technique_id = str(item.metadata.get("attack_technique_id") or technique_id)
         tactic_final = str(item.metadata.get("attack_tactic") or tactic)
         pointer = citation_from_event(item)
+        key = (event_id, str(item.metadata.get("source_file") or item.source))
+        counts[key] = counts.get(key, 0) + 1
+        if key in first:
+            continue
         finding = Finding(
             finding_id=stable_id("evt", event_id, item.artifact_id, description),
-            title=f"Event {event_id}: {item.event_type}",
+            title=_plain_title(event_id, item.event_type),
             severity=severity,
             confidence=0.7,
             tactic=tactic_final,
@@ -97,8 +117,12 @@ def findings_from_artifact_events(artifacts: list[ArtifactEvent], limit: int = 5
             origin="detector",
             review_status="unverified",
         )
+        first[key] = finding
         findings.append(finding)
         if len(findings) >= limit:
             logger.debug("findings_from_artifact_events: limit %d reached, stopping early", limit)
             break
+    for key, finding in first.items():
+        if counts[key] > 1:
+            finding.recommendation += f" {counts[key] - 1} more event(s) with this ID in the same file."
     return findings

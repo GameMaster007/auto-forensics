@@ -10,16 +10,15 @@ a directory of evidence, drafts findings, and keeps a finding only when
 it points at an artifact from that directory: the artifact id, the
 source file, a row or a byte offset, and the SHA-256. A finding
 without that pointer is dropped. The draft is labelled
-`analyst-unverified` until a person accepts or rejects it. That review
-step is stored as a field and is not implemented yet.
+`analyst-unverified` until a person accepts or rejects it with
+`auto-forensics review`, which appends to a custody log.
 
 Maintained by [Benjamin Christy](https://github.com/GameMaster007).
 
 This is not a claim that a model does forensics. Plaso, Hayabusa, and
-Chainsaw remain the right tools for parsing. This repository does not
-image disks, collect endpoints, or train its own model. Importing
-those tools' output is on the [roadmap](docs/ROADMAP.md) and is not in
-this version.
+Chainsaw remain the right tools for parsing, and their exports are read
+as cited rows. This repository does not image disks, collect endpoints,
+or train its own model.
 
 ## Why it is worth studying
 
@@ -55,6 +54,58 @@ python -m pip install -e ".[dev]"
 ```
 
 The command `auto-forensics` is installed by that editable install.
+
+## Autopilot: one command, then an analyst signs
+
+The `auto-forensics-autopilot` plugin runs the whole triage from one
+command: custody hashes, triage, parallel agents (the core pipeline,
+an injection sentinel, a secrets sweep, memory, ZIP-archive and
+disk-image agents),
+and a coordinator that writes a cited draft without quoting evidence
+text. Nothing can be exported until an analyst has accepted or rejected
+every finding and signed.
+
+### The easy way: double-click
+
+1. Install Python 3.10 or newer (on Windows, tick "Add python.exe to PATH").
+2. Double-click **Start Auto Forensics.bat** (Windows), **Start Auto Forensics.command**
+   (macOS) or run `./start-auto-forensics.sh` (Linux). The first run sets everything
+   up, which takes a few minutes; later runs start straight away.
+3. Your browser opens the review page. Type your name at the top, press **Browse**
+   to pick the evidence folder, and press **Start the run**. You can watch each
+   stage tick off, or leave the page; the run carries on.
+4. Save the run fingerprint it shows. Then work through the **Findings** tab:
+   each finding explains what it means, what to do, and shows the exact line of
+   evidence it rests on. Accept it, or reject it with a reason. Tick several to
+   decide them together. Keys: J/K move, A accepts, R rejects, / searches.
+5. On **Sign and export**, paste the run fingerprint to sign, then the signature
+   fingerprint to export. **Open the report** gives a page you can read or print.
+
+Other tabs: **Overview** (what to do next, how serious the findings are, and the
+attack stages they cover), **Timeline** (findings in time order) and, for disk
+images, **This computer** (Windows version, user accounts, USB devices, cloud,
+e-mail and clean-up programs, shared folders, notable searches). **Help** has a
+glossary, and the theme button switches between light, dark and automatic.
+
+The page only listens on `127.0.0.1`, needs the private link printed in the
+launcher window, and never shows evidence text as HTML. Runs and reports are kept
+in `AutoForensicsRuns` in your home folder (`--workspace` to change it).
+
+### From the command line
+
+```bash
+python -m pip install -e ".[evtx,yara]"
+auto-forensics-autopilot start  --input-dir EVIDENCE --output-dir RUN --case-id case-01 --actor "Your Name"
+auto-forensics-autopilot status --run-dir RUN
+auto-forensics-autopilot decide --run-dir RUN --finding-id ID [ID ...] --decision accept --actor "Your Name"
+auto-forensics-autopilot sign   --run-dir RUN --actor "Your Name" --fingerprint RUN_FINGERPRINT
+auto-forensics-autopilot export --run-dir RUN --dest FINAL --signature SIGNATURE_FINGERPRINT
+auto-forensics-autopilot serve  # the same review page, without the launcher
+```
+
+Guide: [docs/AUTOPILOT.md](docs/AUTOPILOT.md). Test lab and measured
+results on public attack logs (detection, ATT&CK tactic, false alarms):
+[lab/README.md](lab/README.md) and [lab/LOOP_LOG.md](lab/LOOP_LOG.md).
 
 ## Quickstart
 

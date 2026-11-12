@@ -21,6 +21,7 @@ from .models import ArtifactEvent
 from .security import (
     SecurityError,
     bounded_tree_paths,
+    has_undecodable_name,
     read_limited_text,
     sha256_file,
     stays_in_tree,
@@ -314,14 +315,87 @@ def _first_tag_text(root: ET.Element, tag: str) -> str | None:
     return value or None
 
 
+_MAX_EVENT_FIELD = 32 * 1024
+
+
+_HEX_VALUE = re.compile(r"^0x[0-9a-fA-F]+$")
+_EVTX_TIME = re.compile(r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.(\d+))?\s*(?:Z|\+00:00)?$")
+
+
+def _canonical_evtx_time(raw: str) -> str | None:
+    """One timestamp form whichever EVTX reader produced it: UTC, milliseconds, Z.
+
+    The Rust reader prints the stored 100 ns ticks; python-evtx goes through
+    a float and can be off by one microsecond. Milliseconds agree for both.
+    """
+    if not raw:
+        return None
+    match = _EVTX_TIME.match(raw)
+    if not match:
+        return raw
+    day, clock, fraction = match.groups()
+    return f"{day}T{clock}.{(fraction or '0')[:3].ljust(3, '0')}Z"
+
+
+_STRING_TAG = re.compile(r"<string>(.*?)</string>", re.DOTALL)
+_ONLY_STRING_TAGS = re.compile(r"^\s*(<string>[^<]{0,32768}</string>\s*)+$")
+# Keys the parser sets itself. An event's own payload may not overwrite them.
+_RESERVED_KEYS = {"event_id", "provider", "channel", "computer", "row", "offset", "source_file", "source_sha256",
+                  "attack_tactic", "attack_technique_id", "attack_sub_technique", "importer"}
+_ZERO_FILETIME = {"1601-01-01T00:00:00.0000000Z", "0001-01-01 00:00:00", "1601-01-01 00:00:00"}
+
+
+def _canonical_value(value: str) -> str:
+    """Remove differences in how EVTX readers print the same stored value.
+
+    Hex loses zero padding, booleans are lower case, a zero FILETIME is
+    empty, and ``<string>`` wrappers (python-evtx) become " | "-joined text.
+    """
+    if _HEX_VALUE.match(value):
+        return "0x" + (value[2:].lower().lstrip("0") or "0")
+    if value in ("True", "False"):
+        return value.lower()
+    if value in _ZERO_FILETIME:
+        return ""
+    if _ONLY_STRING_TAGS.match(value):
+        # Only a value made entirely of python-evtx <string> wrappers is unwrapped.
+        # Text that merely contains "<string>" (an attacker can append it) is kept.
+        return " | ".join(part.strip() for part in _STRING_TAG.findall(value) if part.strip())
+    return value
+
+
 def _event_data_map(root: ET.Element) -> dict[str, str]:
+    """Named ``EventData/Data`` fields, plus the two shapes older providers use.
+
+    Unnamed ``<Data>`` values (SQL Server, many Application-log sources)
+    are joined into ``Data``. ``<UserData>`` leaf elements (Terminal
+    Services, WinRM) are kept under their element names, such as
+    ``Param1``. A named field always wins over a UserData leaf.
+    """
     metadata: dict[str, str] = {}
+    unnamed: list[str] = []
     for node in root.findall(".//{*}EventData/{*}Data"):
         key = (node.attrib.get("Name") or "").strip()
-        value = (node.text or "").strip()
-        if not key or not value:
+        value = (node.text or "").strip()[:_MAX_EVENT_FIELD]
+        if not value:
             continue
-        metadata[key] = value
+        value = _canonical_value(value)
+        if not value:
+            continue
+        if key:
+            metadata[key] = value
+        else:
+            unnamed.append(value.strip())
+    if unnamed and "Data" not in metadata:
+        metadata["Data"] = " | ".join(unnamed)[:_MAX_EVENT_FIELD]
+    for user_data in root.findall(".//{*}UserData"):
+        for node in user_data.iter():
+            if len(node) or node is user_data:
+                continue
+            key = node.tag.rsplit("}", 1)[-1].strip()
+            value = (node.text or "").strip()[:_MAX_EVENT_FIELD]
+            if key and value and key not in metadata:
+                metadata[key] = _canonical_value(value)
     return metadata
 
 
@@ -343,7 +417,7 @@ def parse_evtx_xml_record(xml_text: str, source: str) -> ArtifactEvent | None:
     timestamp = None
     if time_node is not None:
         raw_ts = (time_node.attrib.get("SystemTime") or "").strip()
-        timestamp = raw_ts or None
+        timestamp = _canonical_evtx_time(raw_ts)
 
     provider_node = root.find(".//{*}Provider")
     provider = None
@@ -380,7 +454,8 @@ def parse_evtx_xml_record(xml_text: str, source: str) -> ArtifactEvent | None:
         "attack_technique_id": mapped.get("attack_technique_id", ""),
         "attack_sub_technique": mapped.get("attack_sub_technique", ""),
     }
-    metadata.update(payload)
+    for key, value in payload.items():
+        metadata[f"data_{key}" if key in _RESERVED_KEYS else key] = value
 
     return ArtifactEvent(
         artifact_id=_gen_artifact_id("evtx", source, event_id, timestamp, description),
@@ -392,22 +467,65 @@ def parse_evtx_xml_record(xml_text: str, source: str) -> ArtifactEvent | None:
     )
 
 
-def load_evtx_artifacts(path: Path) -> list[ArtifactEvent]:
+def evtx_reader_name() -> str:
+    """Which EVTX reader this install uses; recorded so a replay can compare like with like."""
+    try:
+        import evtx  # type: ignore  # noqa: F401
+
+        return "evtx (rust)"
+    except ImportError:
+        pass
+    try:
+        import Evtx  # type: ignore  # noqa: F401
+
+        return "python-evtx"
+    except ImportError:
+        return "none"
+
+
+def _evtx_xml_records(path: Path) -> Any:
+    """Yield record XML in file order.
+
+    The Rust ``evtx`` reader is preferred; it is several hundred times
+    faster on large logs. ``python-evtx`` is the fallback. Both yield the
+    same records in the same order, so a 1-based row cites the same event
+    whichever reader is installed. Returns None when neither is installed.
+    """
+    try:
+        from evtx import PyEvtxParser  # type: ignore
+    except ImportError:
+        PyEvtxParser = None  # noqa: N806
+    if PyEvtxParser is not None:
+        def rust() -> Any:
+            for record in PyEvtxParser(str(path)).records():
+                yield record["data"]
+        return rust()
     try:
         from Evtx.Evtx import Evtx  # type: ignore
     except ImportError:
+        return None
+
+    def python() -> Any:
+        with Evtx(str(path)) as handle:
+            for record in handle.records():
+                yield record.xml()
+    return python()
+
+
+def load_evtx_artifacts(path: Path) -> list[ArtifactEvent]:
+    records = _evtx_xml_records(path)
+    if records is None:
         return []
 
     out: list[ArtifactEvent] = []
     try:
-        with Evtx(str(path)) as handle:
-            for record in handle.records():
-                try:
-                    item = parse_evtx_xml_record(record.xml(), source=path.name)
-                    if item is not None:
-                        out.append(item)
-                except Exception as exc:
-                    logger.debug("Failed to parse EVTX record in %s: %s", path.name, exc)
+        for xml_text in records:
+            try:
+                item = parse_evtx_xml_record(xml_text, source=path.name)
+                if item is not None:
+                    out.append(item)
+            except Exception as exc:
+                logger.debug("Failed to parse EVTX record in %s: %s", path.name, exc)
     except OSError as exc:
         logger.warning("Could not open EVTX file %s: %s", path, exc)
     except Exception as exc:
@@ -1168,6 +1286,8 @@ def discover_artifacts(
     input_dir: Path,
     max_text_bytes: int = 4 * 1024 * 1024,
     parser_registry: "ArtifactParserRegistry | None" = None,
+    *,
+    skip_undecodable_names: bool = False,
 ) -> tuple[list[ArtifactEvent], list[Path]]:
     events: list[ArtifactEvent] = []
     binaries: list[Path] = []
@@ -1182,12 +1302,30 @@ def discover_artifacts(
     for path in sorted(bounded_tree_paths(root)):
         if not stays_in_tree(path, root):
             continue
+        if skip_undecodable_names and has_undecodable_name(str(path.relative_to(root))):
+            continue
         suffix = path.suffix.lower()
         if suffix in binary_suffixes:
             binaries.append(path)
             continue
-        parsed = parser_registry.parse(path, max_text_bytes=max_text_bytes)
+        try:
+            parsed = parser_registry.parse(path, max_text_bytes=max_text_bytes)
+        except SecurityError:
+            raise
+        except (csv.Error, ValueError, UnicodeError, RecursionError, OverflowError, KeyError, TypeError) as exc:
+            # One malformed file must not end the analysis of every other file.
+            # The failure is kept as an event so the analyst sees the gap.
+            logger.warning("Could not parse %s: %s", path.name, type(exc).__name__)
+            parsed = [ArtifactEvent(
+                artifact_id=_gen_artifact_id("parse-error", path.name, 0, None, type(exc).__name__),
+                timestamp=None,
+                event_type="parse_error",
+                description=f"File could not be parsed ({type(exc).__name__}); review it manually",
+                source=path.name,
+                metadata={"parse_error": type(exc).__name__},
+            )]
         _ensure_provenance(parsed, path, str(path.relative_to(root)))
         events.extend(parsed)
 
     return events, binaries
+

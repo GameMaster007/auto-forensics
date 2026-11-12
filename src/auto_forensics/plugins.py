@@ -203,12 +203,22 @@ class PluginRegistry:
         if not self.binary_analyzers:
             self.binary_analyzers.append(DefaultBinaryAnalyzer())
         if not self.detectors.detectors:
-            from .builtin_detectors import DefenderDetector, SuricataDetector, SysmonDetector, ZeekDetector
+            from .builtin_detectors import (
+                DefenderDetector,
+                PersistenceDetector,
+                SuricataDetector,
+                SysmonDetector,
+                ZeekDetector,
+            )
 
             self.detectors.register(SysmonDetector())
             self.detectors.register(DefenderDetector())
             self.detectors.register(ZeekDetector())
             self.detectors.register(SuricataDetector())
+            self.detectors.register(PersistenceDetector())
+            from .windows_rules import WindowsRuleDetector
+
+            self.detectors.register(WindowsRuleDetector())
 
     def analyze_binary(self, path: Path) -> BinaryFeature:
         if not self.binary_analyzers:

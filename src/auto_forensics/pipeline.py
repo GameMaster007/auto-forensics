@@ -43,7 +43,15 @@ from .manifest import (
 from .models import ArtifactEvent, BinaryFeature, CaseReport, Citation, Finding, TimelineEvent, utc_now_iso
 from .pdf_report import write_pdf_report
 from .plugins import PluginRegistry
-from .security import SecurityError, bounded_tree_paths, sha256_file, stays_in_tree, validate_case_id
+from .security import (
+    IntegrityError,
+    SecurityError,
+    bounded_tree_paths,
+    has_undecodable_name,
+    sha256_file,
+    stays_in_tree,
+    validate_case_id,
+)
 from .sigma_rules import evaluate_sigma_rules
 from .stix_export import build_stix_bundle
 from .timeline import normalize_timeline, timeline_sort_key
@@ -75,6 +83,10 @@ class PipelineConfig:
     verifier_judge: str | None = None
     expected_input_files: list[dict[str, Any]] | None = None
     require_safe_input_tree: bool = False
+    # Leave out files whose name is not valid text (``has_undecodable_name``): a report naming
+    # one cannot be published, so without this one such file stops the whole run. Only for a
+    # caller that keeps its own custody record of those files; the manifest records the choice.
+    skip_undecodable_names: bool = False
 
 
 def _severity_rank(value: str) -> int:
@@ -463,6 +475,8 @@ def _evidence_catalog(
     input_dir: Path,
     artifacts: list[ArtifactEvent],
     binary_features: list[BinaryFeature],
+    *,
+    skip_undecodable_names: bool = False,
 ) -> dict[CitationKey, Citation]:
     pointers: list[Citation] = []
     for event in artifacts:
@@ -474,6 +488,8 @@ def _evidence_catalog(
     root = input_dir.resolve()
     for path in sorted(root.rglob("*")):
         if not stays_in_tree(path, root) or len(path.relative_to(root).parts) > 20:
+            continue
+        if skip_undecodable_names and has_undecodable_name(str(path.relative_to(root))):
             continue
         pointers.append(file_citation(path, root=root))
     return catalog_from_citations(pointers)
@@ -531,7 +547,7 @@ def run_case_locked(config: PipelineConfig) -> CaseReport:
 def _pipeline_inputs(config: PipelineConfig) -> list[dict[str, Any]]:
     from .integrity import compare_inventory
 
-    rows = hash_input_tree(config.input_dir)
+    rows = hash_input_tree(config.input_dir, skip_undecodable_names=config.skip_undecodable_names)
     if config.require_safe_input_tree:
         for path in bounded_tree_paths(config.input_dir):
             if path.is_symlink() or (not path.is_dir() and not path.is_file()):
@@ -539,7 +555,7 @@ def _pipeline_inputs(config: PipelineConfig) -> list[dict[str, Any]]:
     if config.expected_input_files is not None:
         validate_file_inventory(config.expected_input_files)
         if any(compare_inventory(config.expected_input_files, rows).values()):
-            raise SecurityError("Evidence no longer matches the required custody or replay inventory; report was not published")
+            raise IntegrityError("Evidence no longer matches the required custody or replay inventory; report was not published")
     return rows
 
 
@@ -592,6 +608,7 @@ def _run_case(config: PipelineConfig) -> CaseReport:
             config.input_dir,
             max_text_bytes=config.max_text_bytes,
             parser_registry=plugin_registry.artifact_parsers,
+            skip_undecodable_names=config.skip_undecodable_names,
         )
 
     def analyze_binaries(found: list[Path]) -> list[BinaryFeature]:
@@ -665,6 +682,7 @@ def _run_case(config: PipelineConfig) -> CaseReport:
         path
         for path in sorted(evidence_root.rglob("*"))
         if stays_in_tree(path, evidence_root) and len(path.relative_to(evidence_root).parts) <= 20
+        and not (config.skip_undecodable_names and has_undecodable_name(str(path.relative_to(evidence_root))))
     ]
 
     findings: list[Finding] = []
@@ -677,7 +695,8 @@ def _run_case(config: PipelineConfig) -> CaseReport:
         logger.warning("YARA scan failed: %s", exc)
 
     findings.extend(tools.call("event_detectors", artifacts))
-    catalog = _evidence_catalog(config.input_dir, artifacts, binary_features)
+    catalog = _evidence_catalog(config.input_dir, artifacts, binary_features,
+                                skip_undecodable_names=config.skip_undecodable_names)
     drafted, draft_hints = tools.call("draft_findings", artifacts, binary_features, list(catalog.values()))
     findings.extend(drafted)
     generated_hints.extend(draft_hints)
@@ -738,9 +757,9 @@ def _run_case(config: PipelineConfig) -> CaseReport:
         iocs=iocs,
     )
     if _pipeline_inputs(config) != input_files:
-        raise SecurityError("Evidence changed during analysis; the report was not published")
+        raise IntegrityError("Evidence changed during analysis; the report was not published")
     if hash_analysis_resources(resource_paths) != resources:
-        raise SecurityError("Analysis resources changed during analysis; the report was not published")
+        raise IntegrityError("Analysis resources changed during analysis; the report was not published")
     with tempfile.TemporaryDirectory(prefix=".af-publish-", dir=config.output_dir.parent) as temporary:
         render_dir = Path(temporary)
         render_dir.mkdir(parents=True, exist_ok=True)
@@ -791,6 +810,7 @@ def _run_case(config: PipelineConfig) -> CaseReport:
             attack_stix_path=str(config.attack_stix_path.resolve()) if config.attack_stix_path else None,
             resources=resources,
             max_text_bytes=config.max_text_bytes,
+            skip_undecodable_names=config.skip_undecodable_names,
         )
         manifest["artifacts"] = hash_output_files(render_dir)
         write_run_manifest(render_dir / "run_manifest.json", manifest)
@@ -834,7 +854,7 @@ def rewrite_published_report(
                 handle.write(review_log_content)
             entries = read_review_log(staging / review_log)
             if len(entries) != review_count:
-                raise SecurityError("Review log count differs from the requested publication")
+                raise IntegrityError("Review log count differs from the requested publication")
             for entry in entries:
                 previous = review_times.get(entry["finding_id"], entry["at"])
                 review_times[entry["finding_id"]] = max(previous, entry["at"], key=timeline_sort_key)

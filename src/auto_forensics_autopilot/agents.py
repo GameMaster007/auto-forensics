@@ -1,0 +1,793 @@
+"""Specialist agents that run in parallel during an autopilot run.
+
+Each agent is a worker in the core sense: it submits findings to one
+shared ``CaseStore`` and calls tools only through its own
+``ToolRegistry``, so every call lands in the tool log.
+
+Rules every agent follows:
+
+* Read evidence read-only and bounded by size.
+* Cite every finding with the file's SHA-256 and a 1-based row.
+* Never copy evidence text into a finding. A finding names the rule
+  that matched and stores a SHA-256 of the matched line, so the
+  coordinator can verify the row without quoting it.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import importlib.util
+import json
+import re
+import shutil
+import subprocess
+import threading
+import unicodedata
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Iterator
+
+from auto_forensics.case_store import CaseStore
+from auto_forensics.models import Citation, Finding
+from auto_forensics.pipeline import PipelineConfig, run_case
+from auto_forensics.security import IntegrityError, sha256_file
+from auto_forensics.tools import ToolRegistry
+
+from .triage import EvidenceProfile
+
+MAX_SCAN_BYTES = 8 * 1024 * 1024
+MAX_LINE_CHARS = 16 * 1024
+MAX_FINDINGS_PER_FILE = 25
+
+
+@dataclass(slots=True)
+class AgentContext:
+    case_id: str
+    input_dir: Path
+    run_dir: Path
+    profile: EvidenceProfile
+    llm: str = "mock"
+    llama_endpoint: str = "http://localhost:11434"
+    llama_model: str = "llama3.1:8b"
+    rules_dir: Path | None = None
+    # Custody hashes by evidence path, so large files (disk images) are not read again.
+    inventory: dict[str, str] = field(default_factory=dict)
+    # Work one agent does for another in the same run (the files copied out of disk images), and its lock.
+    shared: dict[str, Any] = field(default_factory=dict)
+    lock: Any = field(default_factory=threading.Lock)
+
+
+@dataclass(slots=True)
+class AgentResult:
+    name: str
+    status: str = "ok"
+    detail: str = ""
+    finding_count: int = 0
+    notes: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "status": self.status,
+            "detail": self.detail,
+            "finding_count": self.finding_count,
+            "notes": self.notes,
+        }
+
+
+def line_digest(line: str) -> str:
+    return hashlib.sha256(line.encode("utf-8", errors="surrogatepass")).hexdigest()
+
+
+def stable_id(prefix: str, *parts: object) -> str:
+    raw = "\x1f".join(str(part) for part in parts)
+    return f"{prefix}-{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _text_encoding(head: bytes) -> str | None:
+    """UTF-16/32 from a byte-order mark, or UTF-16 from the NUL pattern of ASCII text."""
+    for bom, name in ((b"\xff\xfe\x00\x00", "utf-32-le"), (b"\x00\x00\xfe\xff", "utf-32-be"),
+                      (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be")):
+        if head.startswith(bom):
+            return name
+    sample = head[:4096]
+    if len(sample) >= 64:
+        odd_nul = sample[1::2].count(0) / max(1, len(sample) // 2)
+        even_nul = sample[0::2].count(0) / max(1, len(sample) // 2)
+        if odd_nul > 0.4 and even_nul < 0.05:
+            return "utf-16-le"
+        if even_nul > 0.4 and odd_nul < 0.05:
+            return "utf-16-be"
+    return None
+
+
+def decodings_for(path: Path, limit: int = MAX_SCAN_BYTES) -> list[str]:
+    """Every reading of a file worth scanning: always byte-wise, plus UTF-16/32 when NULs suggest it.
+
+    Scanning both means a fake byte-order mark or a UTF-16-looking header
+    cannot hide plain text, and real UTF-16 text is still read.
+    """
+    with path.open("rb") as handle:
+        data = handle.read(limit)
+    modes = ["bytes"]
+    wide = _text_encoding(data)
+    if wide:
+        modes.append(wide)
+    elif b"\x00" in data:
+        modes.extend([f"{GUESSED}utf-16-le", f"{GUESSED}utf-16-be"])
+    return modes
+
+
+GUESSED = "guess:"
+
+
+def _looks_like_text(line: str) -> bool:
+    """A line from a guessed UTF-16 reading is scanned only if it is mostly ordinary text.
+
+    Reading binary data as UTF-16 yields random characters, including the
+    invisible and right-to-left marks the hidden-text rule looks for.
+    """
+    if len(line) < 8:
+        return False
+    plain = sum(1 for ch in line if ch.isascii() and (ch.isprintable() or ch == "\t"))
+    return plain / len(line) >= 0.85
+
+
+def iter_lines(path: Path, limit: int = MAX_SCAN_BYTES, decoding: str = "auto") -> Iterator[tuple[int, str]]:
+    """Yield (1-based physical line, text) for at most ``limit`` bytes of a file.
+
+    ``decoding`` is "bytes" (UTF-8, falling back to Latin-1 per line), a
+    UTF-16/32 codec name, or "auto" (the BOM/NUL-pattern guess). Lines split
+    on LF only and a trailing CR is dropped, so rows are physical lines.
+    """
+    with path.open("rb") as handle:
+        data = handle.read(limit)
+    yield from lines_of(data, decoding)
+
+
+def lines_of(data: bytes, decoding: str = "auto") -> Iterator[tuple[int, str]]:
+    """``iter_lines`` for bytes already read (the caller bounds them)."""
+    if decoding.startswith(GUESSED):
+        decoding = decoding[len(GUESSED):]
+    encoding = _text_encoding(data) if decoding == "auto" else (None if decoding == "bytes" else decoding)
+    if encoding:
+        text = data.decode(encoding, errors="replace").lstrip("\ufeff")
+        for number, line in enumerate(text.split("\n"), start=1):
+            yield number, line.rstrip("\r")[:MAX_LINE_CHARS]
+        return
+    for number, raw in enumerate(data.split(b"\n"), start=1):
+        raw = raw.rstrip(b"\r")
+        try:
+            line = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            line = raw.decode("latin-1")
+        yield number, line[:MAX_LINE_CHARS]
+
+
+def _file_citation(input_dir: Path, rel: str, digest: str, row: int) -> Citation:
+    return Citation(artifact_id=f"file-{digest[:16]}", source_file=rel, sha256=digest, row=row)
+
+
+# --------------------------------------------------------------------------
+# Core pipeline agent
+# --------------------------------------------------------------------------
+
+
+class CorePipelineAgent:
+    """Run the proven core pipeline. Its report is the authoritative record."""
+
+    name = "core_pipeline"
+
+    def run(self, ctx: AgentContext, store: CaseStore, tools: ToolRegistry) -> AgentResult:
+        core_dir = ctx.run_dir / "core"
+        core_dir.mkdir(parents=True, exist_ok=True)
+        provider = None if ctx.llm in {"off", "none"} else ctx.llm
+        config = PipelineConfig(
+            case_id=ctx.case_id,
+            input_dir=ctx.input_dir,
+            output_dir=core_dir,
+            enable_llama=provider not in {None, "off"},
+            llama_endpoint=ctx.llama_endpoint,
+            llama_model=ctx.llama_model,
+            llm_provider=provider or "off",
+            rules_dir=ctx.rules_dir,
+            # Triage keeps such files from every agent and lists them as coverage gaps.
+            skip_undecodable_names=True,
+        )
+        tools.allow("run_case", run_case)
+        report = tools.call("run_case", config)
+        store.add_findings(self.name, list(report.findings))
+        return AgentResult(
+            self.name,
+            finding_count=len(report.findings),
+            notes={
+                "report": "core/case_report.json",
+                "manifest": "core/run_manifest.json",
+                "dropped_uncited": report.summary.get("dropped_uncited", 0),
+                "dropped_unsupported": report.summary.get("dropped_unsupported", 0),
+                "timeline_events": len(report.timeline),
+            },
+        )
+
+
+# --------------------------------------------------------------------------
+# Line-rule agents
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class LineRule:
+    rule_id: str
+    pattern: re.Pattern[str]
+    title: str
+    severity: str
+    tactic: str
+    technique_id: str = ""
+    recommendation: str = ""
+    # When set, the line must also match this pattern. Used for phrases
+    # that are common in ordinary writing unless they address a machine.
+    requires: re.Pattern[str] | None = None
+
+    def matches(self, line: str) -> bool:
+        if not self.pattern.search(line):
+            return False
+        return self.requires is None or bool(self.requires.search(line))
+
+
+# Characters that change how text displays or tokenises without being seen:
+# zero-width spaces and joiners, soft hyphen, word joiner, BOM, and the
+# bidirectional overrides and isolates.
+_INVISIBLE = dict.fromkeys(map(ord, "\u00ad\u200b\u200c\u200d\u2060\ufeff"), None)
+_BIDI = set("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
+
+
+# Cyrillic and Greek letters that look like Latin ones, used to dodge keyword filters.
+_CONFUSABLES = str.maketrans({
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x", "і": "i", "ј": "j", "ѕ": "s",
+    "һ": "h", "ԁ": "d", "ԛ": "q", "ԝ": "w", "ӏ": "l", "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M",
+    "Н": "H", "О": "O", "Р": "P", "С": "C", "Т": "T", "Х": "X", "І": "I", "Ј": "J", "Ѕ": "S",
+    "α": "a", "ο": "o", "ρ": "p", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "τ": "t", "υ": "u",
+    "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H", "Ι": "I", "Κ": "K", "Μ": "M", "Ν": "N", "Ο": "O",
+    "Ρ": "P", "Τ": "T", "Υ": "Y", "Χ": "X",
+})
+
+
+def normalise_for_rules(line: str) -> str:
+    """Fold full-width, compatibility and look-alike letters; drop invisible characters."""
+    return unicodedata.normalize("NFKC", line).translate(_INVISIBLE).translate(_CONFUSABLES)
+
+
+def hidden_text_signal(line: str) -> bool:
+    """True when a line hides text: a bidi override, or an invisible character between letters."""
+    if any(ch in _BIDI for ch in line):
+        return True
+    # Soft hyphens (U+00AD) are left out: real documents use them, and binary
+    # bytes read as Latin-1 produce them.
+    return bool(re.search(r"\w[\u200b\u200c\u200d\u2060]+\w", line))
+
+
+class LineRuleAgent:
+    """Scan text-bearing files line by line against fixed rules."""
+
+    name = "line_rules"
+    kinds: tuple[str, ...] = ("text", "timeline_export")
+    rules: tuple[LineRule, ...] = ()
+    confidence = 0.7
+
+    def files(self, ctx: AgentContext) -> list[str]:
+        paths: list[str] = []
+        for kind in self.kinds:
+            paths.extend(ctx.profile.kinds.get(kind, []))
+        return sorted(set(paths))
+
+    def scan_file(self, ctx: AgentContext, rel: str) -> tuple[list[Finding], int]:
+        path = ctx.input_dir / rel
+        digest = sha256_file(path).lower()
+        findings: list[Finding] = []
+        hits = 0
+        seen_rules: set[str] = set()
+        for decoding, row, line in ((d, r, t) for d in decodings_for(path) for r, t in iter_lines(path, decoding=d)):
+            if decoding.startswith(GUESSED) and not _looks_like_text(line):
+                continue
+            # Folding can lengthen a line (one character can become 18), so cut after it.
+            folded = normalise_for_rules(line)[:MAX_LINE_CHARS]
+            for rule in self.rules:
+                if rule.rule_id in seen_rules:
+                    continue
+                if rule.rule_id == "hidden-text":
+                    if not hidden_text_signal(line):
+                        continue
+                elif not rule.matches(folded):
+                    continue
+                hits += 1
+                seen_rules.add(rule.rule_id)
+                findings.append(Finding(
+                    finding_id=stable_id(self.name, rel, row, rule.rule_id, decoding),
+                    title=rule.title,
+                    severity=rule.severity,
+                    confidence=self.confidence,
+                    tactic=rule.tactic,
+                    technique_id=rule.technique_id,
+                    evidence=[f"rule={rule.rule_id}", f"file={rel}", f"row={row}", f"decoding={decoding}",
+                              f"line_sha256={line_digest(line)}"],
+                    recommendation=rule.recommendation,
+                    citations=[_file_citation(ctx.input_dir, rel, digest, row)],
+                    origin="detector",
+                ))
+                if len(findings) >= MAX_FINDINGS_PER_FILE:
+                    return findings, hits
+        return findings, hits
+
+    def run(self, ctx: AgentContext, store: CaseStore, tools: ToolRegistry) -> AgentResult:
+        tools.allow("scan_file", lambda rel: self.scan_file(ctx, rel))
+        findings: list[Finding] = []
+        flagged: list[str] = []
+        files = self.files(ctx)
+        truncated = [rel for rel in files if (ctx.input_dir / rel).stat().st_size > MAX_SCAN_BYTES]
+        for rel in files:
+            found, _ = tools.call("scan_file", rel)
+            if found:
+                flagged.append(rel)
+            findings.extend(found)
+        store.add_findings(self.name, findings)
+        return AgentResult(self.name, finding_count=len(findings),
+                           notes={"files_scanned": len(files), "files_flagged": flagged,
+                                  "files_truncated": truncated})
+
+
+def _rx(text: str) -> re.Pattern[str]:
+    return re.compile(text.replace(".*", r"[^\n]{0,2000}"), re.IGNORECASE)
+
+
+class InjectionSentinelAgent(LineRuleAgent):
+    """Flag evidence that tries to give instructions to an AI analyst.
+
+    A file that matches is reported as a finding and listed as hostile.
+    The coordinator never quotes hostile files, and the draft warns the
+    analyst to read them only in a viewer that does not call a model.
+    """
+
+    name = "injection_sentinel"
+    kinds = ("text", "timeline_export", "binary", "other")
+    confidence = 0.8
+    _rec = "Treat this file as hostile input. Review it in a plain viewer, not through a model."
+    # Words that show a line is addressed to a model rather than a person.
+    _addressed = (r"\b(ai|a\.i\.|assistant|model|llm|chatbot|gpt|claude|llama|copilot|analy[sz](er|is tool)|"
+                  r"triage tool|language model)\b|\byou (are|must|will|should)\b|^\W*(system|assistant)\s*:")
+    _to_machine = _rx(_addressed + r"|\b(benign|clean|safe|no (threats?|findings?|malware))\b")
+    # The verdict rule already names the verdict, so it needs the address itself.
+    _to_machine_only = _rx(_addressed)
+    rules = (
+        LineRule("ignore-instructions",
+                 _rx(r"\b(ignore|disregard|forget)\b.{0,40}\b(previous|prior|above|all|earlier)\b.{0,40}"
+                     r"\b(instructions?|prompts?|rules|directions)\b"),
+                 "Evidence contains a prompt-injection phrase", "high", "defense-evasion", "T1036", _rec,
+                 requires=_to_machine),
+        LineRule("role-override",
+                 _rx(r"\b(you are now|act as|pretend to be|system prompt)\b|\b(new instructions?|assistant)\s*:"),
+                 "Evidence contains text that tries to redefine an AI's role", "medium", "defense-evasion", "T1036", _rec),
+        LineRule("verdict-steer",
+                 _rx(r"\b(report|mark|classify|label|conclude)\b.{0,40}\b(as )?(benign|clean|safe|"
+                     r"no (threats?|findings?|malware))\b"),
+                 "Evidence contains text that tries to steer the verdict to clean", "high", "defense-evasion",
+                 "T1562", _rec, requires=_to_machine_only),
+        LineRule("hide-findings",
+                 _rx(r"\b(do not|don't|never)\b.{0,30}\b(report|mention|flag|include)\b"),
+                 "Evidence contains text asking an analyst tool to hide results", "medium", "defense-evasion",
+                 "T1562", _rec, requires=_to_machine),
+        LineRule("hidden-text", re.compile(r"(?!)"),
+                 "Evidence hides text with invisible or right-to-left control characters", "medium",
+                 "defense-evasion", "T1036.002", _rec),
+        LineRule("chat-markup",
+                 _rx(r"<\|?(im_start|im_end|system|endoftext)\|?>|\[/?INST\]|<<SYS>>"),
+                 "Evidence contains model chat-control tokens", "high", "defense-evasion", "T1036", _rec),
+    )
+
+
+class SecretsSweepAgent(LineRuleAgent):
+    """Find credentials and keys left in evidence."""
+
+    name = "secrets_sweep"
+    confidence = 0.75
+    _rec = "Confirm whether the credential is live, then rotate it and check where it was used."
+    rules = (
+        LineRule("private-key", re.compile(r"-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----"),
+                 "Private key material found in evidence", "high", "credential-access", "T1552.004", _rec),
+        LineRule("aws-access-key", re.compile(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b"),
+                 "Cloud access key found in evidence", "high", "credential-access", "T1552.001", _rec),
+        LineRule("password-assignment",
+                 # The value must look like a secret (6+ chars with a digit or symbol), so
+                 # "reset your password: visit the portal" is not a hit.
+                 _rx(r"(?<![a-z])(password|passwd|pass)\s*[:=]\s*['\"]?(?=[^\s'\"]{0,128}[\d!@#$%^&*_+\-])"
+                     r"(?![/\\])[^\s'\",;]{6,128}"),
+                 "Plaintext password found in evidence", "medium", "credential-access", "T1552.001", _rec),
+        LineRule("bearer-token", re.compile(r"\b(gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,255}|"
+                                            r"xox[bpas]-[0-9A-Za-z\-]{10,255}|sk-(proj-)?[A-Za-z0-9]{20,255})\b"),
+                 "API token found in evidence", "high", "credential-access", "T1552.001", _rec),
+        LineRule("slack-webhook", re.compile(r"https://hooks\.slack\.com/services/T[A-Z0-9]{6,}/B[A-Z0-9]{6,}/[A-Za-z0-9]{20,}"),
+                 "Chat webhook URL found in evidence", "medium", "credential-access", "T1552.001", _rec),
+        LineRule("google-api-key", re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b"),
+                 "Google API key found in evidence", "high", "credential-access", "T1552.001", _rec),
+        LineRule("azure-storage-key", _rx(r"accountkey=[a-z0-9+/]{80,}={0,2}"),
+                 "Cloud storage account key found in evidence", "high", "credential-access", "T1552.001", _rec),
+        LineRule("payment-secret-key", re.compile(r"\b(sk|rk)_live_[0-9A-Za-z]{20,}\b"),
+                 "Payment provider secret key found in evidence", "high", "credential-access", "T1552.001", _rec),
+        LineRule("jwt", re.compile(r"\beyJ[A-Za-z0-9_\-]{10,4096}\.eyJ[A-Za-z0-9_\-]{10,4096}\.[A-Za-z0-9_\-]{10,4096}"),
+                 "Signed session token (JWT) found in evidence", "medium", "credential-access", "T1528", _rec),
+        LineRule("ntlm-hash-dump", re.compile(r"^[^:\s]{1,64}:\d{1,10}:[0-9a-fA-F]{32}:[0-9a-fA-F]{32}:::"),
+                 "Password hash dump (user:rid:lm:nt) found in evidence", "critical", "credential-access",
+                 "T1003.002", _rec),
+        LineRule("ntds-or-sam-copy-cmd", _rx(r"(secretsdump|impacket|hashdump|lsadump|ntds\.dit)"),
+                 "Credential dumping tool name or AD database reference in text", "medium", "credential-access",
+                 "T1003", _rec),
+        LineRule("mimikatz-output", _rx(r"\b(sekurlsa::|lsadump::|kerberos::golden|mimikatz)\b"),
+                 "Credential-dumping tool output or command found", "critical", "credential-access", "T1003", _rec),
+    )
+
+
+# --------------------------------------------------------------------------
+# Memory agent
+# --------------------------------------------------------------------------
+
+
+def volatility_available() -> tuple[bool, str]:
+    if shutil.which("vol") or importlib.util.find_spec("volatility3") is not None:
+        return True, ""
+    return False, "Volatility 3 is not installed (pip install 'auto-forensics-framework[memory]')"
+
+
+SUSPICIOUS_CMDLINE = (
+    ("encoded-powershell", _rx(r"powershell[^\n]{0,2000}\s-(e|en|enc|encodedcommand)\s"), "high", "execution",
+     "T1059.001"),
+    ("temp-execution", _rx(r"\\(temp|appdata\\local\\temp|downloads)\\[^\\]+\.(exe|dll|scr)"), "medium",
+     "execution", "T1204"),
+    ("lsass-access", _rx(r"(procdump|comsvcs\.dll)[^\n]{0,2000}lsass"), "critical", "credential-access", "T1003.001"),
+)
+
+
+class MemoryAgent:
+    """Run Volatility 3 windows.cmdline on each memory image and apply rules."""
+
+    name = "memory"
+    timeout_seconds = 900
+
+    def run(self, ctx: AgentContext, store: CaseStore, tools: ToolRegistry) -> AgentResult:
+        tools.allow("volatility_cmdline", self._cmdline)
+        findings: list[Finding] = []
+        errors: list[str] = []
+        for rel in ctx.profile.kinds.get("memory_image", []):
+            path = ctx.input_dir / rel
+            try:
+                rows = tools.call("volatility_cmdline", path)
+            except Exception as exc:  # noqa: BLE001 - one bad image must not stop the run
+                errors.append(f"{rel}: {type(exc).__name__}")
+                continue
+            digest = sha256_file(path).lower()
+            for index, row in enumerate(rows, start=1):
+                args = str(row.get("Args") or "")
+                for rule_id, pattern, severity, tactic, technique in SUSPICIOUS_CMDLINE:
+                    if pattern.search(args):
+                        findings.append(Finding(
+                            finding_id=stable_id(self.name, rel, index, rule_id),
+                            title=f"Memory: process command line matches {rule_id}",
+                            severity=severity,
+                            confidence=0.7,
+                            tactic=tactic,
+                            technique_id=technique,
+                            evidence=[f"rule={rule_id}", f"pid={row.get('PID')}", f"image={rel}",
+                                      f"cmdline_sha256={line_digest(args)}"],
+                            recommendation="Confirm the process tree and dump the process for analysis.",
+                            citations=[Citation(f"file-{digest[:16]}", rel, digest, row=index)],
+                        ))
+        store.add_findings(self.name, findings)
+        status = "partial" if errors and findings else ("error" if errors else "ok")
+        return AgentResult(self.name, status=status, detail="; ".join(errors), finding_count=len(findings))
+
+    def _cmdline(self, image: Path) -> list[dict[str, Any]]:
+        command = [shutil.which("vol") or "vol", "-q", "-r", "json", "-f", str(image), "windows.cmdline"]
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=self.timeout_seconds, check=True)
+        data = json.loads(completed.stdout or "[]")
+        return data if isinstance(data, list) else []
+
+
+# --------------------------------------------------------------------------
+# Archive agent
+# --------------------------------------------------------------------------
+
+
+class ArchiveAgent:
+    """Extract evidence ZIPs into the run folder and analyse their contents.
+
+    Each archive gets its own core run and line-rule scans. Their findings
+    are re-cited as ``<archive>!<member>`` and submitted under this agent's
+    name; the coordinator verifies them against the extracted copies.
+    """
+
+    name = "archive"
+
+    def run(self, ctx: AgentContext, store: CaseStore, tools: ToolRegistry) -> AgentResult:
+        from auto_forensics.case_store import MemoryCaseStore
+
+        from .archives import SEPARATOR, ExtractionBudget, extract_zip
+        from .triage import profile_evidence
+
+        tools.allow("extract_zip", extract_zip)
+        budget = ExtractionBudget()
+        members_out: list[dict[str, Any]] = []
+        hostile: list[str] = []
+        errors: list[str] = []
+        skipped: list[str] = []
+        submitted: list[Finding] = []
+        for rel in ctx.profile.kinds.get("archive", []):
+            path = ctx.input_dir / rel
+            with path.open("rb") as handle:
+                magic = handle.read(4)
+            if not (rel.lower().endswith(".zip") or magic == b"PK\x03\x04"):
+                skipped.append(rel)
+                continue
+            digest = sha256_file(path).lower()
+            folder = f"{Path(rel).stem[:40]}-{digest[:8]}-{hashlib.sha256(rel.encode()).hexdigest()[:8]}"
+            extracted = ctx.run_dir / "archives" / folder
+            try:
+                members = tools.call("extract_zip", path, rel, digest, extracted, budget)
+            except Exception as exc:  # noqa: BLE001 - a refused archive is reported, not fatal
+                errors.append(f"{rel}: {exc}")
+                continue
+            for member in members:
+                record = member.to_dict()
+                record["folder"] = folder
+                members_out.append(record)
+            sub_ctx = AgentContext(case_id=ctx.case_id, input_dir=extracted,
+                                   run_dir=ctx.run_dir / "archive-runs" / folder, profile=profile_evidence(extracted),
+                                   llm=ctx.llm, llama_endpoint=ctx.llama_endpoint, llama_model=ctx.llama_model,
+                                   rules_dir=ctx.rules_dir)
+            sub_store = MemoryCaseStore()
+            for agent_cls in (CorePipelineAgent, InjectionSentinelAgent, SecretsSweepAgent):
+                agent = agent_cls()
+                try:
+                    result = agent.run(sub_ctx, sub_store, ToolRegistry(worker=f"archive/{agent.name}", store=sub_store))
+                except IntegrityError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"{rel} {agent.name}: {type(exc).__name__}")
+                    continue
+                if agent.name == "injection_sentinel":
+                    hostile.extend(f"{rel}{SEPARATOR}{item}" for item in result.notes.get("files_flagged", []))
+            for finding in sub_store.findings():
+                for citation in finding.citations:
+                    citation.source_file = f"{rel}{SEPARATOR}{citation.source_file}"
+                finding.finding_id = stable_id("arc", finding.finding_id, rel)
+                submitted.append(finding)
+        store.add_findings(self.name, submitted)
+        status = "error" if errors and not members_out else ("partial" if errors else "ok")
+        return AgentResult(self.name, status=status, detail="; ".join(errors)[:600], finding_count=len(submitted),
+                           notes={"members": members_out, "files_flagged": hostile, "not_zip": skipped})
+
+
+# --------------------------------------------------------------------------
+# Disk image agent
+# --------------------------------------------------------------------------
+
+
+def _analyse_extracted(ctx: AgentContext, folder: Path, run_dir: Path, worker: str,
+                       errors: list[str], label: str) -> tuple[list[Finding], list[str]]:
+    """Run the core pipeline, sentinel and secrets sweep on files copied into the run folder."""
+    from auto_forensics.case_store import MemoryCaseStore
+
+    from .triage import profile_evidence
+
+    sub_ctx = AgentContext(case_id=ctx.case_id, input_dir=folder, run_dir=run_dir, profile=profile_evidence(folder),
+                           llm=ctx.llm, llama_endpoint=ctx.llama_endpoint, llama_model=ctx.llama_model,
+                           rules_dir=ctx.rules_dir)
+    sub_store = MemoryCaseStore()
+    flagged: list[str] = []
+    for agent_cls in (CorePipelineAgent, InjectionSentinelAgent, SecretsSweepAgent):
+        agent = agent_cls()
+        try:
+            result = agent.run(sub_ctx, sub_store, ToolRegistry(worker=f"{worker}/{agent.name}", store=sub_store))
+        except IntegrityError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{label} {agent.name}: {type(exc).__name__}")
+            continue
+        if agent.name == "injection_sentinel":
+            flagged.extend(result.notes.get("files_flagged", []))
+    return sub_store.findings(), flagged
+
+
+def disk_available() -> tuple[bool, str]:
+    from .disk_images import disk_support
+
+    return disk_support()
+
+
+@dataclass(slots=True)
+class ExtractedImage:
+    """One disk image whose artefacts were copied into the run folder."""
+
+    image: str
+    folder: str
+    image_dir: Path
+    members: list[Any]
+
+    @property
+    def summary_rel(self) -> str:
+        return f"disk/{self.folder}/disk_summary.json"
+
+
+@dataclass(slots=True)
+class DiskExtraction:
+    images: list[ExtractedImage] = field(default_factory=list)
+    gaps: list[dict[str, str]] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    bytes_copied: int = 0
+    gaps_reported: bool = False
+    members_reported: bool = False
+
+    def claim_members(self) -> dict[str, Any]:
+        """``{"members": [...]}`` for the first agent that asks, ``{}`` after: the copies are listed once."""
+        if self.members_reported:
+            return {}
+        self.members_reported = True
+        return {"members": self.members_out()}
+
+    def members_out(self) -> list[dict[str, Any]]:
+        out = []
+        for image in self.images:
+            for member in image.members:
+                record = member.to_dict()
+                record["folder"] = image.folder
+                out.append(record)
+        return out
+
+    def take_gaps(self) -> list[dict[str, str]]:
+        """The extraction's coverage gaps, handed to the first agent that asks so they are listed once."""
+        if self.gaps_reported:
+            return []
+        self.gaps_reported = True
+        return list(self.gaps)
+
+
+def extract_disk_images(ctx: AgentContext, tools: ToolRegistry) -> DiskExtraction:
+    """Copy artefacts out of every disk image, once per run.
+
+    The disk-image agent and the disk-artefacts agent both need the copies.
+    Whichever runs first does the work under the run's lock; the other waits
+    and gets the same result.
+    """
+    from .disk_images import DiskBudget, group_images, read_image
+
+    with ctx.lock:
+        done = ctx.shared.get("disk_extraction")
+        if done is not None:
+            return done
+        tools.allow("read_disk_image", read_image)
+        budget = DiskBudget()
+        groups, orphans = group_images(ctx.profile.kinds.get("disk_image", []))
+        extraction = DiskExtraction(gaps=[
+            {"what": rel, "why": "disk image segment without its first segment; it was not opened"} for rel in orphans
+        ])
+        for rel, segment_list in groups.items():
+            path = ctx.input_dir / rel
+            digest = ctx.inventory.get(rel) or sha256_file(path).lower()
+            segments = [{"path": seg, "sha256": ctx.inventory.get(seg, ""),
+                         "size_bytes": (ctx.input_dir / seg).stat().st_size} for seg in segment_list]
+            folder = f"{Path(rel).stem[:24]}-{digest[:8]}-{hashlib.sha256(rel.encode()).hexdigest()[:8]}"
+            image_dir = ctx.run_dir / "disk" / folder
+            try:
+                result = tools.call("read_disk_image", path, rel, digest, image_dir, budget, segments=segments)
+            except Exception as exc:  # noqa: BLE001 - an unreadable image is reported, not fatal
+                extraction.errors.append(f"{rel}: {exc}")
+                extraction.gaps.append({"what": rel, "why": f"disk image could not be opened: {exc}"[:300]})
+                continue
+            extraction.gaps.extend(result.gaps)
+            (image_dir / "disk_summary.json").write_text(
+                json.dumps(result.summary, indent=2, sort_keys=True, ensure_ascii=True) + "\n", encoding="utf-8")
+            extraction.images.append(ExtractedImage(rel, folder, image_dir, list(result.members)))
+        extraction.bytes_copied = budget.used_bytes
+        ctx.shared["disk_extraction"] = extraction
+        return extraction
+
+
+class DiskImageAgent:
+    """Open disk images read-only, copy key artefacts into the run folder, and analyse them.
+
+    Each image gets its own core run and line-rule scans over the copied
+    files. Findings are re-cited as ``<image>!/<drive>/<path in image>`` and
+    submitted under this agent's name; the coordinator verifies them
+    against the copies.
+    """
+
+    name = "disk_image"
+
+    def run(self, ctx: AgentContext, store: CaseStore, tools: ToolRegistry) -> AgentResult:
+        from .disk_images import SEPARATOR
+
+        extraction = extract_disk_images(ctx, tools)
+        errors = list(extraction.errors)
+        hostile: list[str] = []
+        submitted: list[Finding] = []
+        images: list[dict[str, Any]] = []
+        for image in extraction.images:
+            rel, folder = image.image, image.folder
+            images.append({"image": rel, "folder": folder, "summary": image.summary_rel,
+                           "files_copied": len(image.members)})
+            by_copy = {member.extracted: member.member for member in image.members}
+            if not image.members:
+                continue
+            found, flagged = _analyse_extracted(ctx, image.image_dir / "files", ctx.run_dir / "disk-runs" / folder,
+                                                "disk_image", errors, rel)
+            hostile.extend(f"{rel}{SEPARATOR}{by_copy[item]}" for item in flagged if item in by_copy)
+            for finding in found:
+                cited = [by_copy.get(Path(c.source_file).as_posix()) for c in finding.citations]
+                if any(name is None for name in cited):
+                    errors.append(f"{rel}: a finding cited a file that was not copied from the image")
+                    continue
+                for citation, name in zip(finding.citations, cited):
+                    citation.source_file = f"{rel}{SEPARATOR}{name}"
+                finding.finding_id = stable_id("disk", finding.finding_id, rel)
+                submitted.append(finding)
+        store.add_findings(self.name, submitted)
+        status = "error" if errors and not extraction.members_out() else ("partial" if errors else "ok")
+        return AgentResult(self.name, status=status, detail="; ".join(errors)[:600], finding_count=len(submitted),
+                           notes={**extraction.claim_members(), "files_flagged": hostile,
+                                  "gaps": extraction.take_gaps(), "images": images,
+                                  "bytes_copied": extraction.bytes_copied})
+
+
+class DiskArtifactsAgent:
+    """Read the registry, shortcut, browser, Prefetch and Recycle Bin copies for signs of data theft.
+
+    The parsing and the detections are in ``disk_artifacts``. Each finding
+    cites the copies it rests on as ``<image>!/<drive>/<path in image>`` with
+    a byte offset or row; the coordinator re-reads each cited record and
+    re-hashes each cited copy before it keeps the finding.
+    """
+
+    name = "disk_artifacts"
+
+    def run(self, ctx: AgentContext, store: CaseStore, tools: ToolRegistry) -> AgentResult:
+        from .disk_artifacts import add_to_summary, analyse_image
+
+        extraction = extract_disk_images(ctx, tools)
+        tools.allow("analyse_disk_artifacts", analyse_image)
+        gaps = extraction.take_gaps()
+        errors: list[str] = []
+        submitted: list[Finding] = []
+        images: list[dict[str, Any]] = []
+        for image in extraction.images:
+            if not image.members:
+                continue
+            try:
+                outcome = tools.call("analyse_disk_artifacts", image.image, image.image_dir, image.members,
+                                     summary_rel=image.summary_rel)
+                add_to_summary(image.image_dir / "disk_summary.json", outcome.summary)
+            except Exception as exc:  # noqa: BLE001 - one image failing must not lose the others
+                errors.append(f"{image.image}: {type(exc).__name__}")
+                gaps.append({"what": image.image, "why": f"artefact analysis failed ({type(exc).__name__})"})
+                continue
+            gaps.extend(outcome.gaps)
+            submitted.extend(outcome.findings)
+            images.append({"image": image.image, "folder": image.folder, "files_parsed": outcome.files_parsed,
+                           "timeline": f"disk/{image.folder}/artifact_timeline.jsonl",
+                           "timeline_rows": outcome.timeline_rows, "findings": len(outcome.findings)})
+        store.add_findings(self.name, submitted)
+        status = "error" if errors and not images else ("partial" if errors else "ok")
+        return AgentResult(self.name, status=status, detail="; ".join(errors)[:600], finding_count=len(submitted),
+                           notes={**extraction.claim_members(), "gaps": gaps, "images": images})
+
+
+AGENTS: dict[str, Callable[[], Any]] = {
+    "core_pipeline": CorePipelineAgent,
+    "injection_sentinel": InjectionSentinelAgent,
+    "secrets_sweep": SecretsSweepAgent,
+    "memory": MemoryAgent,
+    "archive": ArchiveAgent,
+    "disk_image": DiskImageAgent,
+    "disk_artifacts": DiskArtifactsAgent,
+}
+
+
+def agent_availability() -> dict[str, tuple[bool, str]]:
+    disk = disk_available()
+    return {"memory": volatility_available(), "disk_image": disk, "disk_artifacts": disk}

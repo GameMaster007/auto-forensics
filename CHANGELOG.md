@@ -2,6 +2,84 @@
 
 ## [Unreleased] — 0.1.0
 
+### Autopilot plugin and detection
+
+- Review page hardening (second security review): the browser is opened
+  through a private launcher file, so the session token is no longer on a
+  command line; an evidence excerpt is hashed and cut from the same bytes
+  (large files through one descriptor, checked by inode and changed time),
+  so content forged with its old modified time is refused; removing a run
+  takes the run folder lock and clears it only when its recorded owner is
+  no longer running (locks now record the host too); an export folder of
+  another case is never taken for this run's; parsing, caches, folder
+  listing and finding titles are bounded. A file whose name is not valid
+  UTF-8 is now listed as a coverage gap (with U+FFFD for the bad bytes) and
+  kept in the custody record, instead of making every agent fail; the core
+  pipeline skips such names only when asked (`skip_undecodable_names`, recorded
+  in its manifest so its own checks skip the same files). Export renders
+  and encodes everything first and writes `final_report.json` last, so a
+  failure leaves no half-made export.
+- Review page backend: live progress for a run (stage, each check, bytes
+  fingerprinted); a folder browser so no path has to be typed; the cited
+  row of a finding re-read from the evidence after its SHA-256 is checked;
+  the time of the event each core finding cites; disk image summaries;
+  what this install can do (`/api/info`); and removal of failed or
+  unfinished runs, which moves the folder to `removed/` and deletes nothing.
+- Export also writes `final_report.html`, a single print-friendly page with
+  no scripts and no external requests. The review page opens it through a
+  random link that expires after five minutes.
+- Deciding many findings at once verifies the evidence once per batch
+  instead of once per core finding (`signoff.decide_many`). The decision
+  log is unchanged: one line per finding.
+- The run list no longer re-reads and re-hashes every draft each time it
+  is shown.
+- Disk artefacts: a new `disk_artifacts` agent reads the registry hives,
+  shortcuts, Jump Lists, browser history (Chrome, Edge, Firefox, Internet
+  Explorer), Prefetch, Recycle Bin index files, `setupapi.dev.log` and
+  Google Drive sync databases copied out of a disk image, and drafts cited
+  findings for insider data theft: USB sticks with serial numbers, files
+  opened from removable media, CDs or network shares, CD burning, cloud
+  sync clients, webmail and upload sites, wiping tools, cleared history,
+  mass deletions, confidential-looking file names and tell-tale searches.
+  The coordinator re-hashes each cited copy and re-reads each cited record
+  (registry cell, byte range or database row) before keeping a finding.
+  Details go to `artifact_timeline.jsonl` and a new `artifacts` key in
+  `disk_summary.json`, never into the draft. `lab/cfreds_score.py` scores a
+  run of the NIST CFReDS data-leakage case. See "What it reads from a disk
+  image" in `docs/AUTOPILOT.md`.
+- Disk images: with the new `disk` extra (dissect.target), the autopilot
+  opens raw/DD, split raw, EnCase E01 and VMDK images read-only, copies event
+  logs, registry hives, Prefetch, LNK/Jump Lists, browser history, PowerShell
+  history, scheduled tasks, USB setup logs and Recycle Bin index files into
+  the run folder within a size budget, writes `disk_summary.json`, and
+  analyses the copies. Findings cite `image.E01!/C:/path/in/image`. Without
+  the extra, the draft says to install it. See "Disk images" in
+  `docs/AUTOPILOT.md`.
+- New `auto_forensics_autopilot` package and `auto-forensics-autopilot`
+  command: custody record, triage, parallel agents (core pipeline,
+  injection sentinel, secrets sweep, memory), coordinator, and a sign-off
+  gate that blocks export until every finding is decided and signed.
+  See `docs/AUTOPILOT.md`.
+- Windows behaviour rules (`windows_rules.py`) for Sysmon, Security,
+  System, PowerShell, WinRM, DCOM and SQL Server events.
+- 34 more Windows rules for defense evasion (Defender, AMSI/ETW, audit and
+  log tampering, Security 4657 registry changes, timestomping, injection,
+  masquerading, alternate data streams, firewall) and lateral movement
+  (pass-the-hash logons, inbound RDP, admin shares, PsExec/wmiexec traces,
+  DCOM, remote PowerShell, RDP hijack). Hold-out defense evasion 10 to 15
+  of 55 files, lateral movement 5 to 10 of 18; 0 benign false alarms.
+- Persistence detector; Sysmon process and network findings graded by
+  behaviour instead of all-medium; Sysmon recognised from the EVTX
+  provider; small binary size is no longer a signal on its own.
+- EVTX: the Rust `evtx` reader is preferred (about 30x faster end to end,
+  up to ~1800x on large logs) with `python-evtx` as the fallback. Unnamed
+  `<Data>` values and `<UserData>` fields are now kept. Timestamps are
+  normalised to milliseconds (`2026-02-17T13:25:12.000Z`) and hex,
+  boolean and wrapped string values to one form, so both readers produce
+  the same events. Reports from earlier builds will not replay byte-for-byte.
+- Test lab (`lab/`): synthetic cases with an answer key, a hold-out set,
+  and benchmarks on public EVTX attack samples. Loop results: `lab/LOOP_LOG.md`.
+
 ### Integrity fixes
 
 - Require HMAC on keyed version-2 archive imports, refusing an

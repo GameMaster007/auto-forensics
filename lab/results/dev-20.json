@@ -1,0 +1,3607 @@
+{
+ "files": 278,
+ "detection_rate": 0.8777,
+ "tactic_match_rate": 0.4943,
+ "median_serious": 1,
+ "by_tactic": {
+  "command-and-control": "5/6 det, 4 tac",
+  "credential-access": "33/39 det, 22 tac",
+  "defense-evasion": "31/36 det, 19 tac",
+  "discovery": "9/11 det, 4 tac",
+  "execution": "32/34 det, 23 tac",
+  "lateral-movement": "41/47 det, 14 tac",
+  "persistence": "16/22 det, 12 tac",
+  "privilege-escalation": "61/66 det, 31 tac",
+  "unlabelled": "16/17 det, 0 tac"
+ },
+ "top_rules": [
+  [
+   "Sysmon process execution: ran from a user-writable folder",
+   61
+  ],
+  [
+   "Sysmon network connection signal",
+   33
+  ],
+  [
+   "Event 1102: windows_event_1102",
+   24
+  ],
+  [
+   "Program in a user-writable folder read another process's memory",
+   19
+  ],
+  [
+   "Process opened another with injection rights",
+   19
+  ],
+  [
+   "System binary used to fetch or proxy-execute code",
+   19
+  ],
+  [
+   "Program ran from a user-writable folder",
+   16
+  ],
+  [
+   "LSASS memory opened by another process",
+   14
+  ],
+  [
+   "Auto-elevating Windows binary launched by a program in a user folder",
+   14
+  ],
+  [
+   "Thread injected into another process",
+   10
+  ],
+  [
+   "Shell started by a browser, server or update process",
+   10
+  ],
+  [
+   "Autostart registry value set",
+   9
+  ],
+  [
+   "Sysmon process execution: system binary used to fetch or run code",
+   9
+  ],
+  [
+   "UAC bypass handler registered",
+   9
+  ],
+  [
+   "Event 4688: process_creation",
+   8
+  ]
+ ],
+ "rows": [
+  {
+   "file": "AutomatedTestingTools/Malware/DE_timestomp_and_dll_sideloading_and_RunPersist.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 23,
+   "serious": 7,
+   "ids": [
+    "1",
+    "10",
+    "11",
+    "13",
+    "2",
+    "5",
+    "7"
+   ]
+  },
+  {
+   "file": "AutomatedTestingTools/Malware/rundll32_cmd_schtask.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 50,
+   "serious": 3,
+   "ids": [
+    "1",
+    "10",
+    "11",
+    "12",
+    "13"
+   ]
+  },
+  {
+   "file": "AutomatedTestingTools/Malware/rundll32_hollowing_wermgr_masquerading.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 1,
+   "ids": [
+    "1",
+    "10",
+    "12"
+   ]
+  },
+  {
+   "file": "AutomatedTestingTools/Malware/sideloading_injection_persistence_run_key.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 7,
+   "serious": 2,
+   "ids": [
+    "1",
+    "10",
+    "13",
+    "7"
+   ]
+  },
+  {
+   "file": "AutomatedTestingTools/Malware/sideloading_uacbypass_rundll32_injection_c2.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 18,
+   "serious": 8,
+   "ids": [
+    "1",
+    "11",
+    "7",
+    "8"
+   ]
+  },
+  {
+   "file": "AutomatedTestingTools/PanacheSysmon_vs_AtomicRedTeam01.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 565,
+   "serious": 23,
+   "ids": [
+    "1",
+    "10",
+    "11",
+    "12",
+    "13",
+    "19",
+    "20",
+    "21",
+    "3",
+    "5",
+    "7"
+   ]
+  },
+  {
+   "file": "AutomatedTestingTools/WinDefender_Events_1117_1116_AtomicRedTeam.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 11,
+   "serious": 11,
+   "ids": [
+    "1116",
+    "1117"
+   ]
+  },
+  {
+   "file": "AutomatedTestingTools/panache_sysmon_vs_EDRTestingScript.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 122,
+   "serious": 32,
+   "ids": [
+    "1",
+    "11",
+    "12",
+    "13",
+    "3",
+    "7"
+   ]
+  },
+  {
+   "file": "Command and Control/DE_RDP_Tunnel_5156.evtx",
+   "tactic": "command-and-control",
+   "detected": true,
+   "tactic_match": true,
+   "events": 101,
+   "serious": 22,
+   "ids": [
+    "1102",
+    "4624",
+    "4648",
+    "4672",
+    "4688",
+    "5156",
+    "5158"
+   ]
+  },
+  {
+   "file": "Command and Control/DE_RDP_Tunneling_4624.evtx",
+   "tactic": "command-and-control",
+   "detected": true,
+   "tactic_match": true,
+   "events": 18,
+   "serious": 1,
+   "ids": [
+    "4624"
+   ]
+  },
+  {
+   "file": "Command and Control/DE_RDP_Tunneling_TerminalServices-RemoteConnectionManagerOperational_1149.evtx",
+   "tactic": "command-and-control",
+   "detected": true,
+   "tactic_match": true,
+   "events": 228,
+   "serious": 1,
+   "ids": [
+    "1136",
+    "1149",
+    "1155",
+    "258",
+    "261"
+   ]
+  },
+  {
+   "file": "Command and Control/DE_sysmon-3-rdp-tun.evtx",
+   "tactic": "command-and-control",
+   "detected": true,
+   "tactic_match": true,
+   "events": 73,
+   "serious": 19,
+   "ids": [
+    "1",
+    "3",
+    "5",
+    "6"
+   ]
+  },
+  {
+   "file": "Command and Control/bits_openvpn.evtx",
+   "tactic": "command-and-control",
+   "detected": true,
+   "tactic_match": false,
+   "events": 1537,
+   "serious": 1,
+   "ids": [
+    "209",
+    "3",
+    "306",
+    "310",
+    "4",
+    "5",
+    "59",
+    "60",
+    "61"
+   ]
+  },
+  {
+   "file": "Command and Control/tunna_iis_rdp_smb_tunneling_sysmon_3.evtx",
+   "tactic": "command-and-control",
+   "detected": false,
+   "tactic_match": false,
+   "events": 12,
+   "serious": 0,
+   "ids": [
+    "3"
+   ]
+  },
+  {
+   "file": "Credential Access/4794_DSRM_password_change_t1098.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "4794"
+   ]
+  },
+  {
+   "file": "Credential Access/ACL_ForcePwd_SPNAdd_User_Computer_Accounts.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": false,
+   "events": 55,
+   "serious": 13,
+   "ids": [
+    "1102",
+    "4662",
+    "4702",
+    "4719",
+    "4738",
+    "4742",
+    "5136"
+   ]
+  },
+  {
+   "file": "Credential Access/CA_4624_4625_LogonType2_LogonProc_chrome.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 4,
+   "serious": 1,
+   "ids": [
+    "4624",
+    "4625"
+   ]
+  },
+  {
+   "file": "Credential Access/CA_DCSync_4662.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 3,
+   "serious": 1,
+   "ids": [
+    "4662"
+   ]
+  },
+  {
+   "file": "Credential Access/CA_Mimikatz_Memssp_Default_Logs_Sysmon_11.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "11"
+   ]
+  },
+  {
+   "file": "Credential Access/CA_PetiPotam_etw_rpc_efsr_5_6.evtx",
+   "tactic": "credential-access",
+   "detected": false,
+   "tactic_match": false,
+   "events": 29109,
+   "serious": 0,
+   "ids": [
+    "0",
+    "1",
+    "14",
+    "16",
+    "5",
+    "6",
+    "9"
+   ]
+  },
+  {
+   "file": "Credential Access/CA_chrome_firefox_opera_4663.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": false,
+   "events": 5,
+   "serious": 1,
+   "ids": [
+    "1102",
+    "4663"
+   ]
+  },
+  {
+   "file": "Credential Access/CA_hashdump_4663_4656_lsass_access.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 2,
+   "serious": 1,
+   "ids": [
+    "4656",
+    "4663"
+   ]
+  },
+  {
+   "file": "Credential Access/CA_keefarce_keepass_credump.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": false,
+   "events": 5,
+   "serious": 3,
+   "ids": [
+    "1",
+    "5",
+    "7",
+    "8"
+   ]
+  },
+  {
+   "file": "Credential Access/CA_keepass_KeeThief_Get-KeePassDatabaseKey.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": false,
+   "events": 2,
+   "serious": 1,
+   "ids": [
+    "8"
+   ]
+  },
+  {
+   "file": "Credential Access/CA_protectedstorage_5145_rpc_masterkey.evtx",
+   "tactic": "credential-access",
+   "detected": false,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 0,
+   "ids": [
+    "5145"
+   ]
+  },
+  {
+   "file": "Credential Access/CA_sysmon_hashdump_cmd_meterpreter.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 9,
+   "serious": 2,
+   "ids": [
+    "10",
+    "8"
+   ]
+  },
+  {
+   "file": "Credential Access/CA_teamviewer-dumper_sysmon_10.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "10"
+   ]
+  },
+  {
+   "file": "Credential Access/LsassSilentProcessExit_process_exit_monitor_3001_lsass.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 2,
+   "serious": 1,
+   "ids": [
+    "3001"
+   ]
+  },
+  {
+   "file": "Credential Access/MSSQL_multiple_failed_logon_EventID_18456.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 10,
+   "serious": 1,
+   "ids": [
+    "18456"
+   ]
+  },
+  {
+   "file": "Credential Access/Powershell_4104_MiniDumpWriteDump_Lsass.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 1,
+   "ids": [
+    "40961",
+    "40962",
+    "4104",
+    "53504"
+   ]
+  },
+  {
+   "file": "Credential Access/Sysmon13_MachineAccount_Password_Hash_Changed_via_LsarSetSecret.evtx",
+   "tactic": "credential-access",
+   "detected": false,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 0,
+   "ids": [
+    "12",
+    "13"
+   ]
+  },
+  {
+   "file": "Credential Access/Sysmon_13_Local_Admin_Password_Changed.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "13"
+   ]
+  },
+  {
+   "file": "Credential Access/Zerologon_CVE-2020-1472_DFIR_System_NetLogon_Error_EventID_5805.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": false,
+   "events": 2,
+   "serious": 1,
+   "ids": [
+    "104",
+    "5805"
+   ]
+  },
+  {
+   "file": "Credential Access/Zerologon_VoidSec_CVE-2020-1472_4626_LT3_Anonym_follwedby_4742_DC_Anony_DC.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": false,
+   "events": 9,
+   "serious": 1,
+   "ids": [
+    "1102",
+    "4624",
+    "4742"
+   ]
+  },
+  {
+   "file": "Credential Access/babyshark_mimikatz_powershell.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 33,
+   "serious": 1,
+   "ids": [
+    "1",
+    "10",
+    "11",
+    "12",
+    "16",
+    "3",
+    "4",
+    "5",
+    "7"
+   ]
+  },
+  {
+   "file": "Credential Access/dc_applog_ntdsutil_dfir_325_326_327.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 4,
+   "serious": 1,
+   "ids": [
+    "325",
+    "326",
+    "327"
+   ]
+  },
+  {
+   "file": "Credential Access/discovery_sysmon_1_iis_pwd_and_config_discovery_appcmd.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": false,
+   "events": 40,
+   "serious": 3,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Credential Access/etw_rpc_zerologon.evtx",
+   "tactic": "credential-access",
+   "detected": false,
+   "tactic_match": false,
+   "events": 415,
+   "serious": 0,
+   "ids": [
+    "6"
+   ]
+  },
+  {
+   "file": "Credential Access/kerberos_pwd_spray_4771.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 12,
+   "serious": 3,
+   "ids": [
+    "1102",
+    "4768",
+    "4771"
+   ]
+  },
+  {
+   "file": "Credential Access/phish_windows_credentials_powershell_scriptblockLog_4104.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": false,
+   "events": 2,
+   "serious": 2,
+   "ids": [
+    "4104"
+   ]
+  },
+  {
+   "file": "Credential Access/ppl_bypass_ppldump_knowdll_hijack_sysmon_security.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 20,
+   "serious": 2,
+   "ids": [
+    "1",
+    "10",
+    "11",
+    "12",
+    "4985",
+    "5",
+    "7"
+   ]
+  },
+  {
+   "file": "Credential Access/remote_pwd_reset_rpc_mimikatz_postzerologon_target_DC.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 7,
+   "serious": 4,
+   "ids": [
+    "1102",
+    "4624",
+    "4724",
+    "4776",
+    "5145"
+   ]
+  },
+  {
+   "file": "Credential Access/remote_sam_registry_access_via_backup_operator_priv.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 31,
+   "serious": 3,
+   "ids": [
+    "1102",
+    "4624",
+    "4627",
+    "4672",
+    "4776",
+    "5145"
+   ]
+  },
+  {
+   "file": "Credential Access/sysmon17_18_kekeo_tsssp_default_np.evtx",
+   "tactic": "credential-access",
+   "detected": false,
+   "tactic_match": false,
+   "events": 3,
+   "serious": 0,
+   "ids": [
+    "17",
+    "18"
+   ]
+  },
+  {
+   "file": "Credential Access/sysmon_10_11_lsass_memdump.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 4,
+   "serious": 3,
+   "ids": [
+    "10",
+    "11"
+   ]
+  },
+  {
+   "file": "Credential Access/sysmon_10_11_outlfank_dumpert_and_andrewspecial_memdump.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 15,
+   "serious": 2,
+   "ids": [
+    "1",
+    "10",
+    "11"
+   ]
+  },
+  {
+   "file": "Credential Access/sysmon_10_1_memdump_comsvcs_minidump.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 6,
+   "serious": 3,
+   "ids": [
+    "1",
+    "10",
+    "11",
+    "7"
+   ]
+  },
+  {
+   "file": "Credential Access/sysmon_10_lsass_mimikatz_sekurlsa_logonpasswords.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 1,
+   "serious": 2,
+   "ids": [
+    "10"
+   ]
+  },
+  {
+   "file": "Credential Access/sysmon_13_keylogger_directx.evtx",
+   "tactic": "credential-access",
+   "detected": false,
+   "tactic_match": false,
+   "events": 6,
+   "serious": 0,
+   "ids": [
+    "1",
+    "13"
+   ]
+  },
+  {
+   "file": "Credential Access/sysmon_2x10_lsass_with_different_pid_RtlCreateProcessReflection.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 3,
+   "serious": 2,
+   "ids": [
+    "10"
+   ]
+  },
+  {
+   "file": "Credential Access/sysmon_3_10_Invoke-Mimikatz_hosted_Github.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 2,
+   "serious": 3,
+   "ids": [
+    "10",
+    "3"
+   ]
+  },
+  {
+   "file": "Credential Access/sysmon_rdrleakdiag_lsass_dump.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 4,
+   "serious": 2,
+   "ids": [
+    "1",
+    "11",
+    "8"
+   ]
+  },
+  {
+   "file": "Credential Access/tutto_malseclogon.evtx",
+   "tactic": "credential-access",
+   "detected": true,
+   "tactic_match": true,
+   "events": 15,
+   "serious": 12,
+   "ids": [
+    "1",
+    "10",
+    "4624",
+    "4688",
+    "4703"
+   ]
+  },
+  {
+   "file": "Defense Evasion/DE_104_system_log_cleared.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": true,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "104"
+   ]
+  },
+  {
+   "file": "Defense Evasion/DE_1102_security_log_cleared.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": true,
+   "events": 112,
+   "serious": 1,
+   "ids": [
+    "1102",
+    "4663",
+    "5156"
+   ]
+  },
+  {
+   "file": "Defense Evasion/DE_BYOV_Zam64_CA_Memdump_sysmon_7_10.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": false,
+   "events": 6,
+   "serious": 3,
+   "ids": [
+    "1",
+    "10",
+    "5",
+    "7"
+   ]
+  },
+  {
+   "file": "Defense Evasion/DE_EventLog_Service_Crashed.evtx",
+   "tactic": "defense-evasion",
+   "detected": false,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 0,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Defense Evasion/DE_Fake_ComputerAccount_4720.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": false,
+   "events": 2,
+   "serious": 2,
+   "ids": [
+    "4720"
+   ]
+  },
+  {
+   "file": "Defense Evasion/DE_KernelDebug_and_TestSigning_ON_Security_4826.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": true,
+   "events": 6,
+   "serious": 1,
+   "ids": [
+    "4826"
+   ]
+  },
+  {
+   "file": "Defense Evasion/DE_Powershell_CLM_Disabled_Sysmon_12.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": true,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "12"
+   ]
+  },
+  {
+   "file": "Defense Evasion/DE_ProcessHerpaderping_Sysmon_11_10_1_7.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 3,
+   "ids": [
+    "1",
+    "10",
+    "11",
+    "7"
+   ]
+  },
+  {
+   "file": "Defense Evasion/DE_UAC_Disabled_Sysmon_12_13.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": true,
+   "events": 3,
+   "serious": 1,
+   "ids": [
+    "1",
+    "12",
+    "13"
+   ]
+  },
+  {
+   "file": "Defense Evasion/DE_WinEventLogSvc_Crash_System_7036.evtx",
+   "tactic": "defense-evasion",
+   "detected": false,
+   "tactic_match": false,
+   "events": 6,
+   "serious": 0,
+   "ids": [
+    "7036"
+   ]
+  },
+  {
+   "file": "Defense Evasion/DE_remote_eventlog_svc_crash_byt3bl33d3r_sysmon_17_1_3.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": false,
+   "events": 11,
+   "serious": 2,
+   "ids": [
+    "1",
+    "17",
+    "18",
+    "3"
+   ]
+  },
+  {
+   "file": "Defense Evasion/DE_renamed_psexec_service_sysmon_17_18.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": false,
+   "events": 11,
+   "serious": 1,
+   "ids": [
+    "17",
+    "18"
+   ]
+  },
+  {
+   "file": "Defense Evasion/DE_suspicious_remote_eventlog_svc_access_5145.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": true,
+   "events": 8,
+   "serious": 3,
+   "ids": [
+    "1102",
+    "4624",
+    "4776",
+    "5145"
+   ]
+  },
+  {
+   "file": "Defense Evasion/DE_xp_cmdshell_enabled_MSSQL_EID_15457.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 1,
+   "ids": [
+    "15457"
+   ]
+  },
+  {
+   "file": "Defense Evasion/DSE_bypass_BYOV_TDL_dummydriver_sysmon_6_7_13.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": false,
+   "events": 8,
+   "serious": 1,
+   "ids": [
+    "1",
+    "11",
+    "13",
+    "5",
+    "6",
+    "7"
+   ]
+  },
+  {
+   "file": "Defense Evasion/Sysmon 7  Update Session Orchestrator Dll Hijack.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": false,
+   "events": 64,
+   "serious": 1,
+   "ids": [
+    "1",
+    "3",
+    "7"
+   ]
+  },
+  {
+   "file": "Defense Evasion/Sysmon 7 dllhijack_cdpsshims_CDPSvc.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": true,
+   "events": 13,
+   "serious": 2,
+   "ids": [
+    "1",
+    "5",
+    "7"
+   ]
+  },
+  {
+   "file": "Defense Evasion/Sysmon_10_Evasion_Suspicious_NtOpenProcess_CallTrace.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": true,
+   "events": 1,
+   "serious": 2,
+   "ids": [
+    "10"
+   ]
+  },
+  {
+   "file": "Defense Evasion/Sysmon_12_DE_AntiForensics_MRU_DeleteKey.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": true,
+   "events": 3,
+   "serious": 1,
+   "ids": [
+    "12"
+   ]
+  },
+  {
+   "file": "Defense Evasion/Win_4985_T1186_Process_Doppelganging.evtx",
+   "tactic": "defense-evasion",
+   "detected": false,
+   "tactic_match": false,
+   "events": 2,
+   "serious": 0,
+   "ids": [
+    "4985"
+   ]
+  },
+  {
+   "file": "Defense Evasion/apt10_jjs_sideloading_prochollowing_persist_as_service_sysmon_1_7_8_13.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": true,
+   "events": 11,
+   "serious": 1,
+   "ids": [
+    "1",
+    "13",
+    "5",
+    "7",
+    "8"
+   ]
+  },
+  {
+   "file": "Defense Evasion/de_PsScriptBlockLogging_disabled_sysmon12_13.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": true,
+   "events": 2,
+   "serious": 1,
+   "ids": [
+    "12",
+    "13"
+   ]
+  },
+  {
+   "file": "Defense Evasion/de_hiding_files_via_attrib_cmdlet.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": true,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Defense Evasion/de_portforward_netsh_rdp_sysmon_13_1.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": false,
+   "events": 3,
+   "serious": 2,
+   "ids": [
+    "1",
+    "13"
+   ]
+  },
+  {
+   "file": "Defense Evasion/de_powershell_execpolicy_changed_sysmon_13.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": true,
+   "events": 5,
+   "serious": 2,
+   "ids": [
+    "13"
+   ]
+  },
+  {
+   "file": "Defense Evasion/de_sysmon_13_VBA_Security_AccessVBOM.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": true,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "13"
+   ]
+  },
+  {
+   "file": "Defense Evasion/de_unmanagedpowershell_psinject_sysmon_7_8_10.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": true,
+   "events": 84,
+   "serious": 1,
+   "ids": [
+    "10",
+    "7",
+    "8"
+   ]
+  },
+  {
+   "file": "Defense Evasion/evasion_codeinj_odzhan_conhost_sysmon_10_1.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": true,
+   "events": 4,
+   "serious": 2,
+   "ids": [
+    "1",
+    "10"
+   ]
+  },
+  {
+   "file": "Defense Evasion/evasion_codeinj_odzhan_spoolsv_sysmon_10_1.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": true,
+   "events": 4,
+   "serious": 2,
+   "ids": [
+    "1",
+    "10"
+   ]
+  },
+  {
+   "file": "Defense Evasion/faxhell_sysmon_7_1_18_3_bindshell_dllhijack.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": false,
+   "events": 10,
+   "serious": 1,
+   "ids": [
+    "1",
+    "10",
+    "18",
+    "3",
+    "7"
+   ]
+  },
+  {
+   "file": "Defense Evasion/meterpreter_migrate_to_explorer_sysmon_8.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": true,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "8"
+   ]
+  },
+  {
+   "file": "Defense Evasion/process_suspend_sysmon_10_ga_800.evtx",
+   "tactic": "defense-evasion",
+   "detected": false,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 0,
+   "ids": [
+    "10"
+   ]
+  },
+  {
+   "file": "Defense Evasion/sideloading_wwlib_sysmon_7_1_11.evtx",
+   "tactic": "defense-evasion",
+   "detected": false,
+   "tactic_match": false,
+   "events": 7,
+   "serious": 0,
+   "ids": [
+    "1",
+    "11",
+    "7"
+   ]
+  },
+  {
+   "file": "Defense Evasion/sysmon_10_1_ppid_spoofing.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": true,
+   "events": 5,
+   "serious": 1,
+   "ids": [
+    "1",
+    "10"
+   ]
+  },
+  {
+   "file": "Defense Evasion/sysmon_13_rdp_settings_tampering.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": false,
+   "events": 20,
+   "serious": 1,
+   "ids": [
+    "1",
+    "11",
+    "13"
+   ]
+  },
+  {
+   "file": "Defense Evasion/sysmon_2_11_evasion_timestomp_MACE.evtx",
+   "tactic": "defense-evasion",
+   "detected": true,
+   "tactic_match": false,
+   "events": 2,
+   "serious": 1,
+   "ids": [
+    "11",
+    "2"
+   ]
+  },
+  {
+   "file": "Discovery/4799_remote_local_groups_enumeration.evtx",
+   "tactic": "discovery",
+   "detected": true,
+   "tactic_match": true,
+   "events": 5,
+   "serious": 1,
+   "ids": [
+    "4799"
+   ]
+  },
+  {
+   "file": "Discovery/Discovery_Remote_System_NamedPipes_Sysmon_18.evtx",
+   "tactic": "discovery",
+   "detected": true,
+   "tactic_match": false,
+   "events": 20,
+   "serious": 1,
+   "ids": [
+    "18"
+   ]
+  },
+  {
+   "file": "Discovery/dicovery_4661_net_group_domain_admins_target.evtx",
+   "tactic": "discovery",
+   "detected": true,
+   "tactic_match": true,
+   "events": 63,
+   "serious": 3,
+   "ids": [
+    "1102",
+    "4624",
+    "4661",
+    "4672",
+    "4776",
+    "5140",
+    "5145",
+    "5156",
+    "5158"
+   ]
+  },
+  {
+   "file": "Discovery/discovery_UEFI_Settings_rweverything_sysmon_6.evtx",
+   "tactic": "discovery",
+   "detected": false,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 0,
+   "ids": [
+    "6"
+   ]
+  },
+  {
+   "file": "Discovery/discovery_bloodhound.evtx",
+   "tactic": "discovery",
+   "detected": true,
+   "tactic_match": true,
+   "events": 10,
+   "serious": 2,
+   "ids": [
+    "1102",
+    "5145"
+   ]
+  },
+  {
+   "file": "Discovery/discovery_enum_shares_target_sysmon_3_18.evtx",
+   "tactic": "discovery",
+   "detected": true,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 2,
+   "ids": [
+    "18",
+    "3"
+   ]
+  },
+  {
+   "file": "Discovery/discovery_local_user_or_group_windows_security_4799_4798.evtx",
+   "tactic": "discovery",
+   "detected": true,
+   "tactic_match": true,
+   "events": 3,
+   "serious": 1,
+   "ids": [
+    "4798",
+    "4799"
+   ]
+  },
+  {
+   "file": "Discovery/discovery_meterpreter_ps_cmd_process_listing_sysmon_10.evtx",
+   "tactic": "discovery",
+   "detected": true,
+   "tactic_match": false,
+   "events": 52,
+   "serious": 2,
+   "ids": [
+    "10"
+   ]
+  },
+  {
+   "file": "Discovery/discovery_psloggedon.evtx",
+   "tactic": "discovery",
+   "detected": true,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 1,
+   "ids": [
+    "1102",
+    "5145"
+   ]
+  },
+  {
+   "file": "Discovery/discovery_sysmon_18_Invoke_UserHunter_NetSessionEnum_DC-srvsvc.evtx",
+   "tactic": "discovery",
+   "detected": false,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 0,
+   "ids": [
+    "18"
+   ]
+  },
+  {
+   "file": "Discovery/discovery_sysmon_3_Invoke_UserHunter_SourceMachine.evtx",
+   "tactic": "discovery",
+   "detected": true,
+   "tactic_match": false,
+   "events": 9,
+   "serious": 9,
+   "ids": [
+    "3"
+   ]
+  },
+  {
+   "file": "Execution/Exec_sysmon_meterpreter_reversetcp_msipackage.evtx",
+   "tactic": "execution",
+   "detected": false,
+   "tactic_match": false,
+   "events": 8,
+   "serious": 0,
+   "ids": [
+    "1",
+    "13",
+    "2",
+    "7"
+   ]
+  },
+  {
+   "file": "Execution/Exec_via_cpl_Application_Experience_EventID_17_ControlPanelApplet.evtx",
+   "tactic": "execution",
+   "detected": false,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 0,
+   "ids": [
+    "17"
+   ]
+  },
+  {
+   "file": "Execution/Sysmon_Exec_CompiledHTML.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 2,
+   "serious": 3,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Execution/Sysmon_meterpreter_ReflectivePEInjection_to_notepad_.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": false,
+   "events": 13,
+   "serious": 3,
+   "ids": [
+    "1",
+    "10",
+    "3",
+    "8"
+   ]
+  },
+  {
+   "file": "Execution/evasion_execution_imageload_wuauclt_lolbas.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 3,
+   "serious": 2,
+   "ids": [
+    "1",
+    "7"
+   ]
+  },
+  {
+   "file": "Execution/exec_driveby_cve-2018-15982_sysmon_1_10.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 2,
+   "serious": 2,
+   "ids": [
+    "1",
+    "10"
+   ]
+  },
+  {
+   "file": "Execution/exec_msxsl_xsl_sysmon_1_7.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 3,
+   "serious": 1,
+   "ids": [
+    "1",
+    "7"
+   ]
+  },
+  {
+   "file": "Execution/exec_persist_rundll32_mshta_scheduledtask_sysmon_1_3_11.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 8,
+   "serious": 11,
+   "ids": [
+    "1",
+    "11",
+    "3"
+   ]
+  },
+  {
+   "file": "Execution/exec_sysmon_1_11_lolbin_rundll32_openurl_FileProtocolHandler.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 11,
+   "serious": 3,
+   "ids": [
+    "1",
+    "11"
+   ]
+  },
+  {
+   "file": "Execution/exec_sysmon_1_11_lolbin_rundll32_shdocvw_openurl.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 6,
+   "serious": 2,
+   "ids": [
+    "1",
+    "11"
+   ]
+  },
+  {
+   "file": "Execution/exec_sysmon_1_11_lolbin_rundll32_zipfldr_RouteTheCall.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": false,
+   "events": 2,
+   "serious": 1,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Execution/exec_sysmon_1_7_jscript9_defense_evasion.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 3,
+   "serious": 3,
+   "ids": [
+    "1",
+    "7"
+   ]
+  },
+  {
+   "file": "Execution/exec_sysmon_1_ftp.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 4,
+   "serious": 1,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Execution/exec_sysmon_1_lolbin_pcalua.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": false,
+   "events": 3,
+   "serious": 1,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Execution/exec_sysmon_1_lolbin_renamed_regsvr32_scrobj.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 2,
+   "serious": 2,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Execution/exec_sysmon_1_lolbin_rundll32_advpack_RegisterOCX.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": false,
+   "events": 2,
+   "serious": 1,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Execution/exec_sysmon_1_rundll32_pcwutl_LaunchApplication.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Execution/exec_sysmon_lobin_regsvr32_sct.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 3,
+   "serious": 4,
+   "ids": [
+    "1",
+    "3"
+   ]
+  },
+  {
+   "file": "Execution/exec_wmic_xsl_internet_sysmon_3_1_11.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 8,
+   "serious": 4,
+   "ids": [
+    "1",
+    "11",
+    "13",
+    "3",
+    "7"
+   ]
+  },
+  {
+   "file": "Execution/execution_evasion_visual_studio_prebuild_event.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 29,
+   "serious": 3,
+   "ids": [
+    "1",
+    "11"
+   ]
+  },
+  {
+   "file": "Execution/revshell_cmd_svchost_sysmon_1.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 4,
+   "serious": 1,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Execution/rogue_msi_url_1040_1042.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 351,
+   "serious": 1,
+   "ids": [
+    "1040",
+    "1042"
+   ]
+  },
+  {
+   "file": "Execution/susp_explorer_exec.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 3,
+   "serious": 2,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Execution/susp_explorer_exec_root_cmdline_@rimpq_@CyberRaiju.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": false,
+   "events": 10,
+   "serious": 1,
+   "ids": [
+    "1",
+    "13",
+    "7"
+   ]
+  },
+  {
+   "file": "Execution/sysmon_11_1_lolbas_downldr_desktopimgdownldr.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": false,
+   "events": 3,
+   "serious": 1,
+   "ids": [
+    "1",
+    "11"
+   ]
+  },
+  {
+   "file": "Execution/sysmon_1_11_rundll32_cpl_ostap.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 5,
+   "serious": 4,
+   "ids": [
+    "1",
+    "11"
+   ]
+  },
+  {
+   "file": "Execution/sysmon_exec_from_vss_persistence.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 17,
+   "serious": 16,
+   "ids": [
+    "1",
+    "11"
+   ]
+  },
+  {
+   "file": "Execution/sysmon_lolbas_rundll32_zipfldr_routethecall_shell.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 2,
+   "serious": 2,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Execution/sysmon_lolbin_bohops_vshadow_exec.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 6,
+   "serious": 3,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Execution/sysmon_mshta_sharpshooter_stageless_meterpreter.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 3,
+   "serious": 4,
+   "ids": [
+    "1",
+    "3"
+   ]
+  },
+  {
+   "file": "Execution/sysmon_vbs_sharpshooter_stageless_meterpreter.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 5,
+   "serious": 5,
+   "ids": [
+    "1",
+    "3",
+    "7"
+   ]
+  },
+  {
+   "file": "Execution/sysmon_zipexec.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": true,
+   "events": 8,
+   "serious": 4,
+   "ids": [
+    "1",
+    "11"
+   ]
+  },
+  {
+   "file": "Execution/temp_scheduled_task_4698_4699.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": false,
+   "events": 2,
+   "serious": 1,
+   "ids": [
+    "4698",
+    "4699"
+   ]
+  },
+  {
+   "file": "Execution/windows_bits_4_59_60_lolbas desktopimgdownldr.evtx",
+   "tactic": "execution",
+   "detected": true,
+   "tactic_match": false,
+   "events": 5,
+   "serious": 1,
+   "ids": [
+    "209",
+    "3",
+    "4",
+    "59",
+    "60"
+   ]
+  },
+  {
+   "file": "Lateral Movement/DFIR_RDP_Client_TimeZone_RdpCoreTs_104_example.evtx",
+   "tactic": "lateral-movement",
+   "detected": false,
+   "tactic_match": false,
+   "events": 21,
+   "serious": 0,
+   "ids": [
+    "104"
+   ]
+  },
+  {
+   "file": "Lateral Movement/ImpersonateUser-via local Pass The Hash Sysmon and Security.evtx",
+   "tactic": "lateral-movement",
+   "detected": false,
+   "tactic_match": false,
+   "events": 14,
+   "serious": 0,
+   "ids": [
+    "1",
+    "18",
+    "3",
+    "4624",
+    "5145"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_4624_mimikatz_sekurlsa_pth_source_machine.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": true,
+   "events": 6,
+   "serious": 5,
+   "ids": [
+    "1102",
+    "4624",
+    "4672",
+    "4688"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_5145_Remote_FileCopy.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": true,
+   "events": 869,
+   "serious": 1,
+   "ids": [
+    "5145"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_DCOM_MSHTA_LethalHTA_Sysmon_3_1.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 2,
+   "serious": 1,
+   "ids": [
+    "1",
+    "3"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_ImageLoad_NFSH_Sysmon_7.evtx",
+   "tactic": "lateral-movement",
+   "detected": false,
+   "tactic_match": false,
+   "events": 2,
+   "serious": 0,
+   "ids": [
+    "7"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_NewShare_Added_Sysmon_12_13.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": true,
+   "events": 3,
+   "serious": 1,
+   "ids": [
+    "12",
+    "13"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_PowershellRemoting_sysmon_1_wsmprovhost.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": true,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_REMCOM_5145_TargetHost.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": true,
+   "events": 30,
+   "serious": 1,
+   "ids": [
+    "5145"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_Remote_Service01_5145_svcctl.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": true,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "5145"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_Remote_Service02_7045.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 3,
+   "serious": 3,
+   "ids": [
+    "7045"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_ScheduledTask_ATSVC_target_host.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": true,
+   "events": 34,
+   "serious": 11,
+   "ids": [
+    "1102",
+    "4624",
+    "4661",
+    "4672",
+    "4688",
+    "4698",
+    "4699",
+    "4776",
+    "5140",
+    "5145"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_WMIC_4648_rpcss.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": true,
+   "events": 5,
+   "serious": 6,
+   "ids": [
+    "1102",
+    "4648",
+    "4688"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_WMI_4624_4688_TargetHost.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 8,
+   "serious": 2,
+   "ids": [
+    "4624",
+    "4688"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_add_new_namedpipe_tp_nullsession_registry_turla_like_ttp.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": true,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "13"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_dcom_shwnd_shbrwnd_mmc20_failed_traces_system_10016.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": true,
+   "events": 4,
+   "serious": 1,
+   "ids": [
+    "10016"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_impacket_docmexec_mmc_sysmon_01.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 9,
+   "serious": 4,
+   "ids": [
+    "1",
+    "3"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_regsvc_DirectoryServiceExtPt_Lsass_NTDS_AdamXpn.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 6,
+   "serious": 3,
+   "ids": [
+    "12",
+    "13",
+    "18",
+    "3"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_renamed_psexecsvc_5145.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": true,
+   "events": 22,
+   "serious": 1,
+   "ids": [
+    "5145"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_sysmon_1_12_13_3_tsclient_SharpRdp.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 9,
+   "serious": 2,
+   "ids": [
+    "1",
+    "12",
+    "13",
+    "3"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_sysmon_3_12_13_1_SharpRDP.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 38,
+   "serious": 4,
+   "ids": [
+    "1",
+    "12",
+    "13",
+    "3"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_sysmon_3_DCOM_ShellBrowserWindow_ShellWindows.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 3,
+   "serious": 3,
+   "ids": [
+    "3"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_sysmon_psexec_smb_meterpreter.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 10,
+   "serious": 5,
+   "ids": [
+    "1",
+    "10",
+    "13",
+    "18",
+    "3"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_sysmon_remote_task_src_powershell.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 3,
+   "serious": 2,
+   "ids": [
+    "3",
+    "7"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_tsclient_startup_folder.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 1,
+   "ids": [
+    "11"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_typical_IIS_webshell_sysmon_1_10_traces.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 3,
+   "ids": [
+    "1",
+    "10"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_winrm_exec_sysmon_1_winrshost.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": true,
+   "events": 3,
+   "serious": 1,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_winrm_target_wrmlogs_91_wsmanShellStarted_poorLog.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": true,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "91"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_wmi_PoisonHandler_Mr-Un1k0d3r_sysmon_1_13.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 15,
+   "serious": 2,
+   "ids": [
+    "1",
+    "13"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_wmiexec_impacket_sysmon_whoami.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 7,
+   "serious": 3,
+   "ids": [
+    "1",
+    "3"
+   ]
+  },
+  {
+   "file": "Lateral Movement/LM_xp_cmdshell_MSSQL_Events.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 21,
+   "serious": 1,
+   "ids": [
+    "15457",
+    "18454",
+    "33205"
+   ]
+  },
+  {
+   "file": "Lateral Movement/MSSQL_15281_xp_cmdshell_exec_failed_attempt.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "15281"
+   ]
+  },
+  {
+   "file": "Lateral Movement/RemotePowerShell_MS_Windows-Remote_Management_EventID_169.evtx",
+   "tactic": "lateral-movement",
+   "detected": false,
+   "tactic_match": false,
+   "events": 6,
+   "serious": 0,
+   "ids": [
+    "169",
+    "193"
+   ]
+  },
+  {
+   "file": "Lateral Movement/dfir_rdpsharp_target_RdpCoreTs_168_68_131.evtx",
+   "tactic": "lateral-movement",
+   "detected": false,
+   "tactic_match": false,
+   "events": 40,
+   "serious": 0,
+   "ids": [
+    "131",
+    "168",
+    "68"
+   ]
+  },
+  {
+   "file": "Lateral Movement/lateral_movement_startup_3_11.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 2,
+   "serious": 2,
+   "ids": [
+    "11",
+    "3"
+   ]
+  },
+  {
+   "file": "Lateral Movement/lm_remote_registry_sysmon_1_13_3.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 2,
+   "ids": [
+    "1",
+    "12",
+    "13",
+    "3"
+   ]
+  },
+  {
+   "file": "Lateral Movement/lm_sysmon_18_remshell_over_namedpipe.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 7,
+   "serious": 2,
+   "ids": [
+    "1",
+    "10",
+    "18",
+    "3"
+   ]
+  },
+  {
+   "file": "Lateral Movement/net_share_drive_5142.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 2,
+   "serious": 1,
+   "ids": [
+    "1102",
+    "5142"
+   ]
+  },
+  {
+   "file": "Lateral Movement/powercat_revShell_sysmon_1_3.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 9,
+   "serious": 3,
+   "ids": [
+    "1",
+    "10",
+    "3"
+   ]
+  },
+  {
+   "file": "Lateral Movement/remote task update 4624 4702 same logonid.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 8,
+   "serious": 2,
+   "ids": [
+    "1102",
+    "4624",
+    "4702"
+   ]
+  },
+  {
+   "file": "Lateral Movement/remote_file_copy_system_proc_file_write_sysmon_11.evtx",
+   "tactic": "lateral-movement",
+   "detected": false,
+   "tactic_match": false,
+   "events": 2,
+   "serious": 0,
+   "ids": [
+    "1",
+    "11"
+   ]
+  },
+  {
+   "file": "Lateral Movement/sharprdp_sysmon_7_mstscax.dll.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": true,
+   "events": 4,
+   "serious": 2,
+   "ids": [
+    "1",
+    "7"
+   ]
+  },
+  {
+   "file": "Lateral Movement/smb_bi_auth_conn_spoolsample.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 2,
+   "serious": 2,
+   "ids": [
+    "3"
+   ]
+  },
+  {
+   "file": "Lateral Movement/smbmap_upload_exec_sysmon.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 27,
+   "serious": 9,
+   "ids": [
+    "1",
+    "11",
+    "12",
+    "13",
+    "3"
+   ]
+  },
+  {
+   "file": "Lateral Movement/spoolsample_5145.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "5145"
+   ]
+  },
+  {
+   "file": "Lateral Movement/sysmon_1_exec_via_sql_xpcmdshell.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Lateral Movement/wmi_remote_registry_sysmon.evtx",
+   "tactic": "lateral-movement",
+   "detected": true,
+   "tactic_match": false,
+   "events": 13,
+   "serious": 4,
+   "ids": [
+    "1",
+    "12",
+    "13",
+    "3",
+    "7"
+   ]
+  },
+  {
+   "file": "Other/emotet/exec_emotet_ps_4104.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 2,
+   "ids": [
+    "4104"
+   ]
+  },
+  {
+   "file": "Other/emotet/exec_emotet_ps_800_get-item.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "800"
+   ]
+  },
+  {
+   "file": "Other/emotet/exec_emotet_ps_800_invoke-item.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "800"
+   ]
+  },
+  {
+   "file": "Other/emotet/exec_emotet_ps_800_new-item.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "800"
+   ]
+  },
+  {
+   "file": "Other/emotet/exec_emotet_ps_800_new-object.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "800"
+   ]
+  },
+  {
+   "file": "Other/emotet/exec_emotet_sysmon_1.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Other/maldoc_mshta_via_shellbrowserwind_rundll32.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 11,
+   "serious": 5,
+   "ids": [
+    "1",
+    "4663"
+   ]
+  },
+  {
+   "file": "Other/rdpcorets_148_mst120_bluekeep_rpdscan_full.evtx",
+   "tactic": "unlabelled",
+   "detected": false,
+   "tactic_match": false,
+   "events": 733,
+   "serious": 0,
+   "ids": [
+    "100",
+    "101",
+    "102",
+    "103",
+    "104",
+    "107",
+    "129",
+    "130",
+    "131",
+    "132",
+    "135",
+    "141"
+   ]
+  },
+  {
+   "file": "Persistence/DACL_DCSync_Right_Powerview_ Add-DomainObjectAcl.evtx",
+   "tactic": "persistence",
+   "detected": true,
+   "tactic_match": false,
+   "events": 28,
+   "serious": 1,
+   "ids": [
+    "1102",
+    "4662",
+    "5136"
+   ]
+  },
+  {
+   "file": "Persistence/Network_Service_Guest_added_to_admins_4732.evtx",
+   "tactic": "persistence",
+   "detected": true,
+   "tactic_match": false,
+   "events": 2,
+   "serious": 2,
+   "ids": [
+    "4732"
+   ]
+  },
+  {
+   "file": "Persistence/Persistence_Shime_Microsoft-Windows-Application-Experience_Program-Telemetry_500.evtx",
+   "tactic": "persistence",
+   "detected": false,
+   "tactic_match": false,
+   "events": 7,
+   "serious": 0,
+   "ids": [
+    "500"
+   ]
+  },
+  {
+   "file": "Persistence/Persistence_Winsock_Catalog Change EventId_1.evtx",
+   "tactic": "persistence",
+   "detected": false,
+   "tactic_match": false,
+   "events": 2,
+   "serious": 0,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Persistence/evasion_persis_hidden_run_keyvalue_sysmon_13.evtx",
+   "tactic": "persistence",
+   "detected": true,
+   "tactic_match": true,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "13"
+   ]
+  },
+  {
+   "file": "Persistence/persist_bitsadmin_Microsoft-Windows-Bits-Client-Operational.evtx",
+   "tactic": "persistence",
+   "detected": true,
+   "tactic_match": true,
+   "events": 6,
+   "serious": 1,
+   "ids": [
+    "3",
+    "59",
+    "60"
+   ]
+  },
+  {
+   "file": "Persistence/persist_firefox_comhijack_sysmon_11_13_7_1.evtx",
+   "tactic": "persistence",
+   "detected": true,
+   "tactic_match": true,
+   "events": 19,
+   "serious": 4,
+   "ids": [
+    "1",
+    "10",
+    "11",
+    "13",
+    "7"
+   ]
+  },
+  {
+   "file": "Persistence/persist_turla_outlook_backdoor_comhijack.evtx",
+   "tactic": "persistence",
+   "detected": true,
+   "tactic_match": true,
+   "events": 3,
+   "serious": 1,
+   "ids": [
+    "13"
+   ]
+  },
+  {
+   "file": "Persistence/persist_valid_account_guest_rid_hijack.evtx",
+   "tactic": "persistence",
+   "detected": true,
+   "tactic_match": true,
+   "events": 4,
+   "serious": 1,
+   "ids": [
+    "13"
+   ]
+  },
+  {
+   "file": "Persistence/persistence_SilentProcessExit_ImageHijack_sysmon_13_1.evtx",
+   "tactic": "persistence",
+   "detected": true,
+   "tactic_match": true,
+   "events": 13,
+   "serious": 6,
+   "ids": [
+    "1",
+    "13"
+   ]
+  },
+  {
+   "file": "Persistence/persistence_accessibility_features_osk_sysmon1.evtx",
+   "tactic": "persistence",
+   "detected": false,
+   "tactic_match": false,
+   "events": 3,
+   "serious": 0,
+   "ids": [
+    "1",
+    "12"
+   ]
+  },
+  {
+   "file": "Persistence/persistence_hidden_local_account_sysmon.evtx",
+   "tactic": "persistence",
+   "detected": true,
+   "tactic_match": true,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "13"
+   ]
+  },
+  {
+   "file": "Persistence/persistence_pendingGPO_sysmon_13.evtx",
+   "tactic": "persistence",
+   "detected": false,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 0,
+   "ids": [
+    "13"
+   ]
+  },
+  {
+   "file": "Persistence/persistence_security_dcshadow_4742.evtx",
+   "tactic": "persistence",
+   "detected": true,
+   "tactic_match": false,
+   "events": 10,
+   "serious": 1,
+   "ids": [
+    "1102",
+    "4662",
+    "4742"
+   ]
+  },
+  {
+   "file": "Persistence/persistence_startup_UserShellStartup_Folder_Changed_sysmon_13.evtx",
+   "tactic": "persistence",
+   "detected": true,
+   "tactic_match": true,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "13"
+   ]
+  },
+  {
+   "file": "Persistence/persistence_sysmon_11_13_1_shime_appfix.evtx",
+   "tactic": "persistence",
+   "detected": false,
+   "tactic_match": false,
+   "events": 237,
+   "serious": 0,
+   "ids": [
+    "1",
+    "11",
+    "13"
+   ]
+  },
+  {
+   "file": "Persistence/sysmon_13_1_persistence_via_winlogon_shell.evtx",
+   "tactic": "persistence",
+   "detected": true,
+   "tactic_match": true,
+   "events": 25,
+   "serious": 8,
+   "ids": [
+    "1",
+    "11",
+    "13",
+    "5",
+    "7"
+   ]
+  },
+  {
+   "file": "Persistence/sysmon_1_persist_bitsjob_SetNotifyCmdLine.evtx",
+   "tactic": "persistence",
+   "detected": true,
+   "tactic_match": false,
+   "events": 6,
+   "serious": 4,
+   "ids": [
+    "1",
+    "3"
+   ]
+  },
+  {
+   "file": "Persistence/sysmon_1_smss_child_proc_bootexecute_setupexecute.evtx",
+   "tactic": "persistence",
+   "detected": false,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 0,
+   "ids": [
+    "1"
+   ]
+  },
+  {
+   "file": "Persistence/sysmon_20_21_1_CommandLineEventConsumer.evtx",
+   "tactic": "persistence",
+   "detected": true,
+   "tactic_match": true,
+   "events": 17,
+   "serious": 3,
+   "ids": [
+    "1",
+    "10",
+    "19",
+    "20",
+    "21"
+   ]
+  },
+  {
+   "file": "Persistence/sysmon_local_account_creation_and_added_admingroup_12_13.evtx",
+   "tactic": "persistence",
+   "detected": true,
+   "tactic_match": true,
+   "events": 17,
+   "serious": 1,
+   "ids": [
+    "12",
+    "13"
+   ]
+  },
+  {
+   "file": "Persistence/wmighost_sysmon_20_21_1.evtx",
+   "tactic": "persistence",
+   "detected": true,
+   "tactic_match": true,
+   "events": 4,
+   "serious": 1,
+   "ids": [
+    "1",
+    "20",
+    "21"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/4624 LT3 AnonymousLogon Localhost - JuicyPotato.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 3,
+   "serious": 1,
+   "ids": [
+    "1102",
+    "4624",
+    "4634"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/4765_sidhistory_add_t1178.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 3,
+   "serious": 1,
+   "ids": [
+    "4658",
+    "4661",
+    "4765"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/CVE-2020-0796_SMBV3Ghost_LocalPrivEsc_Sysmon_3_1_10.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 2,
+   "ids": [
+    "1",
+    "10",
+    "3"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/EfsPotato_sysmon_17_18_privesc_seimpersonate_to_system.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 20,
+   "serious": 4,
+   "ids": [
+    "1",
+    "17",
+    "18",
+    "3",
+    "5",
+    "7"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Invoke_TokenDuplication_UAC_Bypass4624.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "4624"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/NTLM2SelfRelay-med0x2e-security_4624_4688.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 11,
+   "serious": 2,
+   "ids": [
+    "1102",
+    "4624",
+    "4634",
+    "4672",
+    "4688"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/PrivEsc_CVE-2020-1313_Sysmon_13_UScheduler_Cmdline.evtx",
+   "tactic": "privilege-escalation",
+   "detected": false,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 0,
+   "ids": [
+    "13"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/PrivEsc_Imperson_NetSvc_to_Sys_Decoder_Sysmon_1_17_18.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 13,
+   "serious": 1,
+   "ids": [
+    "1",
+    "17",
+    "18",
+    "3"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/PrivEsc_NetSvc_SessionToken_Retrival_via_localSMB_Auth_5145.evtx",
+   "tactic": "privilege-escalation",
+   "detected": false,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 0,
+   "ids": [
+    "5145"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/PrivEsc_SeImpersonatePriv_enabled_back_for_upnp_localsvc_4698.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 2,
+   "serious": 1,
+   "ids": [
+    "4698",
+    "4699"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/RogueWinRM.evtx",
+   "tactic": "privilege-escalation",
+   "detected": false,
+   "tactic_match": false,
+   "events": 7,
+   "serious": 0,
+   "ids": [
+    "1",
+    "3",
+    "5"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Runas_4624_4648_Webshell_CreateProcessAsUserA.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 3,
+   "serious": 2,
+   "ids": [
+    "1102",
+    "4624",
+    "4648"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_13_1_UACBypass_SDCLTBypass.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 5,
+   "serious": 2,
+   "ids": [
+    "1",
+    "10",
+    "13"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_13_1_UAC_Bypass_EventVwrBypass.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 6,
+   "serious": 3,
+   "ids": [
+    "1",
+    "10",
+    "13"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_UACME_22.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 19,
+   "serious": 2,
+   "ids": [
+    "1",
+    "10",
+    "11",
+    "5",
+    "7"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_UACME_23.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 8,
+   "serious": 4,
+   "ids": [
+    "1",
+    "11"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_UACME_30.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 11,
+   "serious": 1,
+   "ids": [
+    "1",
+    "11",
+    "7"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_UACME_32.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 8,
+   "serious": 1,
+   "ids": [
+    "1",
+    "11"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_UACME_33.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 9,
+   "serious": 3,
+   "ids": [
+    "1",
+    "12",
+    "13",
+    "5"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_UACME_34.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 6,
+   "serious": 2,
+   "ids": [
+    "1",
+    "12",
+    "13",
+    "5"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_UACME_36_FileCreate.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 13,
+   "serious": 3,
+   "ids": [
+    "1",
+    "11",
+    "5"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_UACME_37_FileCreate.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 7,
+   "serious": 3,
+   "ids": [
+    "1",
+    "11",
+    "5"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_UACME_38.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 8,
+   "serious": 6,
+   "ids": [
+    "1",
+    "10",
+    "11",
+    "3"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_UACME_39.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 7,
+   "serious": 3,
+   "ids": [
+    "1",
+    "11",
+    "7"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_UACME_41.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 4,
+   "serious": 1,
+   "ids": [
+    "1",
+    "5"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_UACME_43.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 5,
+   "serious": 1,
+   "ids": [
+    "1",
+    "5"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_UACME_45.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 8,
+   "serious": 1,
+   "ids": [
+    "1",
+    "12",
+    "13",
+    "5"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_UACME_53.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 14,
+   "serious": 2,
+   "ids": [
+    "1",
+    "12",
+    "13",
+    "5"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_UACME_54.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 10,
+   "serious": 3,
+   "ids": [
+    "1",
+    "10",
+    "11",
+    "5"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_UACME_56.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 15,
+   "serious": 2,
+   "ids": [
+    "1",
+    "13",
+    "5"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_UACME_63.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 3,
+   "serious": 2,
+   "ids": [
+    "1",
+    "10",
+    "7"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_UACME_64.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 530,
+   "serious": 2,
+   "ids": [
+    "1",
+    "10",
+    "11",
+    "12",
+    "22",
+    "23",
+    "5",
+    "7"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/Sysmon_uacme_58.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 6,
+   "serious": 2,
+   "ids": [
+    "1",
+    "11",
+    "13"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/System_7045_namedpipe_privesc.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 2,
+   "ids": [
+    "7045"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/UACME_59_Sysmon.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 7,
+   "serious": 2,
+   "ids": [
+    "1",
+    "10"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/UACME_61_Changepk.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 2,
+   "serious": 2,
+   "ids": [
+    "1",
+    "13"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/eop_appcontainer_il_broker_filewrite.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 3,
+   "serious": 2,
+   "ids": [
+    "1",
+    "11"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/privesc_KrbRelayUp_windows_4624.evtx",
+   "tactic": "privilege-escalation",
+   "detected": false,
+   "tactic_match": false,
+   "events": 1,
+   "serious": 0,
+   "ids": [
+    "4624"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/privesc_registry_symlink_CVE-2020-1377.evtx",
+   "tactic": "privilege-escalation",
+   "detected": false,
+   "tactic_match": false,
+   "events": 30,
+   "serious": 0,
+   "ids": [
+    "11",
+    "12",
+    "13"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/privesc_roguepotato_sysmon_17_18.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 6,
+   "serious": 1,
+   "ids": [
+    "1",
+    "17",
+    "18"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/privesc_rotten_potato_from_webshell_metasploit_sysmon_1_8_3.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 13,
+   "serious": 3,
+   "ids": [
+    "1",
+    "10",
+    "3",
+    "8"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/privesc_seimpersonate_tosys_spoolsv_sysmon_17_18.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 7,
+   "serious": 1,
+   "ids": [
+    "1",
+    "17",
+    "18",
+    "5"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/privesc_spoolfool_mahdihtm_sysmon_1_11_7_13.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 4,
+   "serious": 1,
+   "ids": [
+    "1",
+    "11",
+    "13",
+    "7"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/privesc_spoolsv_spl_file_write_sysmon11.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 37,
+   "serious": 4,
+   "ids": [
+    "1",
+    "10",
+    "11",
+    "13",
+    "4",
+    "7"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/privesc_sysmon_cve_20201030_spooler.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 8,
+   "serious": 1,
+   "ids": [
+    "1",
+    "13",
+    "7"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/privesc_unquoted_svc_sysmon_1_11.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 87,
+   "serious": 3,
+   "ids": [
+    "1",
+    "11"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/privexchange_dirkjan.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 8,
+   "serious": 3,
+   "ids": [
+    "4624",
+    "4662",
+    "4776",
+    "5136"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/samaccount_spoofing_CVE-2021-42287_CVE-2021-42278_DC_securitylogs.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 18,
+   "serious": 3,
+   "ids": [
+    "1102",
+    "4624",
+    "4722",
+    "4724",
+    "4741",
+    "4742",
+    "4768",
+    "4769",
+    "4781"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/security_4624_4673_token_manip.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 14,
+   "serious": 10,
+   "ids": [
+    "1102",
+    "4611",
+    "4624",
+    "4673",
+    "4688"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/sysmon_11_1_15_WScriptBypassUAC.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 15,
+   "serious": 10,
+   "ids": [
+    "1",
+    "11",
+    "15"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/sysmon_11_1_7_uacbypass_cliconfg.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 8,
+   "serious": 2,
+   "ids": [
+    "1",
+    "11",
+    "7"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/sysmon_11_7_1_uacbypass_windirectory_mocking.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 10,
+   "serious": 4,
+   "ids": [
+    "1",
+    "10",
+    "11",
+    "5",
+    "7"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/sysmon_13_1_12_11_perfmonUACBypass.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 5,
+   "serious": 1,
+   "ids": [
+    "1",
+    "11",
+    "12",
+    "13"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/sysmon_13_1_compmgmtlauncherUACBypass.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 4,
+   "serious": 2,
+   "ids": [
+    "1",
+    "13"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/sysmon_13_1_meterpreter_getsystem_NamedPipeImpersonation.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 4,
+   "serious": 1,
+   "ids": [
+    "1",
+    "13"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/sysmon_1_11_exec_as_system_via_schedtask.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 6,
+   "serious": 2,
+   "ids": [
+    "1",
+    "11"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/sysmon_1_13_11_cmstp_ini_uacbypass.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 5,
+   "serious": 2,
+   "ids": [
+    "1",
+    "11",
+    "13"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/sysmon_1_13_UACBypass_AppPath_Control.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 3,
+   "serious": 2,
+   "ids": [
+    "1",
+    "13"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/sysmon_1_7_11_mcx2prov_uacbypass.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 9,
+   "serious": 3,
+   "ids": [
+    "1",
+    "11",
+    "7"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/sysmon_1_7_11_migwiz.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 7,
+   "serious": 3,
+   "ids": [
+    "1",
+    "11",
+    "7"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/sysmon_1_7_11_sysprep_uacbypass.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 7,
+   "serious": 3,
+   "ids": [
+    "1",
+    "11",
+    "7"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/sysmon_1_7_elevate_uacbypass_sysprep.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 15,
+   "serious": 1,
+   "ids": [
+    "1",
+    "10",
+    "7"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/sysmon_privesc_from_admin_to_system_handle_inheritance.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 3,
+   "serious": 2,
+   "ids": [
+    "1",
+    "10"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/sysmon_privesc_psexec_dwell.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 12,
+   "serious": 6,
+   "ids": [
+    "1",
+    "12",
+    "17",
+    "18",
+    "3"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/sysmon_uacbypass_CDSSync_schtask_hijack_byeintegrity5.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": false,
+   "events": 8,
+   "serious": 2,
+   "ids": [
+    "1",
+    "11",
+    "12",
+    "13",
+    "7"
+   ]
+  },
+  {
+   "file": "Privilege Escalation/win10_4703_SeDebugPrivilege_enabled.evtx",
+   "tactic": "privilege-escalation",
+   "detected": true,
+   "tactic_match": true,
+   "events": 1,
+   "serious": 1,
+   "ids": [
+    "4703"
+   ]
+  },
+  {
+   "file": "UACME_59_Sysmon.evtx",
+   "tactic": "unlabelled",
+   "detected": true,
+   "tactic_match": false,
+   "events": 7,
+   "serious": 2,
+   "ids": [
+    "1",
+    "10"
+   ]
+  }
+ ]
+}

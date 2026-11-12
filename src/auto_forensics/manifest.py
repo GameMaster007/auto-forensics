@@ -23,8 +23,10 @@ from typing import Any
 from .file_ops import atomic_write_text
 from .report_validation import validate_report_data
 from .security import (
+    IntegrityError,
     SecurityError,
     bounded_tree_paths,
+    has_undecodable_name,
     read_limited_text,
     sha256_file,
     stays_in_tree,
@@ -98,6 +100,8 @@ def read_run_manifest(path: Path) -> dict[str, Any]:
         config = manifest.get("config")
         if not isinstance(config, dict) or type(config.get("max_text_bytes")) is not int or config["max_text_bytes"] < 1:
             raise SecurityError("Run manifest has an invalid text byte limit")
+        if not isinstance(config.get("skip_undecodable_names", False), bool):
+            raise SecurityError("Run manifest has an invalid file name policy")
     if manifest["manifest_version"] == 2:
         resources = manifest.get("resources")
         if not isinstance(resources, list):
@@ -148,11 +152,18 @@ def validate_file_inventory(rows: object) -> None:
         seen.add(row["path"])
 
 
-def hash_input_tree(input_dir: Path, max_files: int = 10_000) -> list[dict[str, Any]]:
+def hash_input_tree(
+    input_dir: Path, max_files: int = 10_000, *, skip_undecodable_names: bool = False,
+) -> list[dict[str, Any]]:
     """Hash regular files under ``input_dir``.
 
     Symlinks are skipped. Exceeding the file or depth cap is an error:
     a partial inventory must never be presented as a complete manifest.
+
+    ``skip_undecodable_names`` leaves out files whose path is not valid
+    text (see ``has_undecodable_name``). Only a caller that keeps its own
+    custody record of those files sets it (the autopilot), and a manifest
+    built that way says so, so its checks skip the same files.
     """
     rows: list[dict[str, Any]] = []
     root = input_dir.resolve()
@@ -163,6 +174,8 @@ def hash_input_tree(input_dir: Path, max_files: int = 10_000) -> list[dict[str, 
     for path in bounded_tree_paths(root):
         if not stays_in_tree(path, root):
             continue
+        if skip_undecodable_names and has_undecodable_name(str(path.relative_to(root))):
+            continue
         if len(rows) >= max_files:
             raise SecurityError(f"Evidence exceeds the manifest file limit ({max_files})")
         before = path.stat()
@@ -171,7 +184,7 @@ def hash_input_tree(input_dir: Path, max_files: int = 10_000) -> list[dict[str, 
         if not stays_in_tree(path, root) or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
             after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
         ):
-            raise SecurityError(f"Evidence changed while hashing: {path.relative_to(root)}")
+            raise IntegrityError(f"Evidence changed while hashing: {path.relative_to(root)}")
         rows.append(
             {
                 "path": str(path.relative_to(root)),
@@ -280,9 +293,14 @@ def build_run_manifest(
     attack_stix_path: str | None = None,
     resources: list[dict[str, Any]] | None = None,
     max_text_bytes: int = 4 * 1024 * 1024,
+    skip_undecodable_names: bool = False,
 ) -> dict[str, Any]:
     """Build the manifest dict. ``report_sha256`` is the canonical hash."""
     live_model = provider in {"ollama", "openai_compatible"}
+    config: dict[str, Any] = {"max_text_bytes": max_text_bytes}
+    if skip_undecodable_names:
+        # Recorded only when set, so every other manifest is unchanged.
+        config["skip_undecodable_names"] = True
     return {
         "manifest_version": 2,
         "case_id": case_id,
@@ -297,7 +315,7 @@ def build_run_manifest(
             "attack_stix_path": attack_stix_path,
         },
         "resources": resources or [],
-        "config": {"max_text_bytes": max_text_bytes},
+        "config": config,
         "model": {
             "provider": provider,
             "name": model_name,
