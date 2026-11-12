@@ -1,0 +1,2 @@
+# Public SHA-256 pin of a plaso test sample (not a secret); gitleaks reads it as a generic API key.
+b8e9a8dd8c7235588915d3ad7eb49496628b4213:tests/_real_samples.py:generic-api-key:81
