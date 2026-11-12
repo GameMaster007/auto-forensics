@@ -1076,7 +1076,8 @@ def test_disks_reads_summaries_tolerantly(setup):
     assert [d["image"] for d in disks] == ["broken-cccc", "odd-dddd", "pc.E01"]
     for entry in disks:
         assert set(entry) == {"image", "os", "hostname", "version", "timezone", "users", "usb_devices", "volumes",
-                              "gaps"}
+                              "gaps", "system", "accounts", "programs", "network_shares", "searches", "recycle_bin",
+                              "activity"}
     assert "could not be read (JSONDecodeError)" in disks[0]["gaps"][0]
     assert disks[1]["users"] == [] and disks[1]["os"] == ""
     pc = disks[2]
@@ -1084,11 +1085,12 @@ def test_disks_reads_summaries_tolerantly(setup):
     assert pc["version"] == "Windows 10 Pro (NT 10.0) 19045"
     assert pc["users"][0] == "alice" and len(pc["users"]) == 2
     assert pc["users"][1].startswith("bob [2J") and len(pc["users"][1]) == 300
+    extra = {"volume_names": "", "drive_letters": ""}
     assert pc["usb_devices"] == [
         {"name": "SanDisk Ultra USB Device", "serial": "4C530001", "first_seen": "2026-02-01 10:00:00+00:00",
-         "last_seen": "2026-02-17 13:00:00+00:00"},
-        {"name": "Kingston DataTraveler", "serial": "", "first_seen": "2025-12-25", "last_seen": ""},
-        {"name": "Unnamed device", "serial": "", "first_seen": "", "last_seen": ""},
+         "last_seen": "2026-02-17 13:00:00+00:00", **extra},
+        {"name": "Kingston DataTraveler", "serial": "", "first_seen": "2025-12-25", "last_seen": "", **extra},
+        {"name": "Unnamed device", "serial": "", "first_seen": "", "last_seen": "", **extra},
     ]
     assert pc["volumes"] == ["C: (ntfs)", "fs1", "raw volume"]
     assert pc["gaps"][:2] == ["pc.E01: 3 file(s) skipped", "volume 2 is encrypted"]
@@ -1110,3 +1112,43 @@ def test_disks_caps_long_lists_and_falls_back_to_profile_folders():
     bare = web.disk_view({"hostname": "TOP-LEVEL", "os": ["windows", "10"], "users": ["carol", {"name": "dave"}]}, "x")
     assert bare["image"] == "x" and bare["hostname"] == "TOP-LEVEL" and bare["os"] == "windows, 10"
     assert bare["users"] == ["carol", "dave"] and bare["usb_devices"] == [] and bare["gaps"] == []
+
+
+def test_artifact_view_and_time_are_bounded_and_plain():
+    from auto_forensics_autopilot.web import artifact_time, artifact_view
+
+    detail = {
+        "rule": "files-on-removable", "severity": "medium", "title": "x", "paths": 2,
+        "files": [{"locator": "bytes:0:9", "source": "pc.dd!/C:/a.lnk", "path": "E:\\plans\x00<b>.xlsx", "time": "2015-03-24T14:02:11Z",
+                   "user": "sam"}, {"path": "E:\\b", "time": "not a time", "user": "sam"}],
+        "device": {"serial": "AA95", "volume_names": ["SECRET", "X"], "first_seen": "2015-03-23T09:00:00Z"},
+    }
+    view = artifact_view(detail)
+    assert ["Paths", "2"] in view["facts"] and ["Serial", "AA95"] in view["facts"]
+    table = view["tables"][0]
+    assert table["title"] == "Files and folders" and table["columns"] == ["Path", "When", "User"]
+    assert "\x00" not in table["rows"][0][0] and table["rows"][0][2] == "sam"
+    assert artifact_time(detail) == "2015-03-23T09:00:00Z"
+    assert artifact_time({"files": [{"time": "<script>"}]}) is None
+    assert artifact_view("nonsense") == {"facts": [], "tables": []}
+
+
+def test_details_endpoint_reads_disk_summaries(tmp_path):
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from auto_forensics_autopilot.web import ReviewState, create_app
+
+    state = ReviewState(tmp_path / "ws")
+    run = state.runs / "case-20260101T000000Z"
+    (run / "disk" / "pc-1").mkdir(parents=True)
+    (run / "disk" / "pc-1" / "disk_summary.json").write_text(json.dumps(
+        {"artifacts": {"findings": {"art-1": {"rule": "usb-device", "device": {"serial": "S1"}}}}}), encoding="utf-8")
+    client = TestClient(create_app(state), base_url="http://127.0.0.1:8765")
+    url = "/api/runs/case-20260101T000000Z/findings/{}/details"
+    assert client.get(url.format("art-1")).status_code == 401
+    client.headers["X-Session-Token"] = state.token
+    assert client.get(url.format("art-1")).json() == {"facts": [["Serial", "S1"]], "tables": []}
+    assert client.get(url.format("nope")).json() == {"facts": [], "tables": []}
+    assert client.get("/api/runs/other-20260101T000000Z/findings/art-1/details").status_code == 404

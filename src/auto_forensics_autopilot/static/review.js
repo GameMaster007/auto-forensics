@@ -73,6 +73,13 @@
     if (isNaN(d)) return String(iso).slice(0, 40);
     return d.toISOString().slice(0, 19).replace("T", " ") + " UTC";
   }
+  // Tool-written titles carry machine times; show them the way the rest of the page does.
+  function nice(s) {
+    return String(s || "")
+      .replace(/(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}):\d{2}(?:\.\d+)?Z/g, "$1 $2 UTC")
+      .replace(/(\d+) time\(s\)/g, (m, n) => (n === "1" ? "once" : n + " times"))
+      .replace(/\s*Details: \S*disk_summary\.json, key \S+/g, "");
+  }
   function runStarted(run) {
     if (run.started_at) return fmtTime(run.started_at);
     const m = /-(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})\d{2}Z$/.exec(run.run_id);
@@ -405,6 +412,7 @@
     if (firstOpen) {
       picked.clear();
       excerpts.clear();
+      details.clear();
       Object.assign(ui, { tab: "overview", filter: data.status.pending.length ? "pending" : "all", sevs: new Set(SEVERITIES),
         q: "", sort: "severity", tactic: null, open: null, limit: PAGE });
       // Nothing typed or ticked for one case may carry over to another.
@@ -669,7 +677,7 @@
       main.type = "button";
       const meta = [tacticName(f.tactic), f.event_time ? fmtTime(f.event_time) : null, ((f.citations || [])[0] || {}).source_file].filter(Boolean);
       main.append(
-        el("span", "frow-title", f.title),
+        el("span", "frow-title", nice(f.title)),
         el("span", "frow-side", [el("span", "frow-sev", SEV_LABEL[sev]), el("span", "dec " + f.decision, decisionWord(f.decision))]),
         el("span", "frow-meta", meta.join(", ")),
       );
@@ -752,7 +760,7 @@
     const sev = sevOf(f.severity);
     $("d-sev").className = "sev sev-" + sev;
     $("d-sev").textContent = SEV_LABEL[sev];
-    $("d-title").textContent = f.title;
+    $("d-title").textContent = nice(f.title);
     $("d-when").textContent = f.event_time ? "Happened " + fmtTime(f.event_time) : "No time was recorded for this finding.";
 
     const info = TACTICS[f.tactic];
@@ -762,7 +770,8 @@
     if (f.technique_id) means.push("Reference: MITRE ATT&CK technique " + f.technique_id + ".");
     $("d-means").textContent = means.join(" ");
     $("d-warnings").replaceChildren(...(f.warnings || []).map((w) => el("p", "warn", w)));
-    $("d-rec").textContent = f.recommendation || "Open the cited evidence and confirm it before acting.";
+    $("d-rec").textContent = nice(f.recommendation).trim() || "Open the cited evidence and confirm it before acting.";
+    renderDetails(f);
     $("d-checked").textContent = checkedText(f.verification);
 
     const facts = [["Found by", WORKERS[f.worker] || f.worker || "unknown"]];
@@ -818,6 +827,39 @@
     box.replaceChildren(...blocks);
     if (!(f.citations || []).length) box.append(el("p", "warn", "This finding does not point to a place in the evidence."));
     if (!cached) loadEvidence(f.finding_id);
+  }
+
+  // Extra detail the disk reader kept for a finding: which files, which device, when.
+  const details = new Map();
+  function renderDetails(f) {
+    const box = $("d-details");
+    const got = details.get(f.finding_id);
+    const facts = (got && got.facts) || [];
+    const tables = (got && got.tables) || [];
+    $("d-details-head").hidden = !(facts.length || tables.length);
+    const out = [];
+    if (facts.length) out.push(el("dl", "facts", facts.flatMap(([k, v]) => [el("dt", "", k), el("dd", "", nice(v))])));
+    for (const t of tables) {
+      const table = el("table", "dtable");
+      table.append(el("thead", "", [el("tr", "", t.columns.map((c) => { const th = el("th", "", c); th.scope = "col"; return th; }))]));
+      table.append(el("tbody", "", t.rows.map((r) => el("tr", "", r.map((c) => el("td", "", nice(c)))))));
+      out.push(el("h4", "", t.title), el("div", "dscroll", [table]));
+      if (t.more) out.push(el("p", "hint", "And " + t.more + " more, listed in the run folder."));
+    }
+    box.replaceChildren(...out);
+    if (!got && f.worker === "disk_artifacts") loadDetails(f.finding_id);
+  }
+  async function loadDetails(id) {
+    const runId = current.run_id;
+    let result;
+    try { result = await api("GET", "/api/runs/" + encodeURIComponent(runId) + "/findings/" + encodeURIComponent(id) + "/details"); }
+    catch (e) { result = { facts: [], tables: [] }; }
+    if (!current || current.run_id !== runId) return;
+    details.set(id, result);
+    if (ui.open === id) {
+      const f = current.draft.findings.find((x) => x.finding_id === id);
+      if (f) renderDetails(f);
+    }
   }
 
   async function loadEvidence(id) {
@@ -920,7 +962,7 @@
     const item = (f, showTime) => {
       const li = el("li", "tl-item sev-" + sevOf(f.severity));
       if (showTime) li.append(el("span", "tl-time", fmtTime(f.event_time).slice(11, 19)));
-      const open = el("button", "tl-open", f.title);
+      const open = el("button", "tl-open", nice(f.title));
       open.type = "button";
       open.addEventListener("click", () => {
         Object.assign(ui, { filter: "all", tactic: null, q: "", limit: Math.max(ui.limit, current.draft.findings.length) });
@@ -966,22 +1008,57 @@
     try { data = await api("GET", "/api/runs/" + encodeURIComponent(runId) + "/disks"); } catch (e) { return; }
     if (!current || current.run_id !== runId || !data.disks || !data.disks.length) return;
     $("tab-computer").hidden = false;
+    const table = (heads, rows) => {
+      const t = el("table");
+      t.append(el("thead", "", [el("tr", "", heads.map((h) => { const th = el("th", "", h); th.scope = "col"; return th; }))]));
+      t.append(el("tbody", "", rows.map((cells) => el("tr", "", cells.map((c) => el("td", "", c || ""))))));
+      return t;
+    };
+    const span = (a, b) => (a && b && a !== b ? fmtTime(a) + " to " + fmtTime(b) : fmtTime(a || b));
     $("disks").replaceChildren(...data.disks.map((d) => {
+      const sys = d.system || {};
       const box = el("div", "disk");
-      box.append(el("h2", "", d.hostname || d.image || "Disk image"));
-      const facts = [["Image file", d.image], ["System", [d.os, d.version].filter(Boolean).join(" ")], ["Time zone", d.timezone]]
-        .filter(([, v]) => v);
+      box.append(el("h2", "", sys.computer_name || d.hostname || d.image || "Disk image"));
+      const facts = [
+        ["Image file", d.image], ["System", sys.os_version || [d.os, d.version].filter(Boolean).join(" ")],
+        ["Windows installed", fmtTime(sys.installed)], ["Last shut down", fmtTime(sys.last_shutdown)],
+        ["Registered to", sys.owner], ["Time zone", sys.time_zone || d.timezone],
+      ].filter(([, v]) => v);
       box.append(el("dl", "facts", facts.flatMap(([k, v]) => [el("dt", "", k), el("dd", "", v)])));
-      if ((d.users || []).length) box.append(el("h3", "", "User accounts"), el("ul", "taglist", d.users.map((u) => el("li", "", u))));
+
+      if ((d.accounts || []).length) {
+        box.append(el("h3", "", "User accounts"), table(["Name", "Last signed in", "Times signed in", ""],
+          d.accounts.map((a) => [a.name, fmtTime(a.last_logon), a.logon_count, a.disabled ? "Switched off" : ""])));
+      } else if ((d.users || []).length) {
+        box.append(el("h3", "", "User accounts"), el("ul", "taglist", d.users.map((u) => el("li", "", u))));
+      }
       if ((d.usb_devices || []).length) {
-        const table = el("table");
-        table.append(el("thead", "", [el("tr", "", ["Device", "Serial number", "First plugged in", "Last plugged in"].map((t) => { const th = el("th", "", t); th.scope = "col"; return th; }))]));
-        table.append(el("tbody", "", d.usb_devices.map((u) => el("tr", "", [
-          el("td", "", u.name || ""), el("td", "mono", u.serial || ""), el("td", "", fmtTime(u.first_seen)), el("td", "", fmtTime(u.last_seen)),
-        ]))));
-        box.append(el("h3", "", "USB devices that were plugged in"), table);
+        box.append(el("h3", "", "USB devices that were plugged in"), table(["Device", "Serial number", "Name of the drive", "Drive letter", "First seen", "Last seen"],
+          d.usb_devices.map((u) => [u.name, u.serial, u.volume_names, u.drive_letters, fmtTime(u.first_seen), fmtTime(u.last_seen)])));
+      }
+      if ((d.programs || []).length) {
+        box.append(el("h3", "", "Programs worth knowing about"),
+          el("p", "hint", "Cloud storage, e-mail, disc burning and clean-up tools are ordinary programs, but they are also the usual ways data leaves a computer or traces get removed."),
+          table(["Kind", "Program", "How we know", "When"], d.programs.map((p) => [p.kind, p.program, p.evidence, span(p.first_seen, p.last_seen)])));
+      }
+      if ((d.network_shares || []).length) {
+        box.append(el("h3", "", "Shared folders on other computers"), table(["Shared folder", "Drive letter", "When"],
+          d.network_shares.map((n) => [n.share, n.drive_letters, span(n.first_seen, n.last_seen)])));
+      }
+      if ((d.searches || []).length) {
+        box.append(el("h3", "", "Searches that stood out"), table(["Searched for", "About", "When"],
+          d.searches.map((q) => [q.term, q.themes, fmtTime(q.time)])));
+      }
+      const bin = d.recycle_bin || {};
+      if (bin.items) {
+        box.append(el("h3", "", "Recycle Bin"), el("p", "", plural(bin.items, "deleted item", "deleted items") + (bin.first ? ", " + span(bin.first, bin.last) : "") + "."));
       }
       if ((d.volumes || []).length) box.append(el("h3", "", "Drives in the image"), el("ul", "taglist", d.volumes.map((v) => el("li", "", v))));
+      if ((d.activity || []).length) {
+        const det = el("details", "runinfo", [el("summary", "", "What was read from this disk")]);
+        det.append(el("ul", "taglist", d.activity.map((a) => el("li", "", a.count + " " + a.kind))));
+        box.append(det);
+      }
       if ((d.gaps || []).length) box.append(el("h3", "", "Could not be read"), el("ul", "", d.gaps.map((g) => el("li", "", g))));
       return box;
     }));

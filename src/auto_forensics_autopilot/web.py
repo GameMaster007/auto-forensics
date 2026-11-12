@@ -103,6 +103,7 @@ AGENT_LABELS = {
     "memory": "Memory image analysis",
     "archive": "Open ZIP archives and analyse what is inside",
     "disk_image": "Open disk images and analyse what is inside",
+    "disk_artifacts": "Read USB, file, browsing and clean-up traces from disk images",
 }
 AGENT_STATUSES = {"waiting", "running", "ok", "failed", "skipped"}
 
@@ -427,7 +428,18 @@ def disk_view(summary: Any, fallback_name: str) -> dict[str, Any]:
     if not users and isinstance(summary.get("users"), list):
         users = [_disk_text(item.get("name") if isinstance(item, dict) else item) for item in summary["users"]]
 
-    devices = _plugin_rows(summary, "usb")
+    artifacts = summary.get("artifacts") if isinstance(summary.get("artifacts"), dict) else {}
+
+    def rows_of(block: Any, key: str) -> list[dict[str, Any]]:
+        value = block.get(key) if isinstance(block, dict) else None
+        return [row for row in value if isinstance(row, dict)][:MAX_DISK_ITEMS] if isinstance(value, list) else []
+
+    def joined(row: dict[str, Any], key: str) -> str:
+        value = row.get(key)
+        return _disk_text(", ".join(str(item) for item in value[:10])) if isinstance(value, list) else _disk_text(value)
+
+    # The artefact agent's device list is richer (volume names, drive letters) than the plugin's.
+    devices = rows_of(artifacts, "usb_devices") or _plugin_rows(summary, "usb")
     if not devices and isinstance(summary.get("usb_devices"), list):
         devices = [row for row in summary["usb_devices"] if isinstance(row, dict)]
     usb = []
@@ -438,7 +450,33 @@ def disk_view(summary: Any, fallback_name: str) -> dict[str, Any]:
             "serial": _first(row, "serial", "serial_number"),
             "first_seen": _first(row, "first_seen", "first_insert", "first_install"),
             "last_seen": _first(row, "last_seen", "last_insert", "last_removal"),
+            "volume_names": joined(row, "volume_names"),
+            "drive_letters": joined(row, "drive_letters"),
         })
+
+    programs = []
+    other = artifacts.get("other_watched_programs") if isinstance(artifacts.get("other_watched_programs"), dict) else {}
+    groups = [("Cloud storage", rows_of(artifacts, "cloud_clients")),
+              ("Clean-up or wiping tool", rows_of(artifacts, "anti_forensic_tools")),
+              ("E-mail", rows_of(artifacts, "email_clients"))]
+    groups += [(_disk_text(str(kind).replace("_", " ").capitalize()), rows_of(other, kind)) for kind in list(other)[:20]]
+    for kind, rows in groups:
+        for row in rows:
+            programs.append({"kind": kind, "program": _first(row, "program", "name"), "evidence": _first(row, "evidence"),
+                             "first_seen": _first(row, "first_seen"), "last_seen": _first(row, "last_seen")})
+    shares = [{"share": _first(row, "share"), "drive_letters": joined(row, "drive_letters"),
+               "first_seen": _first(row, "first_seen"), "last_seen": _first(row, "last_seen")}
+              for row in rows_of(artifacts, "network_shares")]
+    searches = [{"term": _first(row, "term"), "time": _first(row, "time"), "themes": joined(row, "themes")}
+                for row in rows_of(artifacts, "flagged_searches")]
+    system = artifacts.get("system") if isinstance(artifacts.get("system"), dict) else {}
+    accounts = [{"name": _first(row, "name"), "last_logon": _first(row, "last_logon"),
+                 "logon_count": _first(row, "logon_count"), "disabled": bool(row.get("disabled"))}
+                for row in rows_of(system, "user_accounts")]
+    bin_info = artifacts.get("recycle_bin") if isinstance(artifacts.get("recycle_bin"), dict) else {}
+    records = artifacts.get("records") if isinstance(artifacts.get("records"), dict) else {}
+    activity = [{"kind": _disk_text(str(kind).replace("_", " ")), "count": count}
+                for kind, count in sorted(records.items(), key=lambda kv: str(kv[0]))[:60] if isinstance(count, int)]
 
     volumes = []
     for item in summary.get("volumes") if isinstance(summary.get("volumes"), list) else []:
@@ -468,7 +506,89 @@ def disk_view(summary: Any, fallback_name: str) -> dict[str, Any]:
         "usb_devices": usb,
         "volumes": [item for item in volumes if item][:MAX_DISK_ITEMS],
         "gaps": [item for item in gaps if item][:MAX_DISK_ITEMS],
+        "system": {"computer_name": _first(system, "computer_name"), "os_version": _first(system, "os_version"),
+                   "installed": _first(system, "os_install_date"), "last_shutdown": _first(system, "last_shutdown"),
+                   "owner": _first(system, "registered_owner"), "time_zone": _first(system, "time_zone")},
+        "accounts": accounts,
+        "programs": programs,
+        "network_shares": shares,
+        "searches": searches,
+        "recycle_bin": {"items": bin_info.get("items") if isinstance(bin_info.get("items"), int) else 0,
+                        "first": _first(bin_info, "first"), "last": _first(bin_info, "last")},
+        "activity": activity,
     }
+
+
+_ISO_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?$")
+_DETAIL_SKIP = {"rule", "severity", "title", "technique", "records", "locator", "source", "schema"}
+_DETAIL_LABELS = {
+    "path": "Path", "time": "When", "user": "User", "seen_in": "Kind of record", "volume": "Drive or share",
+    "program": "Program", "run_count": "Times run", "key_path": "Registry key", "name": "Name", "version": "Version",
+    "size_bytes": "Size in bytes", "first_seen": "First seen", "last_seen": "Last seen", "share": "Shared folder",
+    "term": "Searched for", "url": "Address", "host": "Site", "browser": "Browser", "disc_label": "Disc label",
+    "files": "Files and folders", "deleted": "Deleted items", "sync_folder_files": "Files in the sync folder",
+    "media": "Discs", "tools": "Tools", "shares": "Shared folders", "searches": "Searches", "visits": "Pages visited",
+    "tables": "History tables", "jumps": "Clock jumps", "from_local": "Clock read", "to_local": "Then read",
+}
+
+
+def _detail_label(key: Any) -> str:
+    key = str(key)
+    return _DETAIL_LABELS.get(key) or _disk_text(key.replace("_", " ").capitalize())
+
+
+def _detail_cell(value: Any) -> str:
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, list):
+        return _disk_text(", ".join(str(item) for item in value[:10] if not isinstance(item, (dict, list))))
+    return "" if isinstance(value, dict) else _disk_text(value)
+
+
+def artifact_view(detail: Any) -> dict[str, Any]:
+    """One disk-artefact finding's recorded detail as plain facts and small tables for the analyst."""
+    detail = detail if isinstance(detail, dict) else {}
+    facts: list[list[str]] = []
+    tables: list[dict[str, Any]] = []
+    for key, value in list(detail.items())[:40]:
+        if key in _DETAIL_SKIP:
+            continue
+        if isinstance(value, list) and value and all(isinstance(row, dict) for row in value):
+            columns = [name for name in dict.fromkeys(name for row in value[:MAX_DISK_ITEMS] for name in row)
+                       if name not in _DETAIL_SKIP][:7]
+            rows = [[_detail_cell(row.get(name)) for name in columns] for row in value[:MAX_DISK_ITEMS]]
+            tables.append({"title": _detail_label(key), "columns": [_detail_label(name) for name in columns],
+                           "rows": rows, "more": max(0, len(value) - MAX_DISK_ITEMS)})
+        elif isinstance(value, dict):
+            for name, inner in list(value.items())[:30]:
+                if name not in _DETAIL_SKIP and not isinstance(inner, dict) and _detail_cell(inner):
+                    if isinstance(inner, list) and inner and isinstance(inner[0], dict):
+                        continue
+                    facts.append([_detail_label(name), _detail_cell(inner)])
+        elif _detail_cell(value):
+            facts.append([_detail_label(key), _detail_cell(value)])
+    return {"facts": facts[:60], "tables": tables[:8]}
+
+
+def artifact_time(detail: Any) -> str | None:
+    """Earliest time the artefact agent recorded for a finding (its own parsed field, not free text)."""
+    found: list[str] = []
+
+    def walk(node: Any, depth: int) -> None:
+        if depth > 3 or len(found) > 5000:
+            return
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in {"time", "first_seen"} and isinstance(value, str) and _ISO_TIME.match(value):
+                    found.append(value)
+                elif isinstance(value, (dict, list)):
+                    walk(value, depth + 1)
+        elif isinstance(node, list):
+            for item in node[:2000]:
+                walk(item, depth + 1)
+
+    walk(detail, 0)
+    return min(found, key=timeline_sort_key) if found else None
 
 
 # --------------------------------------------------------------------------
@@ -495,6 +615,7 @@ class ReviewState:
         self.token = secrets.token_urlsafe(32)
         self.lock = threading.Lock()
         self.jobs: dict[str, dict[str, Any]] = {}
+        self._artifact_cache: dict[str, tuple[Any, dict[str, Any]]] = {}
         # Fingerprints still waiting for the analyst to confirm they copied them.
         self.shown: dict[str, dict[str, str]] = {}
         # One-time links to exported HTML reports: nonce -> (run id, export folder, expiry on self.clock).
@@ -851,6 +972,33 @@ class ReviewState:
                     times.append(when)
             out[finding["finding_id"]] = min(times, key=timeline_sort_key) if times else None
         return out
+
+    def artifact_details(self, path: Path) -> dict[str, Any]:
+        """finding id -> the detail the disk-artefact agent kept for it in the disk summaries."""
+        base = path / "disk"
+        files = sorted(base.glob("*/disk_summary.json"))[:MAX_DISK_ITEMS] if base.is_dir() else []
+        key = tuple((str(f), f.stat().st_size, f.stat().st_mtime_ns) for f in files)
+        with self.lock:
+            cached = self._artifact_cache.get(str(path))
+        if cached and cached[0] == key:
+            return cached[1]
+        out: dict[str, Any] = {}
+        for file in files:
+            if file.is_symlink() or not stays_in_tree(file, base):
+                continue
+            try:
+                summary = _read_json(file)
+                found = summary["artifacts"]["findings"]
+            except Exception:  # noqa: BLE001 - a summary without artefact details is normal
+                continue
+            if isinstance(found, dict):
+                out.update({str(k): v for k, v in found.items() if isinstance(v, dict)})
+        with self.lock:
+            self._artifact_cache[str(path)] = (key, out)
+        return out
+
+    def details_for(self, run_id: str, finding_id: str) -> dict[str, Any]:
+        return artifact_view(self.artifact_details(self.run_dir(run_id)).get(finding_id))
 
     # ---- evidence excerpts -------------------------------------------------
 
@@ -1247,12 +1395,15 @@ def create_app(state: ReviewState) -> Any:
             status = signoff.status(path)
             decisions = signoff.latest_decisions(signoff.read_log(path))
             times = state.event_times(path, draft)
+            artifact_details = state.artifact_details(path)
             for finding in draft["findings"]:
                 choice = decisions.get(finding["finding_id"]) or {}
                 finding["decision"] = choice.get("decision") if choice.get("decision") in signoff.DECISIONS else "pending"
                 finding["decided_by"] = str(choice.get("actor", ""))
                 finding["note"] = str(choice.get("note", ""))
                 finding["event_time"] = times.get(finding["finding_id"])
+                if finding["event_time"] is None and finding.get("worker") == "disk_artifacts":
+                    finding["event_time"] = artifact_time(artifact_details.get(finding["finding_id"]))
             started, folder = state._custody_facts(path)
             finished = _safe_time(read_json(path / MANIFEST_FILE).get("finished_at"))
         except SecurityError as exc:
@@ -1287,6 +1438,15 @@ def create_app(state: ReviewState) -> Any:
         except Exception as exc:  # noqa: BLE001
             raise _error(400, f"The evidence could not be opened: a run file is missing or malformed "
                               f"({type(exc).__name__})") from exc
+
+    @app.get("/api/runs/{run_id}/findings/{finding_id}/details")
+    def details(run_id: str, finding_id: str) -> Any:
+        try:
+            return state.details_for(run_id, finding_id)
+        except SecurityError as exc:
+            raise _error(404, str(exc)[:200]) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise _error(400, f"The details could not be read ({type(exc).__name__})") from exc
 
     @app.get("/api/runs/{run_id}/disks")
     def disks(run_id: str) -> Any:
