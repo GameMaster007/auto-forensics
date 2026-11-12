@@ -71,11 +71,21 @@ every finding and signed.
 2. Double-click **Start Auto Forensics.bat** (Windows), **Start Auto Forensics.command**
    (macOS) or run `./start-auto-forensics.sh` (Linux). The first run sets everything
    up, which takes a few minutes; later runs start straight away.
-3. Your browser opens the review page. Type your name, point it at an evidence
-   folder and press **Start the run**.
-4. Copy the run fingerprint it shows once, tick findings and accept or reject them
-   (a reason is required to reject), paste the fingerprint to sign, then paste the
-   signature fingerprint to export the final report.
+3. Your browser opens the review page. Type your name at the top, press **Browse**
+   to pick the evidence folder, and press **Start the run**. You can watch each
+   stage tick off, or leave the page; the run carries on.
+4. Save the run fingerprint it shows. Then work through the **Findings** tab:
+   each finding explains what it means, what to do, and shows the exact line of
+   evidence it rests on. Accept it, or reject it with a reason. Tick several to
+   decide them together. Keys: J/K move, A accepts, R rejects, / searches.
+5. On **Sign and export**, paste the run fingerprint to sign, then the signature
+   fingerprint to export. **Open the report** gives a page you can read or print.
+
+Other tabs: **Overview** (what to do next, how serious the findings are, and the
+attack stages they cover), **Timeline** (findings in time order) and, for disk
+images, **This computer** (Windows version, user accounts, USB devices, cloud,
+e-mail and clean-up programs, shared folders, notable searches). **Help** has a
+glossary, and the theme button switches between light, dark and automatic.
 
 The page only listens on `127.0.0.1`, needs the private link printed in the
 launcher window, and never shows evidence text as HTML. Runs and reports are kept

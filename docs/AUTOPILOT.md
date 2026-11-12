@@ -165,14 +165,31 @@ from the list. Removing it moves its folder to `removed/` inside the
 workspace (nothing is deleted) and clears the lock it left behind. A run
 with a finished draft cannot be removed from the page.
 
-**Disk images.** For a run that read a disk image, the page lists what
-`disk_summary.json` recorded: operating system, host name, time zone,
-users, USB devices, volumes, and anything that could not be read.
+**Disk images.** For a run that read a disk image, the **This computer**
+tab lists what `disk_summary.json` recorded: computer name, Windows version,
+install date, last shutdown and time zone; user accounts with their last
+sign-in; USB devices with serial number, drive name, drive letter and when
+they were seen; cloud storage, e-mail, disc-burning and clean-up programs;
+shared folders on other computers; searches that stood out; the Recycle
+Bin; and anything that could not be read. Opening a disk-activity finding
+also shows **The details**: the files, devices, programs or searches behind
+it, as small tables, read from the same summary
+(`runs/{id}/findings/{finding_id}/details`).
+
+**Finding the way around.** The case opens on an **Overview** with one
+"next step" card, a bar of findings by seriousness and the attack path
+(select a stage to list its findings). **Findings** can be searched,
+filtered by decision and seriousness, and sorted by seriousness, time or
+file; the open finding has Previous and Next, and a decision moves on to
+the next one. **Timeline** lists findings by the time of the event they
+cite. Keyboard: J and K move, A accepts, R jumps to the reason box, X ticks
+a finding for a group decision, / searches, Escape closes the finding.
+Light, dark and automatic themes are remembered per browser.
 
 For anyone changing the page, the API under `/api/` is: `info`, `browse`,
 `runs` (list and start), `runs/{id}` (progress or the draft; `DELETE`
 removes a broken run), `runs/{id}/findings/{finding_id}/evidence`,
-`runs/{id}/disks`, `runs/{id}/decide`, `sign`, `export`, `copied` and
+`runs/{id}/findings/{finding_id}/details`, `runs/{id}/disks`, `runs/{id}/decide`, `sign`, `export`, `copied` and
 `report-link`. `tests/test_autopilot_web_api.py` pins the response shapes.
 ## What it reads from a disk image
 
