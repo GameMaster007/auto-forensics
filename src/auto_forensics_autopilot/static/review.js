@@ -298,11 +298,14 @@
   // ---------- Folder browser ----------
   let browseAt = "";
   function suggestCase(path) {
-    if ($("f-case").value.trim()) return;
+    // Fill the case name from the folder name, unless the person typed their own.
+    if ($("f-case").value.trim() && !$("f-case").dataset.auto) return;
     const name = path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "";
     const clean = name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
-    if (clean.length >= 2) $("f-case").value = clean;
+    if (clean.length >= 2) { $("f-case").value = clean; $("f-case").dataset.auto = "1"; }
   }
+  $("f-case").addEventListener("input", () => { delete $("f-case").dataset.auto; });
+  $("f-case").addEventListener("focus", () => { if ($("f-case").dataset.auto) $("f-case").select(); });
   async function browseTo(path) {
     $("browse-error").textContent = "";
     let data;
@@ -335,9 +338,13 @@
     }
     if (!(data.folders || []).length) list.append(el("li", "none", "No folders inside this one."));
     if (data.truncated) list.append(el("li", "none", "Only the first 500 folders are shown."));
-    const count = typeof data.file_count === "number" ? plural(data.file_count, "file", "files") + " directly in this folder" : "";
+    let count = "";
+    if (typeof data.file_count === "number") {
+      count = (data.count_complete === false ? "More than " : "") + plural(data.file_count, "file", "files") + " in this folder and the folders inside it";
+    }
     const size = typeof data.total_bytes === "number" ? ", " + fmtBytes(data.total_bytes) : "";
     $("browse-count").textContent = count + size;
+    $("browse-use").disabled = !browseAt || !!data.error;
   }
   $("browse-btn").addEventListener("click", () => {
     $("browse").showModal();
@@ -388,9 +395,9 @@
       pollTimer = setTimeout(() => openRun(runId), 1500);
       return;
     }
-    if (data.state === "failed") {
+    if (data.state === "failed" || data.state === "incomplete") {
       await loadHome();
-      toast("The run did not finish. " + (data.error || ""), true);
+      toast("That run did not finish" + (data.error ? ": " + data.error : ".") + " You can remove it from the list and start it again.", true);
       return;
     }
     const firstOpen = !current || current.run_id !== runId;
